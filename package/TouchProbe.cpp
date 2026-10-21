@@ -93,7 +93,17 @@ int smmuErrorCode(const char *e) {
 
 uint32_t ioRd(void *ctx, uint32_t reg) {return rd32(reinterpret_cast<uintptr_t>(ctx), reg);}
 void ioWr(void *ctx, uint32_t reg, uint32_t value) {wr32(reinterpret_cast<uintptr_t>(ctx), reg, value);}
-void ioDelayUs(void *, unsigned us) {IODelay(us);}
+// The SPI core polls its status registers with a 1 us wait between reads. IODelay blocks the thread for even that (assert_wait_deadline and
+// thread_block, one timer interrupt and two context switches per read; int-182: the touch thread was the busiest non-idle kernel thread
+// at 0.17 core, its samples all in geni_spi_transfer's polls). A wait this short spins on the counter instead.
+void ioDelayUs(void *, unsigned us) {
+    if (us > 50) {IODelay(us); return;}
+    uint64_t frequency = 0, start = 0, now = 0;
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
+    __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(start));
+    const uint64_t ticks = (frequency ? frequency : 19200000) * us / 1000000 + 1;
+    do {__asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(now));} while (now - start < ticks);
+}
 
 struct Session {
     Region gccLow, gccS4, gccHalt, gccVote, tlmmIrq, tlmmSpi, wrapper, se, smmu;
@@ -314,6 +324,10 @@ void trackStrokes(unsigned count, const int *ids, const int *xs, const int *ys) 
     }
 }
 
+// Whoever consumes the finger set (NativeHidInput) registers a function here; it is called from the thread that published, after the seqlock closes.
+static void (*gTouchSink)(void *);
+static void *gTouchSinkContext;
+extern "C" void native_touch_set_sink(void (*sink)(void *), void *context) {gTouchSinkContext = context; __atomic_store_n(&gTouchSink, sink, __ATOMIC_RELEASE);}
 void publish(unsigned count, const nvt_contact *c) {
     int ids[NVT_SLOTS], xs[NVT_SLOTS], ys[NVT_SLOTS];
     for (unsigned i = 0; i < count && i < NVT_SLOTS; ++i) {
@@ -331,6 +345,7 @@ void publish(unsigned count, const nvt_contact *c) {
     }
     __asm__ volatile("dmb ish" ::: "memory");
     native_touch_seq = native_touch_seq + 1;
+    if (void (*sink)(void *) = __atomic_load_n(&gTouchSink, __ATOMIC_ACQUIRE)) sink(gTouchSinkContext);
 }
 
 bool snapshot(Session &s) {
@@ -469,7 +484,40 @@ bool configureClock(Session &s, unsigned hz) {
 }
 }  // namespace
 
+// The touch interrupt (GPIO 25): registers per pin at TLMM + 0x1000 * pin, as pinctrl-msm.c / pinctrl-sm8550.c define them: +0x4 IN_OUT (bit 0 the
+// level), +0x8 INTR_CFG (bit 0 enable, bit 1 polarity, bits 3:2 detection 0 level / 1 rising / 2 falling / 3 both, bit 4 raw status enable, bits 7:5
+// target, 3 = the application processor), +0xc INTR_STATUS (bit 0; acknowledged by writing 0, the sm8550 groups set no intr_ack_high). All TLMM
+// pin interrupts share the summary SPI 208 (sm8550.dtsi tlmm interrupts, level high), INTID 240.
+extern "C" int armcpu_spi_attach(uint32_t, bool, void (*)(void *), void *, uint32_t *, uint64_t *) __attribute__((weak_import));
+extern "C" {volatile uint32_t native_touch_irq_stats[4];}   // [0] 0 not armed, 1 armed, 2 attach failed, [1] interrupts, [2] spurious, [3] attach status
+static volatile uint32_t gTouchIrqEvents;
+static volatile uint32_t *gTouchPin;
+static void touchIrq(void *) {
+    if (!(gTouchPin[0xc / 4] & 1)) {native_touch_irq_stats[2] = native_touch_irq_stats[2] + 1; return;}
+    gTouchPin[0xc / 4] = 0;
+    native_touch_irq_stats[1] = native_touch_irq_stats[1] + 1;
+    __atomic_fetch_add(&gTouchIrqEvents, 1, __ATOMIC_RELEASE);
+    thread_wakeup((event_t)&gTouchIrqEvents);
+}
+static bool armTouchIrq(Session &s) {
+    gTouchPin = reinterpret_cast<volatile uint32_t *>(s.tlmmIrq.va);
+    uint32_t cfg = gTouchPin[0x8 / 4];
+    cfg &= ~((7u << 5) | (3u << 2) | (1u << 1) | 1u);
+    cfg |= (3u << 5) | (1u << 2) | (1u << 1) | (1u << 4);   // application processor, rising edge, polarity high, raw status on
+    gTouchPin[0x8 / 4] = cfg;
+    gTouchPin[0xc / 4] = 0;
+    __asm__ volatile("dsb sy" ::: "memory");
+    if (!armcpu_spi_attach) {native_touch_irq_stats[0] = 2; native_touch_irq_stats[3] = 0xffff; return false;}
+    const int rc = armcpu_spi_attach(32 + 208, false, touchIrq, nullptr, nullptr, nullptr);
+    native_touch_irq_stats[3] = (uint32_t)rc;
+    if (rc) {native_touch_irq_stats[0] = 2; return false;}
+    gTouchPin[0x8 / 4] = cfg | 1u;   // enable last
+    native_touch_irq_stats[0] = 1;
+    return true;
+}
+
 static void touchThread(void *, wait_result_t) {
+    thread_set_thread_name(current_thread(),"sheng-touch");
     Session *s = static_cast<Session *>(IOMallocType(Session));
     if (!s) {fail(0, -12); return;}
     bzero(s, sizeof *s);
@@ -573,48 +621,66 @@ static void touchThread(void *, wait_result_t) {
         // The firmware may not pulse GPIO25 in its idle (doze) mode, so the trigger is the frame counter: a 32-byte peek of the
         // THP header every few milliseconds (cheap), and a full 5 KB read only for a new, valid touch frame. The interrupt line
         // is still sampled and counted.
+        // Event driven (int-189): the controller pulses its interrupt line (GPIO 25, rising edge, devicetree novatek,irq-gpio flags 0x2001) for every
+        // frame, the TLMM raises its summary interrupt (SPI 208), the handler acknowledges it and wakes this thread, which then reads the frame. Nothing
+        // wakes while nobody touches the panel. The earlier loop polled the frame counter every 2 ms (int-185: 93 of 300 s of CPU); sheng-touch-poll=1
+        // brings that back for diagnosis only, and it is also the fallback if the interrupt cannot be armed (then native_touch_irq_stats[0] says 2).
+        unsigned pollOnly = 0;
+        PE_parse_boot_argn("sheng-touch-poll", &pollOnly, sizeof pollOnly);
+        const bool irqArmed = !pollOnly && armTouchIrq(*s);
+        uint32_t seen = gTouchIrqEvents;
         for (;;) {
-            native_touch_loop_step = 1;
-            bool high = (rd32(s->tlmmIrq.va, 4) & 1) != 0;
-            s->irqHigh = high;
-            if (high) ++s->irqSeen;
-            uint8_t pk[NVT_THP_PEEK_LEN];
-            native_touch_loop_step = 2;
-            if (nvt_peek_frame_header(&s->chip, pk)) {fail(11, NVT_ERR_BUS); IOSleep(8); continue;}
-            native_touch_loop_step = 3;
-            ++s->peeks;
-            for (unsigned q = 0; q < 24; ++q) s->thp[q] = pk[q];
-            if ((++rowTick & 255) == 0) rows(*s);
-            if (!nvt_peek_valid(pk)) {++s->bad; IOSleep(2); continue;}
-            unsigned counter = nvt_peek_counter(pk), type = nvt_peek_type(pk);
-            if (counter == lastCounter) {IOSleep(2); continue;}
-            lastCounter = counter;
-            ++s->fresh;
-            s->lastType = type;
-            if (type != 2 && type != 4) continue;
-            native_touch_loop_step = 4;
-            if (nvt_read_frame(&s->chip, s->frame)) {fail(11, NVT_ERR_BUS); IOSleep(8); continue;}
-            native_touch_loop_step = 5;
-            ++s->reads;
-            for (unsigned q = 0; q < 24; ++q) s->head[q] = s->frame[q];
-            if (!nvt_frame_header_valid(s->frame)) {++s->bad; continue;}   // torn: the chip rewrote it while it was read
-            native_touch_valid = native_touch_valid + 1;
-            int16_t *matrix = s->matrix;
-            nvt_frame_matrix(s->frame, matrix);
-            int mn = matrix[0], mx = matrix[0];
-            for (unsigned q = 1; q < NVT_NODES; ++q) {if (matrix[q] < mn) mn = matrix[q]; if (matrix[q] > mx) mx = matrix[q];}
-            s->mn = mn; s->mx = mx;
-            struct nvt_contact out[NVT_SLOTS];
-            native_touch_loop_step = 6;
-            int n = nvt_touch_process(s->core, matrix, type, out, NVT_SLOTS);
-            native_touch_loop_step = 7;
-            native_touch_frames = native_touch_frames + 1;
-            if (n >= 0) {
-                native_touch_contacts = static_cast<uint32_t>(n);
-                if (n > 0) {native_touch_last_x = out[0].x; native_touch_last_y = out[0].y;}
-                publish(static_cast<unsigned>(n), out);
+            if (irqArmed) {
+                assert_wait((event_t)&gTouchIrqEvents, THREAD_UNINT);
+                if (gTouchIrqEvents != seen) clear_wait(current_thread(), THREAD_AWAKENED);
+                else thread_block(THREAD_CONTINUE_NULL);
+                seen = gTouchIrqEvents;
             }
-            if ((++tick & 15) == 0) rows(*s);
+            for (;;) {   // every frame that is ready now
+                native_touch_loop_step = 1;
+                const bool high = (rd32(s->tlmmIrq.va, 4) & 1) != 0;
+                s->irqHigh = high;
+                if (high) ++s->irqSeen;
+                uint8_t pk[NVT_THP_PEEK_LEN];
+                native_touch_loop_step = 2;
+                if (nvt_peek_frame_header(&s->chip, pk)) {fail(11, NVT_ERR_BUS); break;}
+                native_touch_loop_step = 3;
+                ++s->peeks;
+                for (unsigned q = 0; q < 24; ++q) s->thp[q] = pk[q];
+                if ((++rowTick & 255) == 0) rows(*s);
+                if (!nvt_peek_valid(pk)) {++s->bad; break;}
+                const unsigned counter = nvt_peek_counter(pk), type = nvt_peek_type(pk);
+                if (counter == lastCounter) break;
+                lastCounter = counter;
+                ++s->fresh;
+                s->lastType = type;
+                if (type != 2 && type != 4) continue;
+                native_touch_loop_step = 4;
+                if (nvt_read_frame(&s->chip, s->frame)) {fail(11, NVT_ERR_BUS); break;}
+                native_touch_loop_step = 5;
+                ++s->reads;
+                for (unsigned q = 0; q < 24; ++q) s->head[q] = s->frame[q];
+                if (!nvt_frame_header_valid(s->frame)) {++s->bad; continue;}   // torn: the chip rewrote it while it was read
+                native_touch_valid = native_touch_valid + 1;
+                int16_t *matrix = s->matrix;
+                nvt_frame_matrix(s->frame, matrix);
+                int mn = matrix[0], mx = matrix[0];
+                for (unsigned q = 1; q < NVT_NODES; ++q) {if (matrix[q] < mn) mn = matrix[q]; if (matrix[q] > mx) mx = matrix[q];}
+                s->mn = mn; s->mx = mx;
+                struct nvt_contact out[NVT_SLOTS];
+                native_touch_loop_step = 6;
+                const int n = nvt_touch_process(s->core, matrix, type, out, NVT_SLOTS);
+                native_touch_loop_step = 7;
+                native_touch_frames = native_touch_frames + 1;
+                if (n >= 0) {
+                    native_touch_contacts = static_cast<uint32_t>(n);
+                    if (n > 0) {native_touch_last_x = out[0].x; native_touch_last_y = out[0].y;}
+                    publish(static_cast<unsigned>(n), out);
+                }
+                if ((++tick & 15) == 0) rows(*s);
+                if (irqArmed && gTouchIrqEvents == seen) break;   // no further pulse: the frame just read was the only one
+            }
+            if (!irqArmed) IOSleep(pollOnly ? 2 : 10);   // fallback / diagnosis only
         }
     } while (0);
     rows(*s);
