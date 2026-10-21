@@ -22,6 +22,8 @@ extern uint64_t native_ufs_export_blocks(void) __attribute__((weak_import));
 extern int native_ufs_export_write(uint64_t, uint32_t, const void *) __attribute__((weak_import));
 extern int native_ufs_log_sync(void) __attribute__((weak_import));
 extern unsigned native_ufs_store_gpt_check(void) __attribute__((weak_import));
+extern uint32_t cs_text_fixup_parsed __attribute__((weak_import));
+extern uint32_t cs_text_fixup_applied __attribute__((weak_import));
 extern char boot_progress_page_text[48][120] __attribute__((weak_import));
 extern char boot_progress_banner_text[49][120] __attribute__((weak_import));
 extern volatile unsigned boot_progress_banner_rows __attribute__((weak_import));
@@ -472,6 +474,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     at = put(out, at, cap, "[reset]", 8);
     at = put(out, at, cap, boot_log_reset_probe_text, sizeof boot_log_reset_probe_text);
     if (boot_log_reset_result[0]) at = put(out, at, cap, boot_log_reset_result, sizeof boot_log_reset_result);
+  }
+  // The signed-text fixups given as text-fixupN boot arguments: how many parsed and how many page writes they made.
+  if (&cs_text_fixup_parsed && cs_text_fixup_parsed) {
+    char row[64];
+    snprintf(row, sizeof row, "[text fixup] parsed=%u applied=%u", cs_text_fixup_parsed, cs_text_fixup_applied);
+    at = put(out, at, cap, row, sizeof row);
   }
   // The sampling profile (BootProgress.c): which processes the interrupts landed in and where, at most 6 KiB of the slot.
   if (&boot_progress_profile_rows) {
