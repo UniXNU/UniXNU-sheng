@@ -215,7 +215,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if (native_legacy_state_words(words, sizeof words)) {at = put(out, at, cap, "[display state]", 16); at = put(out, at, cap, words, sizeof words);}
   }
   if (&native_legacy_prepare_report) {
-    char row[130];
+    char row[220];
     native_legacy_prepare_report(row, sizeof row);
     at = put(out, at, cap, "[scanout prepare]", 18); at = put(out, at, cap, row, sizeof row);
   }
