@@ -1,0 +1,22 @@
+# Resolved git sources, written by "unixnu fetch". Local sources are never recorded.
+
+[source."AvailabilityVersions"]
+commit = "933f9360f1b70dfbda5548386a3d65e0358b4f7d"
+
+[source."corecrypto-2023"]
+commit = "11fba65b12d8830630e248dfa8344caf8b065f26"
+
+[source."edk2"]
+commit = "cfb93724a06ff86ff5ba971413368a7809ee42a5"
+
+[source."libdispatch"]
+commit = "30fe6a7d945340ce69cef121132f049e810089a5"
+
+[source."libplatform"]
+commit = "a00a4cc36da2110578bcf3b8eeeeb93dcc7f4e11"
+
+[source."libpthread"]
+commit = "c0e60fb5ecfc54cf379c261d3f9572cc22ded891"
+
+[source."xnu"]
+commit = "d8b80295118ef25ac3a784134bcf95cd8e88109f"
