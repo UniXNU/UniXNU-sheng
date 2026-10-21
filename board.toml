@@ -187,6 +187,9 @@ kernel_args = [
   "sheng-touch-hid=1",
   "sheng-data-persist=2",
   "sheng-vsync=144",
+  # +[AWAttentionAwarenessConfiguration initialize] (21H461) only forces +[AWClientPreferences initialize] and deadlocks
+  # SpringBoard startup against it (ABBA between the main thread and Siri's SASMyriadController); it returns at once instead.
+  "text-fixup0=dyld_shared_cache_arm64.15,421e8bc,28ad1bb0008544f9,c0035fd6008544f9",
 ]
 
 [payload.adt]
