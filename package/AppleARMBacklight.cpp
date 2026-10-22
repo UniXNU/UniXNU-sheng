@@ -281,7 +281,10 @@ class ShengBacklight : public IOService {
         // sheng-backlight-control=0 leaves both out.
         uint32_t control = 1;
         PE_parse_boot_argn("sheng-backlight-control", &control, sizeof control);
-        if (control == 1 && impersonate()) setProperty("backlight-control", true);
+        // backboardd's sandbox profile refuses FadePeriod on this service (int-276), and CoreBrightness sends it with every brightness:
+        // the grant (patches/xnu/zzwb-native-sandbox-grant-set-properties.patch) lets backboardd alone set its properties, which
+        // setProperties checks itself.
+        if (control == 1 && impersonate()) {setProperty("NativeSandboxGrantProcess", "backboardd"); setProperty("backlight-control", true);}
         const bool impersonated = control == 1 && gAppleClass;
         publish(level);
         registerService();
