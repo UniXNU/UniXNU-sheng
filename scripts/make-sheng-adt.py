@@ -93,6 +93,8 @@ def main():
     parser.add_argument('--data-ramdisk', action='store_true',
                         help='/chosen/memory-map RAMDisk placeholder; the loader fills in the real range for a scratch Data seed')
     parser.add_argument('--trust-cache', action='store_true', help='Zeroed TrustCache sidecar handoff placeholder')
+    parser.add_argument('--text-fixup', action='append', default=[],
+                        help='/chosen/text-fixups entry <file name>,<file offset>,<original>,<replacement> for the kernel\'s signed-text fixups')
     args = parser.parse_args()
     if (args.unique_chip_id is None) != (args.chip_id is None):
         parser.error('--unique-chip-id and --chip-id must be supplied together')
@@ -155,6 +157,7 @@ def main():
                         # Strict policy for the original AMFI: platform code only. This keeps AMFI
                         # enforcing; it does not relax it.
                         ('amfi-only-platform-code', struct.pack('<I', 1)),
+                        *([('text-fixups', b''.join(f.encode() + b'\0' for f in args.text_fixup))] if args.text_fixup else []),
                         *empty_nvram_proxy()],
              [node('memory-map', ([("PackedRAMDisk" if args.packed_data_ramdisk else "RAMDisk", bytes(16))] if (args.data_ramdisk or args.packed_data_ramdisk) else []) +
                                  ([('TrustCache', bytes(16))] if args.trust_cache else [])),

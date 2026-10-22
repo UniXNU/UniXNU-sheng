@@ -187,9 +187,22 @@ kernel_args = [
   "sheng-touch-hid=1",
   "sheng-data-persist=2",
   "sheng-vsync=144",
+]
+
+# Fixups of signed text, applied by the kernel after signature validation (patches/xnu/native-text-fixup.patch); they reach it as
+# /chosen/text-fixups, not on the command line. Each is <file name>,<file offset>,<original>,<replacement>, in hex.
+text_fixups = [
   # +[AWAttentionAwarenessConfiguration initialize] (21H461) only forces +[AWClientPreferences initialize] and deadlocks
   # SpringBoard startup against it (ABBA between the main thread and Siri's SASMyriadController); it returns at once instead.
-  "text-fixup0=dyld_shared_cache_arm64.15,421e8bc,28ad1bb0008544f9,c0035fd6008544f9",
+  "dyld_shared_cache_arm64.15,421e8bc,28ad1bb0008544f9,c0035fd6008544f9",
+  # PosterBoardServices: PRSPosterPathURLResourceValues and PRSPosterPathFileAttributes require NSFileProtectionNone, which a Data
+  # volume without data protection never reports, so PosterBoard's data store is never viable ("Failed to migrate to Version 61
+  # from 59") and no poster, hence no wallpaper, is ever made. Both dictionaries keep only their first entry (readable / POSIX mode).
+  "dyld_shared_cache_arm64.13,1b05bec,44008052,24008052",
+  "dyld_shared_cache_arm64.13,1b05b08,44008052,24008052",
+  # BTAudioHALPlugin's factory returns NULL, so audiomxd skips it: with bluetoothd disabled (sheng-lite) the plugin reconnects to the
+  # missing com.apple.BTAudioHALPlugin.xpc in a tight loop (about 2700 times a second, millions of log lines, one core busy).
+  "BTAudioHALPlugin,38bec,ffc300d1f44f01a9,000080d2c0035fd6",
 ]
 
 [payload.adt]
