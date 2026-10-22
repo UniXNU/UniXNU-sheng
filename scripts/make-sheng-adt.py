@@ -173,7 +173,10 @@ def main():
         *([node('psci', [('compatible', b'arm,psci-1.0\0'), ('method', args.psci_method.encode() + b'\0')])] if len(cpus) > 1 else []),
         # Suspend/resume is not implemented for this board. Use the original
         # root-domain policy input rather than allowing the CPU to park forever.
-        node('defaults', [('sleep-disabled', struct.pack('<I', 1))]),
+        # kern.maxvnodes: this kernel is built with CONFIG_VNODES=1024 (xsmall), so desiredvnodes clips to 1024 and the desktop's
+        # ~1950 live vnodes made vnode jetsam kill idle daemons about once a second (int-102 log). XNU reads the value from /defaults
+        # before it clips; this is its own formula, memory/64K + 1024, for the iPad7,1's 4 GiB.
+        node('defaults', [('sleep-disabled', struct.pack('<I', 1)), ('kern.maxvnodes', struct.pack('<I', 66560))]),
         node('options', []),
         # The original AppleImage4 panics without a product node. Name and model are the
         # board DT's own strings.
