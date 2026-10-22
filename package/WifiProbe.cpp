@@ -41,6 +41,7 @@ constexpr uint32_t kVote8Bits = 0x7f, kVote0Bits = 1u << 12 | 1u << 19 | 1u << 2
 // pcie-qcom.c
 constexpr uint32_t kParfSysCtrl = 0x0, kParfPmCtrl = 0x20, kParfDbiBase = 0x350, kParfDbiBaseHi = 0x354, kParfMhiClockReset = 0x174;
 constexpr uint32_t kParfAxiHalt = 0x1a8, kParfAtuBase = 0x634, kParfAtuBaseHi = 0x638, kParfDeviceType = 0x1000;
+constexpr uint32_t kParfSlvSpace = 0x358, kParfSlvSpaceHi = 0x35c, kSlvSpaceBytes = 0x80000000;
 // pcie-designware.h
 constexpr uint32_t kPortDebug0 = 0x728, kPortDebug1 = 0x72c, kBusNumbers = 0x18, kCommand = 0x4;
 
@@ -157,6 +158,8 @@ void bringUp(Window &gcc, Window &tlmm) {
     f[kParfDbiBaseHi / 4] = uint32_t(kDbi >> 32);
     f[kParfAtuBase / 4] = uint32_t(kAtu);
     f[kParfAtuBaseHi / 4] = uint32_t(kAtu >> 32);
+    f[kParfSlvSpace / 4] = 0;                 // qcom_pcie_configure_dbi_atu_base: the slave window spans 2 GiB << 32
+    f[kParfSlvSpaceHi / 4] = kSlvSpaceBytes;
     f[kParfSysCtrl / 4] &= ~(1u << 29);
     f[kParfMhiClockReset / 4] |= 1u << 4;
     f[kParfPmCtrl / 4] &= ~(1u << 5);
