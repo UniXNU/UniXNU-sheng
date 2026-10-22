@@ -328,8 +328,9 @@ void trackStrokes(unsigned count, const int *ids, const int *xs, const int *ys) 
 // Raw frame-to-frame movement of resting or slow contacts (NvtTouchCore jitter_*): frames, summed steps, largest step, in 0.1 px.
 extern "C" {volatile uint32_t native_touch_jitter[3];}
 // Fingers held through frames without their blob (NvtTouchCore holds_bridged), lifts by miss reason (none, far, weak, palm, taken),
-// then frames of type 2 and type 4, then rests (a moving finger locked) and unlocks.
-extern "C" {volatile uint32_t native_touch_hold[11];}
+// then frames of type 2 and type 4, then the smoothed steps of the jitter frames (summed, largest), merges, then the most maxima in a frame, frames that overflowed the
+// peak table and frames that moved the reference.
+extern "C" {volatile uint32_t native_touch_hold[14];}
 static void (*gTouchSink)(void *);
 static void *gTouchSinkContext;
 extern "C" void native_touch_set_sink(void (*sink)(void *), void *context) {gTouchSinkContext = context; __atomic_store_n(&gTouchSink, sink, __ATOMIC_RELEASE);}
@@ -682,9 +683,12 @@ static void touchThread(void *, wait_result_t) {
                 for (unsigned q = 0; q < NVT_MISS_KINDS; ++q) native_touch_hold[1 + q] = static_cast<uint32_t>(s->core->ends[q]);
                 native_touch_hold[6] = static_cast<uint32_t>(s->core->frames_by_type[0]);
                 native_touch_hold[7] = static_cast<uint32_t>(s->core->frames_by_type[1]);
-                native_touch_hold[8] = static_cast<uint32_t>(s->core->rests);
-                native_touch_hold[9] = static_cast<uint32_t>(s->core->unlocks);
+                native_touch_hold[8] = static_cast<uint32_t>(s->core->smoothed_sum);
+                native_touch_hold[9] = static_cast<uint32_t>(s->core->smoothed_max);
                 native_touch_hold[10] = static_cast<uint32_t>(s->core->merges);
+                native_touch_hold[11] = static_cast<uint32_t>(s->core->peaks_max);
+                native_touch_hold[12] = static_cast<uint32_t>(s->core->peak_overflows);
+                native_touch_hold[13] = static_cast<uint32_t>(s->core->reference_frames);
                 native_touch_loop_step = 7;
                 native_touch_frames = native_touch_frames + 1;
                 if (n >= 0) {

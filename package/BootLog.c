@@ -76,7 +76,7 @@ extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
 extern volatile uint32_t native_wifi_stats[17] __attribute__((weak_import));
 extern volatile uint32_t native_dpu_stats[20] __attribute__((weak_import));
 extern volatile uint32_t native_touch_jitter[3] __attribute__((weak_import));
-extern volatile uint32_t native_touch_hold[11] __attribute__((weak_import));
+extern volatile uint32_t native_touch_hold[14] __attribute__((weak_import));
 extern char native_lookup_log[96][112] __attribute__((weak_import));
 extern volatile unsigned native_lookup_count __attribute__((weak_import));
 extern volatile uint32_t native_dpu_pipes[54] __attribute__((weak_import));
@@ -607,16 +607,17 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // Touch noise before the fuzz filter: resting or slow frames, mean step (x + y) and largest single-axis step, in 0.1 px.
   if (&native_touch_hold && native_touch_hold[7]) {
-    char row[160];
-    snprintf(row, sizeof row, "[touch hold] bridged=%u lifts none=%u far=%u weak=%u palm=%u taken=%u frames t2=%u t4=%u rests=%u unlocks=%u merges=%u", native_touch_hold[0],
-             native_touch_hold[1], native_touch_hold[2], native_touch_hold[3], native_touch_hold[4], native_touch_hold[5], native_touch_hold[6],
-             native_touch_hold[7], native_touch_hold[8], native_touch_hold[9], native_touch_hold[10]);
+    char row[200];
+    snprintf(row, sizeof row, "[touch hold] bridged=%u lifts none=%u far=%u weak=%u palm=%u taken=%u frames t2=%u t4=%u merges=%u peaks=%u full=%u ref=%u",
+             native_touch_hold[0], native_touch_hold[1], native_touch_hold[2], native_touch_hold[3], native_touch_hold[4], native_touch_hold[5],
+             native_touch_hold[6], native_touch_hold[7], native_touch_hold[10], native_touch_hold[11], native_touch_hold[12], native_touch_hold[13]);
     at = put(out, at, cap, row, sizeof row);
   }
   if (&native_touch_jitter && native_touch_jitter[0]) {
-    char row[96];
-    snprintf(row, sizeof row, "[touch jitter] frames=%u mean=%u max=%u (0.1 px)", native_touch_jitter[0],
-             native_touch_jitter[1] / native_touch_jitter[0], native_touch_jitter[2]);
+    char row[128];
+    snprintf(row, sizeof row, "[touch jitter] frames=%u mean=%u max=%u smoothed mean=%u max=%u (0.1 px)", native_touch_jitter[0],
+             native_touch_jitter[1] / native_touch_jitter[0], native_touch_jitter[2], &native_touch_hold ? native_touch_hold[8] / native_touch_jitter[0] : 0,
+             &native_touch_hold ? native_touch_hold[9] : 0);
     at = put(out, at, cap, row, sizeof row);
   }
   // Distinct path lookups that failed for MobileSafari (errno and path as given), in the order they first failed.
