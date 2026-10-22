@@ -469,11 +469,17 @@ bool attachIrqs() {
 
 // The firmware lives on the Data volume, which is mounted after this thread starts: a few tries with growing pauses (about two
 // minutes in all), not a poll.
-int openFirmware(Image &image, const char *path) {
+// Without sheng-adsp-fw, each try also looks in the directory a GPU addon installs to (fallback); path gets the directory that opened.
+int openFirmware(Image &image, char *path, size_t size, const char *dir, const char *fallback) {
     static const uint32_t pauses[] = {1, 2, 4, 8, 16, 30, 30, 30};
     int rc = 0;
     for (unsigned i = 0;; ++i) {
+        snprintf(path, size, "%s/adsp_dtb.mbn", dir);
         rc = openImage(image, path);
+        if (rc == ENOENT && fallback) {
+            snprintf(path, size, "%s/adsp_dtb.mbn", fallback);
+            if ((rc = openImage(image, path)) == ENOENT) snprintf(path, size, "%s/adsp_dtb.mbn", dir);
+        }
         if (rc != ENOENT && rc != ENXIO && rc != EIO) return rc;
         if (i == sizeof pauses / sizeof pauses[0]) return rc;
         IOSleep(pauses[i] * 1000);
@@ -487,12 +493,11 @@ void shutdownDsp(bool dtb, bool adsp) {
 
 bool start() {
     char dir[80] = "/private/var/firmware/qcom/sm8550/sheng";
-    PE_parse_boot_argn("sheng-adsp-fw", dir, sizeof dir);
+    const bool chosen = PE_parse_boot_argn("sheng-adsp-fw", dir, sizeof dir);
     char path[112];
     Image &dtb = gDtbImage, &adsp = gAdspImage;
-    snprintf(path, sizeof path, "%s/adsp_dtb.mbn", dir);
-    int rc = openFirmware(dtb, path);
-    if (!rc) {snprintf(path, sizeof path, "%s/adsp.mbn", dir); rc = openImage(adsp, path);}
+    int rc = openFirmware(dtb, path, sizeof path, dir, chosen ? nullptr : "/private/var/ngpu/fw");
+    if (!rc) {path[strlen(path) - sizeof "adsp_dtb.mbn" + 1] = 0; strlcat(path, "adsp.mbn", sizeof path); rc = openImage(adsp, path);}
     if (rc) {note("fw: ", path); fail(StFirmware, rc); release(dtb); release(adsp); return false;}
     native_adsp_stats[7] = (int32_t)(adsp.size >> 10);
     stage(StFirmware);
