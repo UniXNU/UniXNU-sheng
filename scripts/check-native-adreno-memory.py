@@ -132,7 +132,7 @@ subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
                 *host_smmu_objects, ring_kind, '-o', client_test], check=True, timeout=120)
 client_host = subprocess.run([client_test], check=True, capture_output=True, text=True, timeout=60)
 print(client_host.stdout, end='')
-if '1 complete user-client transaction with pre-submit wait, 1 CPU mapping lease block, 1 queue lifecycle block, 3 metadata refusals, 1 dispatched transaction, 6 dispatch size/argument refusals, 6 allocation refusals, 7 map refusals and 1 poisoned-commit retention case, 1 two-client shared-ring block with 8 scope/window refusals' not in client_host.stdout:
+if '1 complete user-client transaction with pre-submit wait, 1 CPU mapping lease block, 1 queue lifecycle block, 3 metadata refusals, 1 dispatched transaction, 6 dispatch size/argument refusals, 6 allocation refusals, 7 map refusals and 1 poisoned-commit retention case, 1 two-client shared-ring block with 8 scope/window refusals, 1 late-client first-scope block' not in client_host.stdout:
     raise SystemExit('Actual native user-client coverage absent')
 (out / 'userclient-host.log').write_text(client_host.stdout)
 

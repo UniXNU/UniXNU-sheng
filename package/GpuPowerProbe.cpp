@@ -1239,7 +1239,7 @@ void publishMetal() {
     accelerator->setProperty("MetalPluginName", "NativeAdrenoMetal");
     // The one process (the render server) whose open of this accelerator and its client the kernel's open path grants in place of the sandbox verdict
     // (patches/xnu/zzw-native-adreno-sandbox-grant.patch): the original profiles name no class of this driver.
-    accelerator->setProperty("NativeSandboxGrantProcess", "backboardd");
+    accelerator->setProperty("NativeSandboxGrantProcess", "backboardd,iconservicesagent,WidgetRenderer_Default,PosterBoard");
     accelerator->setProperty("MetalPluginClassName", "NativeAdrenoMetalDevice");
     gMetalStage = 4;
     if (!accelerator->attach(IOService::getPlatform())) {accelerator->release(); gMetalStatus = kIOReturnNotAttached; return;}
