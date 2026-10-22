@@ -71,23 +71,8 @@ extern volatile uint64_t native_adreno_wait_outer[4] __attribute__((weak_import)
 extern volatile uint32_t native_adreno_export_stats[4] __attribute__((weak_import));
 extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import));
 extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
-<<<<<<< ours
 extern volatile uint32_t native_wifi_stats[10] __attribute__((weak_import));
-extern volatile uint32_t native_swipe_stats[8] __attribute__((weak_import));
-=======
-extern volatile uint32_t native_wifi_stats[17] __attribute__((weak_import));
-extern volatile uint32_t native_dpu_stats[20] __attribute__((weak_import));
-extern volatile uint32_t native_touch_jitter[3] __attribute__((weak_import));
-extern volatile uint32_t native_touch_hold[14] __attribute__((weak_import));
-extern char native_lookup_log[96][112] __attribute__((weak_import));
-extern volatile unsigned native_lookup_count __attribute__((weak_import));
-extern volatile uint32_t native_dpu_pipes[54] __attribute__((weak_import));
-extern volatile int32_t native_adsp_stats[16] __attribute__((weak_import));
-extern volatile int32_t native_audio_stats[16] __attribute__((weak_import));
-extern char native_adsp_text[96] __attribute__((weak_import));
-extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
 extern volatile uint32_t native_swipe_stats[16] __attribute__((weak_import));
->>>>>>> theirs
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_vm_phase_us[2][8] __attribute__((weak_import));
