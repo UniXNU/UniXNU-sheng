@@ -67,11 +67,19 @@ extern unsigned boot_ui_trace_hot_rows(char [][120], unsigned) __attribute__((we
 extern unsigned long vm_kernel_slide;
 extern volatile uint64_t native_gop_wait_stats[7] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_fence_wait[8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_stall[24] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_stall_mem[59] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_wait_outer[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_export_stats[4] __attribute__((weak_import));
 extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import));
 extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
 extern volatile uint32_t native_wifi_stats[10] __attribute__((weak_import));
+extern volatile uint32_t native_dpu_stats[20] __attribute__((weak_import));
+extern volatile uint32_t native_touch_jitter[3] __attribute__((weak_import));
+extern volatile uint32_t native_touch_hold[11] __attribute__((weak_import));
+extern char native_lookup_log[96][112] __attribute__((weak_import));
+extern volatile unsigned native_lookup_count __attribute__((weak_import));
+extern volatile uint32_t native_dpu_pipes[54] __attribute__((weak_import));
 extern volatile uint32_t native_swipe_stats[8] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
@@ -567,6 +575,49 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_wifi_stats[7], native_wifi_stats[8], native_wifi_stats[9]);
     at = put(out, at, cap, row, sizeof row);
   }
+  // Display controller state (DisplayTimingProbe.cpp): per interface timing enable, config, counter enable, frame count then one second
+  // later, line count, vsync period, status; then every pipe's size/address/stride/format and the CTLs.
+  if (&native_dpu_stats && &native_dpu_pipes && native_dpu_stats[0]) {
+    char row[200];
+    const volatile uint32_t *d = native_dpu_stats, *p = native_dpu_pipes;
+    snprintf(row, sizeof row, "[dpu] st=%d hw=%x us=%u i1 en=%x cfg=%x cnt=%x f=%u..%u ln=%u vp=%u s=%x i2 en=%x cfg=%x cnt=%x f=%u..%u ln=%u vp=%u s=%x",
+             (int)d[0], d[1], d[18], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15], d[16], d[17]);
+    at = put(out, at, cap, row, sizeof row);
+    for (int half = 0; half < 2; ++half) {
+      int n = snprintf(row, sizeof row, "[dpu pipes%d]", half);
+      for (int i = half * 5; i < half * 5 + 5 && n < (int)sizeof row; ++i)
+        n += snprintf(row + n, sizeof row - n, " %x/%x/%x/%x", p[4 * i], p[4 * i + 1], p[4 * i + 2], p[4 * i + 3]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    snprintf(row, sizeof row, "[dpu ctl] fb=%x%08x %x/%x/%x %x/%x/%x %x/%x/%x %x/%x/%x", p[41], p[40], p[42], p[43], p[44], p[45], p[46], p[47],
+             p[48], p[49], p[50], p[51], p[52], p[53]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // Touch noise before the fuzz filter: resting or slow frames, mean step (x + y) and largest single-axis step, in 0.1 px.
+  if (&native_touch_hold && native_touch_hold[7]) {
+    char row[160];
+    snprintf(row, sizeof row, "[touch hold] bridged=%u lifts none=%u far=%u weak=%u palm=%u taken=%u frames t2=%u t4=%u rests=%u unlocks=%u merges=%u", native_touch_hold[0],
+             native_touch_hold[1], native_touch_hold[2], native_touch_hold[3], native_touch_hold[4], native_touch_hold[5], native_touch_hold[6],
+             native_touch_hold[7], native_touch_hold[8], native_touch_hold[9], native_touch_hold[10]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  if (&native_touch_jitter && native_touch_jitter[0]) {
+    char row[96];
+    snprintf(row, sizeof row, "[touch jitter] frames=%u mean=%u max=%u (0.1 px)", native_touch_jitter[0],
+             native_touch_jitter[1] / native_touch_jitter[0], native_touch_jitter[2]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // Distinct path lookups that failed for MobileSafari (errno and path as given), in the order they first failed.
+  if (&native_lookup_count && native_lookup_count) {
+    char row[128];
+    const unsigned n = native_lookup_count < 96 ? native_lookup_count : 96;
+    snprintf(row, sizeof row, "[safari lookups] failed=%u", native_lookup_count);
+    at = put(out, at, cap, row, sizeof row);
+    for (unsigned i = 0; i < n; ++i) {
+      snprintf(row, sizeof row, "SL%u %s", i, native_lookup_log[i]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
   // Touch strokes in panel pixels as the digitizer published them (y mirrored, 0 = the edge the UI calls top): where each finger came
   // down and lifted, how long and over how many frames, and the extent of every contact so far (edge gestures need the outer pixels).
   if (&native_touch_stroke_count && &native_touch_strokes && &native_touch_extent && native_touch_stroke_count) {
@@ -619,6 +670,31 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       snprintf(row, sizeof row, "[fence wait] outer waits=%llu us=%llu pauses outside the lock=%llu longest=%lluus",
                (unsigned long long)native_adreno_wait_outer[0], (unsigned long long)native_adreno_wait_outer[1],
                (unsigned long long)native_adreno_wait_outer[2], (unsigned long long)native_adreno_wait_outer[3]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // The CP's registers once a fence stopped advancing: RBBM status 0-3, interrupt, CP fault, status 1, protect, ring rptr/wptr,
+  // IB1 base/rem, IB2 base/rem, BV rptr, BV IB1 base/rem, BV IB2 rem, BV IB2 base.
+  if (&native_adreno_stall && native_adreno_stall[0]) {
+    char row[240];
+    int n = snprintf(row, sizeof row, "[gpu stall] fence=%u n=%u", native_adreno_stall[0], native_adreno_stall[1]);
+    for (unsigned k = 2; k < 24 && n > 0 && (size_t)n < sizeof row; ++k) n += snprintf(row + n, sizeof row - n, " %x", native_adreno_stall[k]);
+    at = put(out, at, cap, row, sizeof row);
+    // SMMU FSR, FAR lo/hi, FSYNR0, then for the BR IB1, BV IB1 and BV IB2: the dword index in the IB where the 16 words start
+    // (ffff00NN: NN words before the fetch address, the IB start being unknown), then 16 words; deadbeef = not readable.
+    if (&native_adreno_stall_mem)
+      for (unsigned part = 0; part < 4; ++part) {
+        static const char *const names[4] = {"smmu", "br ib1", "bv ib1", "bv ib2"};
+        n = snprintf(row, sizeof row, "[gpu stall] %s", names[part]);
+        if (part) n += snprintf(row + n, sizeof row - n, " @%x:", native_adreno_stall_mem[4 + 17 * (part - 1)]);
+        const unsigned first = part ? 5 + 17 * (part - 1) : 0, count = part ? 16 : 4;
+        for (unsigned k = first; k < first + count && n > 0 && (size_t)n < sizeof row; ++k) n += snprintf(row + n, sizeof row - n, " %x", native_adreno_stall_mem[k]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+    // Map handles: next at the stalled job's submission, then under the BR IB1, BV IB1, BV IB2 (>= the first: mapped after it).
+    if (&native_adreno_stall_mem) {
+      snprintf(row, sizeof row, "[gpu stall] handles job>=%u br=%u bv=%u bv2=%u", native_adreno_stall_mem[55], native_adreno_stall_mem[56],
+               native_adreno_stall_mem[57], native_adreno_stall_mem[58]);
       at = put(out, at, cap, row, sizeof row);
     }
   }

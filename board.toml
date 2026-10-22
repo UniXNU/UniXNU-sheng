@@ -166,7 +166,6 @@ kernel_args = [
   "offline-key-events=1",
   "native-ufs-root=1",
   "sheng-pmgr=2",
-  "armcpu-diagnostics=1",
   "sheng-disable-watchdogd=1",
   "sheng-lite=1",
   "boot-ui-focus4=SpringBoard",
@@ -188,8 +187,7 @@ kernel_args = [
   "sheng-staged-apps=1",
   "sheng-buttons=1",
   "sheng-backlight=1",
-  "sheng-wifi=1",
-  "sheng-vsync=144",
+  "sheng-vsync=120",
 ]
 
 # Fixups of signed text, applied by the kernel after signature validation (patches/xnu/native-text-fixup.patch); they reach it as
@@ -208,12 +206,19 @@ text_fixups = [
   "BTAudioHALPlugin,38bec,ffc300d1f44f01a9,000080d2c0035fd6",
 ]
 
+# The second boot menu entry, behind a confirmation: erase the Data seed's persistent store and start over (sheng-data-reset), with or without the Hello pages.
+[payload.install]
+title = "Install and boot"
+confirm = "ERASE all iPadOS user data and install again?"
+confirm_titles = ["Erase Data, skip Hello, boot", "Erase Data, show Hello, boot"]
+confirm_args = ["sheng-data-reset=1", "sheng-data-reset=2"]
+
 [payload.adt]
 tool = "scripts/make-sheng-adt.py"
 chip_id = "207"
 owned_memory_size = "0x130000000"
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
-cpu_regs = "0,0x100,0x200,0x300,0x400,0x500,0x600,0x700"
+cpu_regs = "0,0x300,0x400,0x500,0x600,0x700"
 packed_data_ramdisk = true
 persistent_data = true               # sheng-data-persist keeps Data writes, so Data is not ephemeral storage
 ipad_identity = true

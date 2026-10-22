@@ -486,6 +486,7 @@ extern void sheng_gpu_power_probe(void);
 extern void sheng_wifi_probe(void);
 extern void sheng_buttons_probe(void);
 extern void sheng_backlight_probe(void);
+extern "C" void sheng_dpu_probe(void);
 void native_legacy_display_late_probe(void) {
     native_keystore_probe();
     sheng_cpufreq_probe();
@@ -494,6 +495,7 @@ void native_legacy_display_late_probe(void) {
     sheng_wifi_probe();
     sheng_buttons_probe();
     sheng_backlight_probe();
+    sheng_dpu_probe();
     native_hid_input_probe();
     IOService *display=pendingLegacyDisplay;if(!display)return;pendingLegacyDisplay=nullptr;
     native_legacy_surface_status=OSKextLoadKextWithIdentifier("com.apple.iokit.IOSurface");

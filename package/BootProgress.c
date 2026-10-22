@@ -903,6 +903,7 @@ extern volatile uint64_t native_gop_gpu_offers __attribute__((weak_import)),nati
   native_gop_gpu_failures __attribute__((weak_import)),native_gop_gpu_abandoned __attribute__((weak_import));
 extern volatile uint32_t native_legacy_gpu_fallbacks __attribute__((weak_import)),native_legacy_gpu_last_status __attribute__((weak_import));
 extern volatile uint64_t native_legacy_copy_last __attribute__((weak_import));
+extern volatile uint64_t native_legacy_early_retires __attribute__((weak_import)),native_legacy_early_failures __attribute__((weak_import));
 extern volatile uint64_t native_legacy_copy_max __attribute__((weak_import));
 extern volatile uint64_t native_legacy_copy_sum __attribute__((weak_import));
 extern volatile uint64_t native_legacy_copy_bytes_last __attribute__((weak_import));
@@ -960,14 +961,17 @@ static void crash_banner(unsigned now) {
     banner_copy_n=c;
   }
   // The display path's counters (the GPU hand-off hides the CPU copy row): swaps the driver validated and how many it took, and the GPU
-  // client's offers, completions, failures, abandoned frames, CPU fallbacks and the last fallback status.
+  // client's offers, completions, failures, abandoned frames, CPU fallbacks, the last fallback status, and the swaps retired when the client
+  // took them (er) with the copies that then failed.
   if(&native_legacy_swap_validation_calls && native_legacy_swap_validation_calls) {
-    snprintf(rows[n++],120,"SWAP  calls=%u accepted=%u rejected=%u | gpu offers=%llu done=%llu failed=%llu abandoned=%llu fallback=%u last=%x",
+    snprintf(rows[n++],120,"SWAP  calls=%u ok=%u rej=%u | gpu offers=%llu done=%llu failed=%llu ab=%llu fb=%u last=%x er=%llu/%llu",
       native_legacy_swap_validation_calls,&native_legacy_swap_accepted_count?native_legacy_swap_accepted_count:0,
       &native_legacy_swap_rejected_count?native_legacy_swap_rejected_count:0,
       (unsigned long long)(&native_gop_gpu_offers?native_gop_gpu_offers:0),(unsigned long long)(&native_gop_gpu_completions?native_gop_gpu_completions:0),
       (unsigned long long)(&native_gop_gpu_failures?native_gop_gpu_failures:0),(unsigned long long)(&native_gop_gpu_abandoned?native_gop_gpu_abandoned:0),
-      &native_legacy_gpu_fallbacks?native_legacy_gpu_fallbacks:0,&native_legacy_gpu_last_status?native_legacy_gpu_last_status:0);
+      &native_legacy_gpu_fallbacks?native_legacy_gpu_fallbacks:0,&native_legacy_gpu_last_status?native_legacy_gpu_last_status:0,
+      (unsigned long long)(&native_legacy_early_retires?native_legacy_early_retires:0),
+      (unsigned long long)(&native_legacy_early_failures?native_legacy_early_failures:0));
   }
   // GPU CPU-cache maintenance (all passes: submissions, completions, allocations) since the last paint and in total, per submission,
   // the longest single pass and how much memory user BOs hold write-combined.
