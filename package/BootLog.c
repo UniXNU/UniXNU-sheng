@@ -51,6 +51,7 @@ extern volatile uint64_t native_adreno_wait_outer[4] __attribute__((weak_import)
 extern volatile uint32_t native_adreno_export_stats[4] __attribute__((weak_import));
 extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import));
 extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
+extern volatile uint32_t native_wifi_stats[10] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_vm_phase_us[2][8] __attribute__((weak_import));
@@ -407,6 +408,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     char row[120];
     snprintf(row, sizeof row, "[export] pieces=%u refused=%u generation=%u bytes=%u | complete generation=%u bytes=%u", native_adreno_export_stats[0],
              native_adreno_export_stats[1], native_adreno_export_stats[2], native_adreno_export_stats[3], export_ready, export_ready_bytes);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // WiFi bring-up (WifiProbe.cpp): stage, GCC votes, PCIe0 GDSC, halted branches, WLAN_EN/SW_CTRL/PERST# pins, LTSSM, root port ID, link.
+  if (&native_wifi_stats && native_wifi_stats[0]) {
+    char row[160];
+    snprintf(row, sizeof row, "[wifi] st=%d v8=%x v0=%x gdsc=%x off=%x gpio=%06x ltssm=%x id=%08x lnk=%08x phy=%x", (int)native_wifi_stats[0],
+             native_wifi_stats[1], native_wifi_stats[2], native_wifi_stats[3], native_wifi_stats[4], native_wifi_stats[5], native_wifi_stats[6],
+             native_wifi_stats[7], native_wifi_stats[8], native_wifi_stats[9]);
     at = put(out, at, cap, row, sizeof row);
   }
   // Touch strokes in panel pixels as the digitizer published them (y mirrored, 0 = the edge the UI calls top): where each finger came
