@@ -29,7 +29,13 @@ static size_t diag_note_used;
 volatile uint32_t boot_diag_files, boot_diag_skipped, boot_diag_errors;
 
 // In the order of their worth: the format strings of earlier runs are on the host already, and the crash reports are rarely needed.
+// A root may be a single file: the render server's shader priming state (PrimeShaders.h) in its persistent cache directory, small and
+// the only record of how far priming got (backboardd runs as mobile; the root home is the fallback).
 static const char *const diag_roots[] = {
+  "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/prime.log",
+  "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/prime-bad",
+  "/private/var/root/Library/Caches/com.apple.backboardd/m2v/prime.log",
+  "/private/var/root/Library/Caches/com.apple.backboardd/m2v/prime-bad",
   "/private/var/db/diagnostics",
   "/private/var/db/uuidtext",
   "/private/var/mobile/Library/Logs/CrashReporter",
@@ -44,10 +50,30 @@ static void note(const char *text, const char *path, int error) {
   if (n > 0 && diag_note_used + (size_t)n < DiagNote) diag_note_used += (size_t)n;
 }
 
+static void add(const char *path, uint32_t root, vfs_context_t ctx) {
+  vnode_t file = NULLVP;
+  int error = vnode_lookup(path, 0, &file, ctx);
+  if (error) {note("lookup", path, error); ++boot_diag_errors; return;}
+  struct vnode_attr va;
+  VATTR_INIT(&va);
+  VATTR_WANTED(&va, va_data_size);
+  VATTR_WANTED(&va, va_mode);
+  VATTR_WANTED(&va, va_uid);
+  VATTR_WANTED(&va, va_gid);
+  error = vnode_getattr(file, &va, ctx);
+  vnode_put(file);
+  if (error) {note("getattr", path, error); ++boot_diag_errors; return;}
+  if (diag_count >= DiagMaxFiles) {note("unlisted", path, (int)(va.va_data_size >> 10)); ++diag_skipped_count; return;}
+  struct diag_file *f = &diag_files[diag_count++];
+  strlcpy(f->path, path, sizeof f->path);
+  f->size = va.va_data_size; f->mode = va.va_mode; f->uid = va.va_uid; f->gid = va.va_gid; f->root = root; f->keep = 0;
+}
+
 static void scan(const char *path, unsigned depth, uint32_t root, vfs_context_t ctx) {
   vnode_t dir = NULLVP;
   int error = vnode_lookup(path, 0, &dir, ctx);
   if (error) {note("lookup", path, error); ++boot_diag_errors; return;}
+  if (vnode_vtype(dir) == VREG) {vnode_put(dir); add(path, root, ctx); return;}
   if (vnode_vtype(dir) != VDIR) {vnode_put(dir); return;}
   char *buffer = IOMallocData(8192);
   char *child = IOMallocData(DiagPath);
@@ -75,21 +101,7 @@ static void scan(const char *path, unsigned depth, uint32_t root, vfs_context_t 
         continue;
       }
       if (d->d_type != DT_REG) continue;
-      vnode_t file = NULLVP;
-      if ((error = vnode_lookup(child, 0, &file, ctx))) {note("lookup", child, error); ++boot_diag_errors; continue;}
-      struct vnode_attr va;
-      VATTR_INIT(&va);
-      VATTR_WANTED(&va, va_data_size);
-      VATTR_WANTED(&va, va_mode);
-      VATTR_WANTED(&va, va_uid);
-      VATTR_WANTED(&va, va_gid);
-      error = vnode_getattr(file, &va, ctx);
-      vnode_put(file);
-      if (error) {note("getattr", child, error); ++boot_diag_errors; continue;}
-      if (diag_count >= DiagMaxFiles) {note("unlisted", child, (int)(va.va_data_size >> 10)); ++diag_skipped_count; continue;}
-      struct diag_file *f = &diag_files[diag_count++];
-      strlcpy(f->path, child, sizeof f->path);
-      f->size = va.va_data_size; f->mode = va.va_mode; f->uid = va.va_uid; f->gid = va.va_gid; f->root = root; f->keep = 0;
+      add(child, root, ctx);
     }
   }
   IOFreeData(child, DiagPath);

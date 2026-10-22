@@ -72,7 +72,7 @@ extern volatile uint32_t native_adreno_export_stats[4] __attribute__((weak_impor
 extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import));
 extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
 extern volatile uint32_t native_wifi_stats[10] __attribute__((weak_import));
-extern volatile uint32_t native_swipe_stats[6] __attribute__((weak_import));
+extern volatile uint32_t native_swipe_stats[8] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_vm_phase_us[2][8] __attribute__((weak_import));
@@ -89,6 +89,7 @@ struct native_adreno_client_text {char name[20]; char text[64];};
 extern struct native_adreno_client_text native_adreno_client_text[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_mount_fail[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_window_overflow[4][3] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_client_stats[5][6] __attribute__((weak_import));
 struct native_adreno_asker_record {char name[20]; uint32_t reads;};
 extern struct native_adreno_asker_record native_adreno_metal_askers[12] __attribute__((weak_import));
 extern char native_gpu_coherence_row[120] __attribute__((weak_import));
@@ -122,6 +123,8 @@ extern int boot_reset_mark_bootloader(char *, unsigned) __attribute__((weak_impo
 extern int boot_reset_watchdog(uint32_t, char *, unsigned) __attribute__((weak_import));
 extern volatile uint64_t native_adreno_import_diag[10] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_import_stage __attribute__((weak_import));
+extern volatile uint64_t native_adreno_import_live[3 + 8 * 4] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_import_persistent[2] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_import_fail_pa __attribute__((weak_import)), native_adreno_import_fail_offset __attribute__((weak_import));
 // What the reset probe and the autoreset attempt saw, for the [reset] section of the log.
 static char boot_log_reset_probe_text[240], boot_log_reset_result[120], boot_log_reset_mark[64], boot_log_reset_watchdog[120];
@@ -399,8 +402,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // The traced processes' threads with the highest context-switch rate (they are idle in every stack sample but woken hundreds of times a second).
   if (&boot_ui_trace_hot_rows) {
-    static char hot[16][120];
-    unsigned n = boot_ui_trace_hot_rows(hot, 16);
+    static char hot[96][120];
+    unsigned n = boot_ui_trace_hot_rows(hot, 96);
     if (n) {char head[64]; snprintf(head, sizeof head, "[hot] kernel slide=%lx", (unsigned long)vm_kernel_slide); at = put(out, at, cap, head, sizeof head);}
     for (unsigned i = 0; i < n; ++i) at = put(out, at, cap, hot[i], 120);
   }
@@ -580,11 +583,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
   }
   if (&native_swipe_stats && native_swipe_stats[3]) {
-    char row[140];
-    snprintf(row, sizeof row, "[swipe] done=%u first=%u.%03us last=%u.%03us frames=%u tap=%u.%03us home=%u.%03us", native_swipe_stats[0],
+    char row[200];
+    snprintf(row, sizeof row, "[swipe] done=%u first=%u.%03us last=%u.%03us frames=%u tap=%u.%03us home=%u.%03us library=%u.%03us..%u.%03us", native_swipe_stats[0],
              native_swipe_stats[1] / 1000, native_swipe_stats[1] % 1000, native_swipe_stats[2] / 1000, native_swipe_stats[2] % 1000,
              native_swipe_stats[3], native_swipe_stats[4] / 1000, native_swipe_stats[4] % 1000, native_swipe_stats[5] / 1000,
-             native_swipe_stats[5] % 1000);
+             native_swipe_stats[5] % 1000, native_swipe_stats[6] / 1000, native_swipe_stats[6] % 1000, native_swipe_stats[7] / 1000,
+             native_swipe_stats[7] % 1000);
     at = put(out, at, cap, row, sizeof row);
   }
   if (&native_adreno_map_fail && native_adreno_map_fail[0][1]) {
@@ -592,6 +596,16 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     int n = snprintf(row, sizeof row, "[map fails]");
     for (unsigned k = 0; k < 5 && native_adreno_map_fail[k][1]; ++k) n += snprintf(row + n, sizeof row - n, " %x x%u", native_adreno_map_fail[k][0], native_adreno_map_fail[k][1]);
     snprintf(row + n, sizeof row - n, " | at last: spans=%u objects=%u iova_pfn=%x handle=%x", native_adreno_map_fail[5][0], native_adreno_map_fail[5][1], native_adreno_map_fail[6][0], native_adreno_map_fail[6][1]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  if (&native_adreno_client_stats) {
+    // per client slot: live objects/peak, refused BoAllocs, last refusal status and bytes, highest mapped end in the window (MiB)
+    char row[200];
+    int n = snprintf(row, sizeof row, "[gpu objects]");
+    for (unsigned k = 0; k < 5; ++k)
+      if (native_adreno_client_stats[k][1] || native_adreno_client_stats[k][2])
+        n += snprintf(row + n, sizeof row - n, " s%u %u/%u r%u %x/%u w%uM", k, native_adreno_client_stats[k][0], native_adreno_client_stats[k][1],
+                      native_adreno_client_stats[k][2], native_adreno_client_stats[k][3], native_adreno_client_stats[k][4], native_adreno_client_stats[k][5]);
     at = put(out, at, cap, row, sizeof row);
   }
   if (&native_adreno_fence_wait && native_adreno_fence_wait[0]) {
@@ -632,6 +646,18 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     snprintf(row, sizeof row, "stage_now=%u refused_page pa=%llx offset=%llx", native_adreno_import_stage, native_adreno_import_fail_pa,
              native_adreno_import_fail_offset);
     at = put(out, at, cap, row, sizeof row);
+    if (&native_adreno_import_live) {
+      snprintf(row, sizeof row, "alive=%llu free-refused=%llu last=%llx persistent=%u plain=%u", native_adreno_import_live[0],
+               native_adreno_import_live[1], native_adreno_import_live[2], &native_adreno_import_persistent ? native_adreno_import_persistent[0] : 0,
+               &native_adreno_import_persistent ? native_adreno_import_persistent[1] : 0);
+      at = put(out, at, cap, row, sizeof row);
+      for (unsigned i = 0; i < 8; i += 2) {
+        const volatile uint64_t *a = &native_adreno_import_live[3 + i * 4], *b = a + 4;
+        snprintf(row, sizeof row, "I p%llu %llx+%llx h%llu s%llu | p%llu %llx+%llx h%llu s%llu", a[1] >> 40, a[0], a[1] & 0xffffffffffull, a[2],
+                 a[3], b[1] >> 40, b[0], b[1] & 0xffffffffffull, b[2], b[3]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+    }
   }
   if (boot_log_reset_probe_text[0]) {
     at = put(out, at, cap, "[reset]", 8);
@@ -739,10 +765,6 @@ static void writer(void *arg, wait_result_t result) {
   if (&boot_reset_probe) {
     reset_ok = boot_reset_probe(boot_log_reset_probe_text, sizeof boot_log_reset_probe_text) == 0;
     PE_parse_boot_argn("sheng-autoreset", &autoreset, sizeof autoreset);
-    // An unattended run must come back even if this loop never reaches its deadline (int-229 stayed on the desktop past it): mark the
-    // cell now, so any restart is fastboot, and let the hypervisor's watchdog restart the tablet a minute after the deadline at the latest.
-    if (autoreset && reset_ok && &boot_reset_mark_bootloader) boot_reset_mark_bootloader(boot_log_reset_mark, sizeof boot_log_reset_mark);
-    if (autoreset && reset_ok && &boot_reset_watchdog) boot_reset_watchdog(autoreset + 60, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
   }
   // sheng-diag-export=<seconds of log time>: export the diagnostic files once then (set it shortly before sheng-autoreset).
   uint32_t diag_at = 0;
@@ -800,6 +822,16 @@ void boot_log_tick(unsigned now) {
   (void)now;
   if (boot_log_started) return;
   boot_log_started = 1;
+  // An unattended run must come back however it ends: on the desktop past its deadline (int-229 first suspected) or in a panic seconds
+  // after the start, before UFS and this log exist (int-229: a duplicate class at PE_lockdown_iokit). So the first tick, independent of
+  // sheng-log, marks the cell (any restart is fastboot) and arms the hypervisor's watchdog, which bites a minute after the pings stop:
+  // after the autoreset deadline, or when a panic parks the cores.
+  uint32_t autoreset = 0;
+  if (PE_parse_boot_argn("sheng-autoreset", &autoreset, sizeof autoreset) && autoreset && &boot_reset_probe &&
+      boot_reset_probe(boot_log_reset_probe_text, sizeof boot_log_reset_probe_text) == 0) {
+    if (&boot_reset_mark_bootloader) boot_reset_mark_bootloader(boot_log_reset_mark, sizeof boot_log_reset_mark);
+    if (&boot_reset_watchdog) boot_reset_watchdog(autoreset + 60, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
+  }
   uint32_t mode = 0;
   if (!PE_parse_boot_argn("sheng-log", &mode, sizeof mode) || mode != 1) return;
   if (!&native_ufs_log_open || !&native_ufs_log_write || !&native_ufs_log_sync) return;
