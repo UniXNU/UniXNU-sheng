@@ -73,6 +73,7 @@ extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import))
 extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
 extern volatile uint32_t native_wifi_stats[10] __attribute__((weak_import));
 extern volatile int32_t native_adsp_stats[16] __attribute__((weak_import));
+extern volatile int32_t native_audio_stats[16] __attribute__((weak_import));
 extern char native_adsp_text[96] __attribute__((weak_import));
 extern volatile uint32_t native_swipe_stats[8] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
@@ -582,6 +583,16 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       snprintf(row, sizeof row, "[adsp] %.95s", native_adsp_text);
       at = put(out, at, cap, row, sizeof row);
     }
+  }
+  // Audio framework readiness over the packet router channel (AudioProbe.cpp): stage (5 ready), queries, answers, last status, refusals,
+  // timeouts, ignored packets, ms from channel up to ready, channel ups/downs, last opcode, ring drops, send refusals, mode.
+  if (&native_audio_stats && native_audio_stats[0]) {
+    char row[200];
+    snprintf(row, sizeof row, "[audio] st=%d q=%d ans=%d status=%d refused=%d to=%d ign=%d rdy=%dms up=%d down=%d op=%x drop=%d sendfail=%d mode=%d",
+             native_audio_stats[0], native_audio_stats[1], native_audio_stats[2], native_audio_stats[3], native_audio_stats[4], native_audio_stats[5],
+             native_audio_stats[6], native_audio_stats[7], native_audio_stats[8], native_audio_stats[9], native_audio_stats[10], native_audio_stats[11],
+             native_audio_stats[12], native_audio_stats[13]);
+    at = put(out, at, cap, row, sizeof row);
   }
   // Touch strokes in panel pixels as the digitizer published them (y mirrored, 0 = the edge the UI calls top): where each finger came
   // down and lifted, how long and over how many frames, and the extent of every contact so far (edge gestures need the outer pixels).

@@ -245,7 +245,9 @@ wifi_cpp=ROOT/'kits/sheng/WifiProbe.cpp';wifi_obj=touch_dir/'WifiProbe.o'
 # The audio DSP bring-up (sheng-adsp): the driver and its protocol cores (firmware images, SMEM, SMP2P, GLINK, AOSS QMP, RPMh). The
 # firmware file reader is BSD code and is built with the boot progress archive.
 adsp_cpp=ROOT/'kits/sheng/AdspProbe.cpp';adsp_obj=touch_dir/'AdspProbe.o'
-adsp_c=[ROOT/'kits/sheng'/(n+'.c') for n in ('QcomMdt','QcomSmem','QcomSmp2p','QcomGlink','QcomQmp','QcomRpmh')]
+adsp_c=[ROOT/'kits/sheng'/(n+'.c') for n in ('QcomMdt','QcomSmem','QcomSmp2p','QcomGlink','QcomQmp','QcomRpmh','ShengGpr')]
+# The audio packet router client (sheng-audio): registers "adsp_apps" and asks the audio framework whether it is ready.
+audio_cpp=ROOT/'kits/sheng/AudioProbe.cpp';audio_obj=touch_dir/'AudioProbe.o'
 buttons_cpp=ROOT/'kits/sheng/ButtonProbe.cpp';buttons_obj=touch_dir/'ButtonProbe.o'
 backlight_cpp=ROOT/'kits/sheng/BacklightProbe.cpp';backlight_obj=touch_dir/'BacklightProbe.o'
 # The brightness service class: its static initializer leaves __mod_init_func and runs from BacklightProbe.cpp between preModLoad and
@@ -257,6 +259,7 @@ run([str(gpupower_cpp) if str(arg)==str(source) else str(gpupower_obj) if str(ar
 run([str(cpufreq_cpp) if str(arg)==str(source) else str(cpufreq_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
 run([str(wifi_cpp) if str(arg)==str(source) else str(wifi_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
 run([str(adsp_cpp) if str(arg)==str(source) else str(adsp_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
+run([str(audio_cpp) if str(arg)==str(source) else str(audio_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
 run([str(buttons_cpp) if str(arg)==str(source) else str(buttons_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
 run([str(backlight_cpp) if str(arg)==str(source) else str(backlight_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
 run([str(backlight_class_cpp) if str(arg)==str(source) else str(backlight_class_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
@@ -281,11 +284,11 @@ run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func',
 require(code((keyevents/'NativeKeyStoreEvents.o').read_bytes(),macho((keyevents/'NativeKeyStoreEvents.o').read_bytes()))==
         code(keyevents_late.read_bytes(),macho(keyevents_late.read_bytes())),'Owned event-service instructions unchanged by late init staging')
 run(['xcrun','ar','rcs',archive,late,OUT/'original-bindings.o',OUT/'LegacyDisplayProbe.o',hid_obj,keystore_obj,process_obj,trace_obj,log_obj,reset_obj,
-     hid_dir/'NativeHidInput.late.o',hid_dir/'hid-original-bindings.o',keyevents_late,touch_cpp_obj,cpufreq_obj,gpupower_obj,wifi_obj,adsp_obj,buttons_obj,backlight_obj,backlight_class_late,*touch_objs])
+     hid_dir/'NativeHidInput.late.o',hid_dir/'hid-original-bindings.o',keyevents_late,touch_cpp_obj,cpufreq_obj,gpupower_obj,wifi_obj,adsp_obj,audio_obj,buttons_obj,backlight_obj,backlight_class_late,*touch_objs])
 sources=[ROOT/'drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp',
          ROOT/'drivers/NativeMobileDisplay/NativeLegacyRequest.h',source,hid_source,keystore_source,process_source,trace_source,log_source,reset_source,ROOT/'kits/sheng/BootResetCore.h',ROOT/'kits/sheng/BootUiTraceCore.h',ROOT/'kits/sheng/BootUiTraceDetails.h',
          ROOT/'drivers/NativeHidInput/NativeHidInput.cpp',ROOT/'scripts/build-native-hid-input.py',
-         ROOT/'drivers/NativeKeyStoreEvents/NativeKeyStoreEvents.cpp',touch_cpp,cpufreq_cpp,wifi_cpp,adsp_cpp,*adsp_c,buttons_cpp,backlight_cpp,backlight_class_cpp,ROOT/'kits/sheng/TouchBoard.h',
+         ROOT/'drivers/NativeKeyStoreEvents/NativeKeyStoreEvents.cpp',touch_cpp,cpufreq_cpp,wifi_cpp,adsp_cpp,*adsp_c,audio_cpp,buttons_cpp,backlight_cpp,backlight_class_cpp,ROOT/'kits/sheng/TouchBoard.h',
          ROOT/'drivers/NativeGeniSpi/GeniSpi.c',ROOT/'drivers/NativeGeniSpi/GeniSpi.h',ROOT/'drivers/NativeNovatekTouch/NvtProtocol.c',
          ROOT/'drivers/NativeNovatekTouch/NvtProtocol.h',ROOT/'drivers/NativeNovatekTouch/NvtTouchCore.c',ROOT/'drivers/NativeNovatekTouch/NvtTouchCore.h']
 print(run(['python3',ROOT/'scripts/build-arm-driver.py','NativeGOPPresenter'],text=True),end='')
