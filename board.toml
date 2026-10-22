@@ -134,7 +134,7 @@ BUILDID_STRING = "sheng-research"
 volume = "SHENGESP"
 size_mib = 192
 loader = "firmware"
-title = "sheng first boot: source 4K XNU to console"
+title = "Boot"
 dram_size = "0x80000000"             # SMEM RAM table observed on the device
 skip_setup_tool = "scripts/seed-data-skip-setup.py"   # used by --skip-setup
 panic_screen = true                  # patch panic() screen output into the payload copy of the kernel
@@ -169,7 +169,6 @@ kernel_args = [
   "armcpu-diagnostics=1",
   "sheng-disable-watchdogd=1",
   "sheng-lite=1",
-  "boot-ui-focus3=Preferences",
   "boot-ui-focus4=SpringBoard",
   "sheng-smp=1",
   "sheng-cpufreq=3",
@@ -187,6 +186,10 @@ kernel_args = [
   "sheng-touch-hid=1",
   "sheng-data-persist=2",
   "sheng-staged-apps=1",
+  "sheng-buttons=1",
+  "sheng-backlight=1",
+  "sheng-swipe=200",
+  "sheng-wifi=1",
   "sheng-vsync=144",
 ]
 
@@ -205,6 +208,13 @@ text_fixups = [
   # missing com.apple.BTAudioHALPlugin.xpc in a tight loop (about 2700 times a second, millions of log lines, one core busy).
   "BTAudioHALPlugin,38bec,ffc300d1f44f01a9,000080d2c0035fd6",
 ]
+
+# The second boot menu entry, behind a confirmation: erase the Data seed's persistent store and start over (sheng-data-reset), with or without the Hello pages.
+[payload.install]
+title = "Install and boot"
+confirm = "ERASE all iPadOS user data and install again?"
+confirm_titles = ["Erase Data, skip Hello, boot", "Erase Data, show Hello, boot"]
+confirm_args = ["sheng-data-reset=1", "sheng-data-reset=2"]
 
 [payload.adt]
 tool = "scripts/make-sheng-adt.py"
