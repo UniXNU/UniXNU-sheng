@@ -19,6 +19,7 @@ extern int proc_selfpid(void);
 #include <kern/misc_protos.h>
 #include <kern/boot_progress.h>
 #include <arm/cpu_data_internal.h>
+#include <kern/processor.h>
 #include <arm/thread.h>
 #include <console/video_console.h>
 #include "BootProgressCore.h"
@@ -689,6 +690,8 @@ size_t boot_progress_spawn_rows(char *out,size_t cap) {
 enum {BpProfSamples = 65536};
 static uint64_t bp_prof[BpProfSamples];
 static uint32_t bp_prof_head;
+// Interrupted samples per core and process (pid % 61), since boot: shows which cores the busy processes run on.
+static uint32_t bp_cpu_cnt[8][64];
 // Kernel samples also keep the interrupted frame chain (int-147): int-146's hottest kernel PC was the instruction after DAIFClr in
 // ml_set_interrupts_enabled, i.e. timer interrupts held pending by an interrupts-masked section, which only its callers can name.
 // Per sample: pc and three return addresses, each as its low 32 bits (kernel text lies in one 4 GiB window); 0 = frame not inside the
@@ -719,6 +722,7 @@ void boot_progress_irq(uint64_t pc,uint64_t psr,uint64_t sp) {
         const uint64_t kernel=(psr&0x1f)!=0;
         const uint32_t at=__atomic_fetch_add(&bp_prof_head,1,__ATOMIC_RELAXED);
         bp_prof[at%BpProfSamples]=((uint64_t)(pid&0xffff)<<48)|(kernel<<47)|(pc&((1ull<<47)-1));
+        bp_cpu_cnt[getCpuDatap()->cpu_number&7][pid%61]++;
         if(kernel)bp_kernel_chain(pc);
       }
     }
@@ -1175,6 +1179,16 @@ static void monitor(void *arg, wait_result_t result) {
     thread_block(THREAD_CONTINUE_NULL);
   }
 }
+// The boot core is a little A510, and the scheduler, which sees equal cores, hands it work first (lowest idle core number). A
+// lowest-priority thread bound to it keeps it busy so work goes to the big cores while any is idle, and still gives way to real work
+// when none is (sheng-cpu0-park=0 turns it off). Compositing frames ran 40 fps without it and 55 fps with it.
+static void cpu0_park(void *arg, wait_result_t result) {
+  (void)arg;(void)result;
+  thread_set_thread_name(current_thread(),"cpu0_park");
+  thread_bind(master_processor);
+  thread_block(THREAD_CONTINUE_NULL);
+  for (;;) __asm__ volatile("yield");
+}
 void boot_progress_start(void) {
   if (!enabled || started) return;
   started=1;thread_t thread;
@@ -1191,6 +1205,8 @@ void boot_progress_start(void) {
     else __atomic_store_n(&process_worker_status,3,__ATOMIC_RELEASE);
   }
   if(kernel_thread_start_priority(touch_monitor,0,BASEPRI_KERNEL,&thread)==KERN_SUCCESS)thread_deallocate(thread);
+  {unsigned park=1;PE_parse_boot_argn("sheng-cpu0-park",&park,sizeof(park));
+   if(park==1 && kernel_thread_start_priority(cpu0_park,0,1,&thread)==KERN_SUCCESS)thread_deallocate(thread);}
   boot_progress_stage(state.continuous ?
     "monitor continuous: deadlines warn only; OS remains running" :
     "monitor armed: idle 30s / total 120s; IRQs required for hard stalls");
@@ -1219,6 +1235,12 @@ size_t boot_progress_profile_rows(char *out,size_t cap) {
   BP_ROW("PS samples=%u kept=%lu |",head,(unsigned long)n);
   for(size_t k=0;k<8 && k<procs;k++)BP_ROW(" p%llu:%llu",bp_prof_rank[procs-1-k]&0xffff,bp_prof_rank[procs-1-k]>>16);
   BP_ROW("\n");
+  for(size_t k=0;k<3 && k<procs;k++) {
+    const uint64_t pid=bp_prof_rank[procs-1-k]&0xffff;
+    BP_ROW("CPU p%llu",pid);
+    for(unsigned c=0;c<8;c++)BP_ROW(" c%u:%u",c,bp_cpu_cnt[c][pid%61]);
+    BP_ROW("\n");
+  }
   uint64_t top[2]={procs?bp_prof_rank[procs-1]&0xffff:0,procs>1?bp_prof_rank[procs-2]&0xffff:0};
   for(unsigned t=0;t<2 && t<procs;t++) {
     const uint64_t pid=top[t];
