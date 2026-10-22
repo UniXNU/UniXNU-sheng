@@ -334,6 +334,9 @@ extern "C" {volatile uint32_t native_touch_hold[14];}
 static void (*gTouchSink)(void *);
 static void *gTouchSinkContext;
 extern "C" void native_touch_set_sink(void (*sink)(void *), void *context) {gTouchSinkContext = context; __atomic_store_n(&gTouchSink, sink, __ATOMIC_RELEASE);}
+// Set while the scripted input (sheng-swipe) holds a contact down: the panel's own empty frames, which it reports about 110 times a second
+// with no finger on it, would lift that contact after every scripted frame (int-283: 1247 one-frame strokes, no swipe ever reached the UI).
+volatile bool gScriptedDown;
 void publish(unsigned count, const nvt_contact *c) {
     int ids[NVT_SLOTS], xs[NVT_SLOTS], ys[NVT_SLOTS];
     for (unsigned i = 0; i < count && i < NVT_SLOTS; ++i) {
@@ -691,7 +694,7 @@ static void touchThread(void *, wait_result_t) {
                 native_touch_hold[13] = static_cast<uint32_t>(s->core->reference_frames);
                 native_touch_loop_step = 7;
                 native_touch_frames = native_touch_frames + 1;
-                if (n >= 0) {
+                if (n > 0 || (n == 0 && !gScriptedDown)) {
                     native_touch_contacts = static_cast<uint32_t>(n);
                     if (n > 0) {native_touch_last_x = out[0].x; native_touch_last_y = out[0].y;}
                     publish(static_cast<unsigned>(n), out);
@@ -716,6 +719,7 @@ extern "C" {volatile uint32_t native_swipe_stats[8];}
 static void stroke(int id, int x0, int uiY0, int x1, int uiY1, unsigned frames) {
     nvt_contact c = {};
     c.tracking_id = id; c.peak = 100; c.area = 10; c.weight = 100;
+    gScriptedDown = true;
     for (unsigned f = 0; f <= frames; ++f) {
         c.x = x0 + (x1 - x0) * (int)f / (int)frames;
         c.y = 20319 - (uiY0 + (uiY1 - uiY0) * (int)f / (int)frames);
@@ -723,6 +727,7 @@ static void stroke(int id, int x0, int uiY0, int x1, int uiY1, unsigned frames) 
         native_swipe_stats[3] = native_swipe_stats[3] + 1;
         IOSleep(8);
     }
+    gScriptedDown = false;
     publish(0, &c);
     native_swipe_stats[2] = touchMs();
 }
