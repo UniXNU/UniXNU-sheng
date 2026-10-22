@@ -72,6 +72,8 @@ extern volatile uint32_t native_adreno_export_stats[4] __attribute__((weak_impor
 extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import));
 extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
 extern volatile uint32_t native_wifi_stats[10] __attribute__((weak_import));
+extern volatile int32_t native_adsp_stats[16] __attribute__((weak_import));
+extern char native_adsp_text[96] __attribute__((weak_import));
 extern volatile uint32_t native_swipe_stats[8] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
@@ -566,6 +568,20 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_wifi_stats[1], native_wifi_stats[2], native_wifi_stats[3], native_wifi_stats[4], native_wifi_stats[5], native_wifi_stats[6],
              native_wifi_stats[7], native_wifi_stats[8], native_wifi_stats[9]);
     at = put(out, at, cap, row, sizeof row);
+  }
+  // Audio DSP bring-up (AdspProbe.cpp): stage and error, IPCC interrupts, the DSP's slave-kernel bits, SMEM items, AOSS mailbox, RSC id,
+  // adsp.mbn KiB, ms to ready, GLINK messages in/out, channels up, opens nobody serves, last SCM result, rail votes; then its note.
+  if (&native_adsp_stats && native_adsp_stats[0]) {
+    char row[200];
+    snprintf(row, sizeof row, "[adsp] st=%d err=%d irq=%d slave=%x items=%x qmp=%x rsc=%x fw=%dK rdy=%dms rx=%d tx=%d ch=%x unk=%d scm=%d/%x votes=%x",
+             native_adsp_stats[0], native_adsp_stats[1], native_adsp_stats[2], native_adsp_stats[3], native_adsp_stats[4], native_adsp_stats[5],
+             native_adsp_stats[6], native_adsp_stats[7], native_adsp_stats[8], native_adsp_stats[9], native_adsp_stats[10], native_adsp_stats[11],
+             native_adsp_stats[12], native_adsp_stats[13], native_adsp_stats[14], native_adsp_stats[15]);
+    at = put(out, at, cap, row, sizeof row);
+    if (&native_adsp_text && native_adsp_text[0]) {
+      snprintf(row, sizeof row, "[adsp] %.95s", native_adsp_text);
+      at = put(out, at, cap, row, sizeof row);
+    }
   }
   // Touch strokes in panel pixels as the digitizer published them (y mirrored, 0 = the edge the UI calls top): where each finger came
   // down and lifted, how long and over how many frames, and the extent of every contact so far (edge gestures need the outer pixels).
