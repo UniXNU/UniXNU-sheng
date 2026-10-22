@@ -187,6 +187,9 @@ kernel_args = [
   "sheng-touch-hid=1",
   "sheng-data-persist=2",
   "sheng-staged-apps=1",
+  "sheng-buttons=1",
+  "sheng-backlight=1",
+  "sheng-wifi=1",
   "sheng-vsync=144",
 ]
 
