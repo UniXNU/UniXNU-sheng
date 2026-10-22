@@ -19,7 +19,8 @@ int geni_i2c_prepare(GeniI2c *g, const GeniIo *io, uint8_t address, uint32_t *co
     wr(g, GENI_BYTE_GRAN, 0);
     wr(g, GENI_TX_WATERMARK, 0);
     wr(g, GENI_M_IRQ_CLEAR, 0xffffffffu);
-    wr(g, GENI_M_IRQ_EN, rd(g, GENI_M_IRQ_EN) | GENI_M_IRQ_WANTED);
+    /* Exactly the bits this core handles: one the boot loader left enabled (RX watermark, RX last) would hold the level line up. */
+    wr(g, GENI_M_IRQ_EN, GENI_M_IRQ_WANTED);
     wr(g, GENI_SE_IRQ_EN, rd(g, GENI_SE_IRQ_EN) | GENI_SE_M_IRQ_EN);
     return 0;
 }
