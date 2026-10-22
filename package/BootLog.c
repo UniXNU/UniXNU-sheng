@@ -80,6 +80,7 @@ extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import
 extern volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wc_audit[6] __attribute__((weak_import));
 extern volatile uint32_t native_touch_edge_stats[4] __attribute__((weak_import));
+extern volatile int32_t native_backlight_request[2] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_reassert_ticks __attribute__((weak_import));
 extern volatile uint64_t native_adreno_cache_stats[5] __attribute__((weak_import));
 // NativeAdrenoPublish.cpp: per process name that opened the GPU, and the processes that asked the Metal discovery for its plugin.
@@ -326,10 +327,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // Panel brightness (AppleARMBacklight.cpp): stage (3 published, negative the failed step), requests, last level, the levels read back from
   // both drivers at start, transfer errors, last failed M_IRQ status, both engines' protocol and clock configuration, last error.
   if (&native_backlight_stats) {
-    char row[120];
-    snprintf(row, sizeof row, "L st=%d req=%d lvl=%d a=%d b=%d xerr=%d irq=%x ea=%x eb=%x err=%d", native_backlight_stats[0], native_backlight_stats[1],
-             native_backlight_stats[2], native_backlight_stats[3], native_backlight_stats[4], native_backlight_stats[5], native_backlight_stats[6],
-             native_backlight_stats[7], native_backlight_stats[8], native_backlight_stats[9]);
+    char row[150];
+    snprintf(row, sizeof row, "L st=%d req=%d lvl=%d a=%d b=%d xerr=%d irq=%x ea=%x eb=%x err=%d goal=%d fade=%d", native_backlight_stats[0],
+             native_backlight_stats[1], native_backlight_stats[2], native_backlight_stats[3], native_backlight_stats[4], native_backlight_stats[5],
+             native_backlight_stats[6], native_backlight_stats[7], native_backlight_stats[8], native_backlight_stats[9],
+             &native_backlight_request ? native_backlight_request[0] : -1, &native_backlight_request ? native_backlight_request[1] : -1);
     at = put(out, at, cap, row, sizeof row);
     // How transfers complete: interrupts from each engine, interrupt mode (1 attached, 0 polling, else the attach result), timeouts,
     // attach tries and transfers done.
