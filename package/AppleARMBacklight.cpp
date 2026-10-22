@@ -32,8 +32,9 @@
 // GeniI2c.h error, or a setup code), [10] interrupts from engine a, [11] from engine b, [12] interrupt mode (0 polling, 1 attached, else
 // the attach result), [13] transfer timeouts, [14] attach tries, [15] transfers done
 extern "C" {extern volatile int32_t native_backlight_stats[16];}
-// The last brightness asked for: [0] level, [1] fade in milliseconds; [2] request timer runs, [3] fades begun from a request.
-extern "C" {volatile int32_t native_backlight_request[4];}
+// The last brightness asked for: [0] level, [1] fade in milliseconds; [2] request timer runs, [3] fades begun from a request; [4] interrupts
+// with no status bit set, [5] the last status an interrupt saw.
+extern "C" {volatile int32_t native_backlight_request[6];}
 extern "C" int armcpu_spi_attach(uint32_t, bool, void (*)(void *), void *, uint32_t *, uint64_t *) __attribute__((weak_import));
 
 namespace {
@@ -72,7 +73,14 @@ void seIrq(void *context) {
     const unsigned index = (unsigned)(uintptr_t)context;
     volatile uint32_t *se = gSe[index].va;
     const uint32_t status = rd(se, GENI_M_IRQ_STATUS);
+    // The TX watermark is a level: it is raised again as soon as it is cleared while the FIFO is below the watermark, which stays so
+    // until the work loop puts the data in. Cleared here alone it kept the line up (int-279: 25 million interrupts per engine in 300 s,
+    // the work loop starved and ran 2 of 188 brightness requests), so the watermark is turned off here; the status bit still tells the
+    // work loop to fill the FIFO.
+    if (status & GENI_M_TX_WATERMARK) wr(se, GENI_TX_WATERMARK, 0);
     if (status) wr(se, GENI_M_IRQ_CLEAR, status);
+    else native_backlight_request[4] = native_backlight_request[4] + 1;
+    native_backlight_request[5] = (int32_t)status;
     __atomic_fetch_or(&gIrqStatus[index], status, __ATOMIC_RELEASE);
     bump(10 + (int)index);
     IOInterruptEventSource *inbox = gInbox;

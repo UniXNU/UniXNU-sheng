@@ -80,7 +80,7 @@ extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import
 extern volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wc_audit[6] __attribute__((weak_import));
 extern volatile uint32_t native_touch_edge_stats[4] __attribute__((weak_import));
-extern volatile int32_t native_backlight_request[4] __attribute__((weak_import));
+extern volatile int32_t native_backlight_request[6] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_reassert_ticks __attribute__((weak_import));
 extern volatile uint64_t native_adreno_cache_stats[5] __attribute__((weak_import));
 // NativeAdrenoPublish.cpp: per process name that opened the GPU, and the processes that asked the Metal discovery for its plugin.
@@ -334,9 +334,10 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_backlight_request ? native_backlight_request[0] : -1, &native_backlight_request ? native_backlight_request[1] : -1);
     at = put(out, at, cap, row, sizeof row);
     // The request path and the engines: request timer runs, fades begun, interrupts from a and b, interrupt mode, timeouts, transfers.
-    snprintf(row, sizeof row, "L path runs=%d fades=%d irq=%d/%d mode=%d tmo=%d done=%d", &native_backlight_request ? native_backlight_request[2] : -1,
+    snprintf(row, sizeof row, "L path runs=%d fades=%d irq=%d/%d mode=%d tmo=%d done=%d empty=%d last=%x", &native_backlight_request ? native_backlight_request[2] : -1,
              &native_backlight_request ? native_backlight_request[3] : -1, native_backlight_stats[10], native_backlight_stats[11],
-             native_backlight_stats[12], native_backlight_stats[13], native_backlight_stats[15]);
+             native_backlight_stats[12], native_backlight_stats[13], native_backlight_stats[15],
+             &native_backlight_request ? native_backlight_request[4] : -1, &native_backlight_request ? (unsigned)native_backlight_request[5] : 0u);
     at = put(out, at, cap, row, sizeof row);
     // How transfers complete: interrupts from each engine, interrupt mode (1 attached, 0 polling, else the attach result), timeouts,
     // attach tries and transfers done.
