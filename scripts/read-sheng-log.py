@@ -33,12 +33,14 @@ FIELDS = ('magic', 'version', 'header_bytes', 'boot_id', 'first_lba', 'window_bl
 EXPORT = struct.Struct('<4I')   # version 2: export_first, export_blocks, export_bytes, export_generation
 EXPORT_FIELDS = ('export_first', 'export_blocks', 'export_bytes', 'export_generation')
 EXPORT3 = struct.Struct('<I')   # version 3: export_below (the export region ends that many blocks below the window)
+DIAG4 = struct.Struct('<II')    # version 4: diag_first, diag_bytes (package/BootDiagExport.c, in the same region)
 LOG_BLOCKS = 8192               # the window the reader dumps (package/linux-log/init, NativeUfs kLogReserveBlocks)
 
 
-def unpack_export(blob, run):
-    """The export area's blob (package/BootLog.c, drivers/NativeMetal/CacheExport.h) into run/export/: the files and a manifest."""
-    (run / 'export.bin').write_bytes(blob)
+def unpack_export(blob, run, name='export'):
+    """The export area's blob (package/BootLog.c, drivers/NativeMetal/CacheExport.h) into run/<name>/: the files and a manifest. The
+    diagnostic export (name diag) has the same form with root /."""
+    (run / f'{name}.bin').write_bytes(blob)
     raw_bytes, zbytes = struct.unpack_from('<II', blob, 8)
     if blob[:8] == b'SHEXP001':
         raw = zlib.decompress(blob[16:16 + zbytes])
@@ -52,7 +54,7 @@ def unpack_export(blob, run):
     (n,) = struct.unpack_from('<I', raw, at); at += 4
     root = raw[at:at + n].decode(); at += n
     (count,) = struct.unpack_from('<I', raw, at); at += 4
-    out = run / 'export'
+    out = run / name
     files = []
     for _ in range(count):
         plen, mode, uid, gid, size = struct.unpack_from('<IIIIQ', raw, at); at += 24
@@ -78,6 +80,8 @@ def header(blob):
         h.update(zip(EXPORT_FIELDS, EXPORT.unpack_from(blob, HEADER.size)))
     if h['version'] >= 3:
         (h['export_below'],) = EXPORT3.unpack_from(blob, HEADER.size + EXPORT.size)
+    if h['version'] >= 4:
+        h['diag_first'], h['diag_bytes'] = DIAG4.unpack_from(blob, HEADER.size + EXPORT.size + EXPORT3.size)
     return h
 
 
@@ -191,16 +195,22 @@ def fetch(port_path, out, reboot, retries=6):
     window = gzip.decompress(data)
     run_dir = decode(window, out)
     h = header(window)
-    if h.get('export_bytes') and h.get('export_below'):
-        # The export region below the window, read from userdata on the reader (the same partition lookup as its init).
-        blocks = (h['export_bytes'] + BLOCK - 1) // BLOCK
+    # The export region below the window, read from userdata on the reader (the same partition lookup as its init).
+    def region(first, size, name):
+        blocks = (size + BLOCK - 1) // BLOCK
         made = run('P=; for u in /sys/class/block/*/uevent; do grep -q "^PARTNAME=userdata$" "$u" && P=$(basename $(dirname "$u")); done; '
                    'B=$(( $(cat /sys/class/block/$P/size) / 8 )); '
-                   f'dd if=/dev/$P of=/run/export.bin bs=4096 skip=$((B - {LOG_BLOCKS} - {h["export_below"]} + {h["export_first"]})) '
-                   f'count={blocks} 2>/dev/null; wc -c < /run/export.bin', 300)
+                   f'dd if=/dev/$P of=/run/{name}.bin bs=4096 skip=$((B - {LOG_BLOCKS} - {h["export_below"]} + {first})) '
+                   f'count={blocks} 2>/dev/null; wc -c < /run/{name}.bin', 300)
         if int(made.split()[-1]) != blocks * BLOCK:
-            raise SystemExit(f'export region read short: {made!r}')
-        unpack_export(gzip.decompress(pull('/run/export.bin', 600))[:h['export_bytes']], run_dir)
+            raise SystemExit(f'{name} region read short: {made!r}')
+        unpack_export(gzip.decompress(pull(f'/run/{name}.bin', 1800))[:size], run_dir, name)
+        run(f'rm -f /run/{name}.bin /run/l.gz')
+
+    if h.get('export_bytes') and h.get('export_below'):
+        region(h['export_first'], h['export_bytes'], 'export')
+    if h.get('diag_bytes') and h.get('export_below'):
+        region(h['diag_first'], h['diag_bytes'], 'diag')
     if reboot:
         port.send('/bin/rebootbl\n')
         print('sent rebootbl: the tablet should come back in fastboot')

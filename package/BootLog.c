@@ -40,7 +40,27 @@ extern volatile uint64_t native_data_persist_writes __attribute__((weak_import))
 extern volatile uint64_t native_data_persist_syncs __attribute__((weak_import));
 extern volatile uint64_t native_data_persist_errors __attribute__((weak_import));
 extern volatile uint64_t native_data_persist_first_lba __attribute__((weak_import));
+extern volatile int native_gpu_addon_files __attribute__((weak_import));
+extern volatile int native_gpu_addon_written __attribute__((weak_import));
+extern volatile int native_gpu_addon_same __attribute__((weak_import));
+extern volatile int native_gpu_addon_failed __attribute__((weak_import));
+extern volatile int native_gpu_addon_error __attribute__((weak_import));
+extern volatile int native_gpu_addon_stage __attribute__((weak_import));
+extern volatile int native_gpu_addon_status __attribute__((weak_import));
+extern volatile int native_gpu_addon2_stage __attribute__((weak_import));
+extern volatile int native_gpu_addon2_status __attribute__((weak_import));
+extern volatile int native_gpu_addon3_stage __attribute__((weak_import));
+extern volatile int native_gpu_addon3_status __attribute__((weak_import));
 extern volatile uint64_t native_data_persist_present __attribute__((weak_import));
+extern volatile int native_staged_apps_stage __attribute__((weak_import));
+extern volatile int32_t native_buttons_stats[10] __attribute__((weak_import));
+extern volatile int32_t native_backlight_stats[10] __attribute__((weak_import));
+extern volatile int native_staged_apps_dirs __attribute__((weak_import));
+extern volatile int native_staged_apps_files __attribute__((weak_import));
+extern volatile int native_staged_apps_mib __attribute__((weak_import));
+extern volatile int native_staged_apps_failed __attribute__((weak_import));
+extern volatile int native_staged_apps_error __attribute__((weak_import));
+extern char native_staged_apps_path[96] __attribute__((weak_import));
 extern const char *boot_progress_tag(void) __attribute__((weak_import));
 extern unsigned boot_ui_trace_role_rows(unsigned, char [][120], unsigned, unsigned) __attribute__((weak_import));
 extern unsigned boot_ui_trace_hot_rows(char [][120], unsigned) __attribute__((weak_import));
@@ -51,6 +71,8 @@ extern volatile uint64_t native_adreno_wait_outer[4] __attribute__((weak_import)
 extern volatile uint32_t native_adreno_export_stats[4] __attribute__((weak_import));
 extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import));
 extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
+extern volatile uint32_t native_wifi_stats[10] __attribute__((weak_import));
+extern volatile uint32_t native_swipe_stats[6] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_vm_phase_us[2][8] __attribute__((weak_import));
@@ -63,10 +85,15 @@ extern volatile uint64_t native_adreno_cache_stats[5] __attribute__((weak_import
 // NativeAdrenoPublish.cpp: per process name that opened the GPU, and the processes that asked the Metal discovery for its plugin.
 struct native_adreno_client_record {char name[20]; uint32_t opens, refused, closes, slot, peak_mib, last_refusal;};
 extern struct native_adreno_client_record native_adreno_client_log[8] __attribute__((weak_import));
+struct native_adreno_client_text {char name[20]; char text[64];};
+extern struct native_adreno_client_text native_adreno_client_text[4] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_mount_fail[4] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_window_overflow[4][3] __attribute__((weak_import));
 struct native_adreno_asker_record {char name[20]; uint32_t reads;};
 extern struct native_adreno_asker_record native_adreno_metal_askers[12] __attribute__((weak_import));
 extern char native_gpu_coherence_row[120] __attribute__((weak_import));
 extern size_t boot_progress_profile_rows(char *, size_t) __attribute__((weak_import));
+extern size_t boot_progress_spawn_rows(char *, size_t) __attribute__((weak_import));
 extern volatile uint64_t native_gpu_idle_sleeps __attribute__((weak_import));
 extern volatile uint64_t native_gpu_idle_spins __attribute__((weak_import));
 extern volatile uint32_t native_adreno_coherent_skips[4] __attribute__((weak_import));
@@ -91,16 +118,18 @@ extern unsigned native_legacy_state_words(char *, unsigned) __attribute__((weak_
 extern volatile uint32_t native_adreno_view_diag[6] __attribute__((weak_import));
 extern int boot_reset_probe(char *, unsigned) __attribute__((weak_import));
 extern int boot_reset_bootloader(char *, unsigned) __attribute__((weak_import));
+extern int boot_reset_mark_bootloader(char *, unsigned) __attribute__((weak_import));
+extern int boot_reset_watchdog(uint32_t, char *, unsigned) __attribute__((weak_import));
 extern volatile uint64_t native_adreno_import_diag[10] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_import_stage __attribute__((weak_import));
 extern volatile uint64_t native_adreno_import_fail_pa __attribute__((weak_import)), native_adreno_import_fail_offset __attribute__((weak_import));
 // What the reset probe and the autoreset attempt saw, for the [reset] section of the log.
-static char boot_log_reset_probe_text[240], boot_log_reset_result[120];
+static char boot_log_reset_probe_text[240], boot_log_reset_result[120], boot_log_reset_mark[64], boot_log_reset_watchdog[120];
 // The kernel message buffer (bsd/sys/msgbuf.h); only these leading fields are read.
 struct boot_log_msgbuf {int msg_magic, msg_size, msg_bufx, msg_bufr; char *msg_bufc;};
 extern struct boot_log_msgbuf *msgbufp;
 
-enum {LogBlock = 4096, LogMsgFirst = 1, LogMsgBlocks = 32, LogSlotFirst = 33, LogSlotBlocks = 8, LogPeriodMs = 2000, LogMaxErrors = 3,
+enum {LogBlock = 4096, LogMsgFirst = 1, LogMsgBlocks = 32, LogSlotFirst = 33, LogSlotBlocks = 16, LogPeriodMs = 2000, LogMaxErrors = 3,
       LogExportStage = 64};   // export bytes staged per write: 256 KiB
 struct boot_log_header {
   char magic[8];                 // "SHLOG001"
@@ -114,6 +143,8 @@ struct boot_log_header {
   // below block 0 of this window); export_bytes 0 = nothing exported yet
   uint32_t export_first, export_blocks, export_bytes, export_generation;
   uint32_t export_below;
+  // version 4: the diagnostic file export (BootDiagExport.c) at block diag_first of the export region, diag_bytes long (0 = none)
+  uint32_t diag_first, diag_bytes;
 };
 // Writer state for the board page: 0 off, 1 waiting for the window, 2 writing, 3 stopped after errors, 4 stopped (GPT changed).
 volatile uint32_t boot_log_state, boot_log_rounds, boot_log_errors;
@@ -128,6 +159,16 @@ static IOLock *export_lock;
 static uint8_t *export_stage;
 static uint32_t export_region;   // blocks of the export region, 0 = none
 static uint32_t export_total, export_filled, export_generation, export_target, export_ready, export_ready_bytes, export_ready_first;
+// The diagnostic file export takes the half the ready blob does not hold; from then on the plugin's exports are refused (-7), so neither
+// overwrites the other. diag_status: 0 not asked, 1 running, 2 done, negative failed.
+static uint32_t diag_first, diag_bytes;
+static int diag_owned;
+volatile int boot_diag_status;
+extern volatile uint32_t boot_diag_files __attribute__((weak_import));
+extern volatile uint32_t boot_diag_skipped __attribute__((weak_import));
+extern volatile uint32_t boot_diag_errors __attribute__((weak_import));
+extern uint64_t boot_diag_scan(uint64_t) __attribute__((weak_import));
+extern int boot_diag_stream(int (*)(const void *, uint32_t, void *), void *) __attribute__((weak_import));
 int boot_log_export_put(uint32_t generation, uint32_t total, uint32_t offset, const void *data, uint32_t size) {
   if (!export_lock || !generation || !total || !data || !size || offset > total || size > total - offset) return -1;
   IOLockLock(export_lock);
@@ -135,6 +176,7 @@ int boot_log_export_put(uint32_t generation, uint32_t total, uint32_t offset, co
   const uint32_t half = export_region / 2, stage = LogExportStage * LogBlock;
   if (!half || !&native_ufs_export_write) status = -4;
   else if (total > (uint64_t)half * LogBlock) status = -5;
+  else if (diag_owned) status = -7;
   if (!status && !export_stage) export_stage = (uint8_t *)IOMallocAligned(stage, LogBlock);
   if (!status && !export_stage) status = -2;
   if (!status && offset == 0) {
@@ -159,6 +201,53 @@ int boot_log_export_put(uint32_t generation, uint32_t total, uint32_t offset, co
   }
   IOLockUnlock(export_lock);
   return status;
+}
+
+// The diagnostic export's writer: the same staging as boot_log_export_put, into its own half.
+struct diag_sink {uint8_t *stage; uint32_t target, filled;};
+static int diag_flush(struct diag_sink *k) {
+  const uint32_t stage = LogExportStage * LogBlock, used = k->filled % stage ? k->filled % stage : stage;
+  const uint32_t blocks = (used + LogBlock - 1) / LogBlock;
+  if (used % LogBlock) memset(k->stage + used, 0, blocks * LogBlock - used);
+  return native_ufs_export_write(k->target + (k->filled - used) / LogBlock, blocks, k->stage) ? 0 : -6;
+}
+static int diag_emit(const void *data, uint32_t size, void *arg) {
+  struct diag_sink *k = arg;
+  const uint32_t stage = LogExportStage * LogBlock;
+  const uint8_t *from = data;
+  while (size) {
+    const uint32_t at = k->filled % stage, n = size < stage - at ? size : stage - at;
+    memcpy(k->stage + at, from, n);
+    k->filled += n; from += n; size -= n;
+    if (at + n == stage && diag_flush(k)) return -6;
+  }
+  return 0;
+}
+static void diag_thread(void *arg, wait_result_t wait) {
+  (void)arg; (void)wait;
+  IOLockLock(export_lock);
+  const uint32_t half = export_region / 2;
+  struct diag_sink k = {NULL, export_ready && export_ready_first == 0 ? half : 0, 0};
+  diag_owned = half != 0;
+  IOLockUnlock(export_lock);
+  int status = -4;
+  if (half && &native_ufs_export_write && (k.stage = (uint8_t *)IOMallocAligned(LogExportStage * LogBlock, LogBlock))) {
+    const uint64_t stream = boot_diag_scan((uint64_t)half * LogBlock - 16);
+    const uint32_t head[4] = {0, 0, (uint32_t)stream, 0};
+    if (!stream) status = -8;
+    else {
+      status = diag_emit("SHEXR001", 8, &k);
+      if (!status) status = diag_emit(&head[2], 8, &k);
+      if (!status) status = boot_diag_stream(diag_emit, &k);
+      if (!status && k.filled % (LogExportStage * LogBlock)) status = diag_flush(&k);
+      if (!status && k.filled != stream + 16) status = -9;
+    }
+    IOFreeAligned(k.stage, LogExportStage * LogBlock);
+  }
+  IOLockLock(export_lock);
+  if (!status) {diag_first = k.target; diag_bytes = k.filled;}
+  IOLockUnlock(export_lock);
+  boot_diag_status = status ? status : 2;
 }
 
 static uint64_t log_ticks(void) {uint64_t v; __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(v)); return v;}
@@ -200,15 +289,55 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     at = put(out, at, cap, "[data]", 8);
     at = put(out, at, cap, row, sizeof row);
   }
+  // The payload's GPU addon (kern_exec.c native_gpu_addon_install): files in it (-1 none), written, already equal, failed, last error; then
+  // the stage/status of the boot-time addon mounts (stage 5 = mounted and both entries visible): plugin, launchd job, wallpaper.
+  if (&native_gpu_addon_files && &native_gpu_addon_stage) {
+    char row[120];
+    snprintf(row, sizeof row, "A files=%d wr=%d same=%d fail=%d err=%d mount=%d/%d mount2=%d/%d mount3=%d/%d", native_gpu_addon_files,
+             native_gpu_addon_written, native_gpu_addon_same, native_gpu_addon_failed, native_gpu_addon_error, native_gpu_addon_stage,
+             native_gpu_addon_status, native_gpu_addon2_stage, native_gpu_addon2_status, &native_gpu_addon3_stage ? native_gpu_addon3_stage : 0,
+             &native_gpu_addon3_status ? native_gpu_addon3_status : 0);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // The one-time copy of the OS volume's staged system apps into Data (kern_exec.c native_staged_apps_prepare): stage (2 copied, 3 copied
+  // before, -1 no source), directories, files, MiB, failures and the last error.
+  if (&native_staged_apps_stage) {
+    char row[120];
+    snprintf(row, sizeof row, "S st=%d dirs=%d files=%d mib=%d fail=%d err=%d", native_staged_apps_stage, native_staged_apps_dirs,
+             native_staged_apps_files, native_staged_apps_mib, native_staged_apps_failed, native_staged_apps_error);
+    at = put(out, at, cap, row, sizeof row);
+    if (native_staged_apps_stage == 1 && &native_staged_apps_path) {
+      snprintf(row, sizeof row, "S at %.100s", native_staged_apps_path);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // Power and volume buttons (ButtonProbe.cpp): stage (3 armed, negative the failed step), interrupts, reports, pressed mask, the power and
+  // GPIO APIDs, interrupts of other APIDs cleared, PDC version, last error, spurious interrupts.
+  if (&native_buttons_stats) {
+    char row[120];
+    snprintf(row, sizeof row, "B st=%d irq=%d rep=%d mask=%x apid=%d/%d off=%d pdc=%x err=%d spur=%d", native_buttons_stats[0], native_buttons_stats[1],
+             native_buttons_stats[2], native_buttons_stats[3], native_buttons_stats[4], native_buttons_stats[5], native_buttons_stats[6],
+             native_buttons_stats[7], native_buttons_stats[8], native_buttons_stats[9]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // Panel brightness (AppleARMBacklight.cpp): stage (3 published, negative the failed step), requests, last level, the levels read back from
+  // both drivers at start, transfer errors, last failed M_IRQ status, both engines' protocol and clock configuration, last error.
+  if (&native_backlight_stats) {
+    char row[120];
+    snprintf(row, sizeof row, "L st=%d req=%d lvl=%d a=%d b=%d xerr=%d irq=%x ea=%x eb=%x err=%d", native_backlight_stats[0], native_backlight_stats[1],
+             native_backlight_stats[2], native_backlight_stats[3], native_backlight_stats[4], native_backlight_stats[5], native_backlight_stats[6],
+             native_backlight_stats[7], native_backlight_stats[8], native_backlight_stats[9]);
+    at = put(out, at, cap, row, sizeof row);
+  }
   if (&boot_progress_ext_wide)
     for (unsigned i = 0; i < 2; ++i) {char row[120]; snprintf(row, sizeof row, "W%u %.111s", i, boot_progress_ext_wide[i]); at = put(out, at, cap, row, sizeof row);}
   // Every traced process's stacks (the banner shows only what fits the panel): role 0..3 are the boot-ui-focus slots, main thread in full
   // (symbolicate with unslid = address - cache slide), then its thread groups.
   if (&boot_ui_trace_role_rows) {
-    static char rows[32][120];
+    static char rows[64][120];
     at = put(out, at, cap, "[stacks]", 10);
     for (unsigned role = 0; role < 4; ++role) {
-      unsigned n = boot_ui_trace_role_rows(role, rows, 32, 1);
+      unsigned n = boot_ui_trace_role_rows(role, rows, 64, 2);   // 2: with each thread group's deeper frames
       for (unsigned i = 0; i < n; ++i) at = put(out, at, cap, rows[i], 120);
     }
   }
@@ -275,10 +404,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if (n) {char head[64]; snprintf(head, sizeof head, "[hot] kernel slide=%lx", (unsigned long)vm_kernel_slide); at = put(out, at, cap, head, sizeof head);}
     for (unsigned i = 0; i < n; ++i) at = put(out, at, cap, hot[i], 120);
   }
-  // The newest ring submissions (fence, ring range, then the words the CP reads) and the first words of their IBs.
+  // The four newest ring submissions (fence, ring range, then the words the CP reads) and the first words of their IBs: all that the
+  // logs keep, so a stalled fence behind newer submissions is still shown.
   if (&native_adreno_ring_log_count && native_adreno_ring_log_count) {
     const uint32_t newest = native_adreno_ring_log_count - 1;
-    for (unsigned back = 0; back < 2 && back < native_adreno_ring_log_count; ++back) {
+    for (unsigned back = 0; back < 4 && back < native_adreno_ring_log_count; ++back) {
       const volatile uint32_t *r = native_adreno_ring_log[(newest - back) & 3];
       char row[130];
       snprintf(row, sizeof row, "[ring] fence=%u ring %x..%x words=%u", r[0], r[1], r[2], r[3]);
@@ -293,7 +423,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   if (&native_adreno_ib_log_count && native_adreno_ib_log_count) {
     const uint32_t newest = native_adreno_ib_log_count - 1;
-    for (unsigned back = 0; back < 2 && back < native_adreno_ib_log_count; ++back) {
+    for (unsigned back = 0; back < 4 && back < native_adreno_ib_log_count; ++back) {
       const volatile uint32_t *r = native_adreno_ib_log[(newest - back) & 3];
       char row[130];
       snprintf(row, sizeof row, "[ib] fence=%u iova=%x%08x bytes=%u", r[0], r[2], r[1], r[3]);
@@ -358,6 +488,23 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
     at = put(out, at, cap, row, sizeof row);
   }
+  // [gpu windows]: per client window the mappings that fell outside it (count, last size KiB, last end MiB), the latest failed mount (stage 1 no free
+  // slot, 2 core open, 3 window scope; status; slot; count), then one line per process other than the render server: why its Metal device failed.
+  if (&native_adreno_window_overflow && &native_adreno_mount_fail) {
+    char row[300];
+    snprintf(row, sizeof row, "[gpu windows] ovf %u/%uK/%uM %u/%uK/%uM %u/%uK/%uM %u/%uK/%uM | mount fail stage %u st %x slot %u n %u",
+             native_adreno_window_overflow[0][0], native_adreno_window_overflow[0][1], native_adreno_window_overflow[0][2],
+             native_adreno_window_overflow[1][0], native_adreno_window_overflow[1][1], native_adreno_window_overflow[1][2],
+             native_adreno_window_overflow[2][0], native_adreno_window_overflow[2][1], native_adreno_window_overflow[2][2],
+             native_adreno_window_overflow[3][0], native_adreno_window_overflow[3][1], native_adreno_window_overflow[3][2],
+             native_adreno_mount_fail[0], native_adreno_mount_fail[1], native_adreno_mount_fail[2], native_adreno_mount_fail[3]);
+    at = put(out, at, cap, row, sizeof row);
+    if (&native_adreno_client_text)
+      for (unsigned i = 0; i < 4 && native_adreno_client_text[i].name[0]; ++i) {
+        snprintf(row, sizeof row, "[gpu client text] %.19s: %.63s", native_adreno_client_text[i].name, native_adreno_client_text[i].text);
+        at = put(out, at, cap, row, sizeof row);
+      }
+  }
   if (&native_adreno_metal_askers) {
     char row[400];
     size_t used = (size_t)snprintf(row, sizeof row, "[metal askers]");
@@ -409,6 +556,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_adreno_export_stats[1], native_adreno_export_stats[2], native_adreno_export_stats[3], export_ready, export_ready_bytes);
     at = put(out, at, cap, row, sizeof row);
   }
+  // WiFi bring-up (WifiProbe.cpp): stage, GCC votes, PCIe0 GDSC, halted branches, WLAN_EN/SW_CTRL/PERST# pins, LTSSM, root port ID, link.
+  if (&native_wifi_stats && native_wifi_stats[0]) {
+    char row[160];
+    snprintf(row, sizeof row, "[wifi] st=%d v8=%x v0=%x gdsc=%x off=%x gpio=%06x ltssm=%x id=%08x lnk=%08x phy=%x", (int)native_wifi_stats[0],
+             native_wifi_stats[1], native_wifi_stats[2], native_wifi_stats[3], native_wifi_stats[4], native_wifi_stats[5], native_wifi_stats[6],
+             native_wifi_stats[7], native_wifi_stats[8], native_wifi_stats[9]);
+    at = put(out, at, cap, row, sizeof row);
+  }
   // Touch strokes in panel pixels as the digitizer published them (y mirrored, 0 = the edge the UI calls top): where each finger came
   // down and lifted, how long and over how many frames, and the extent of every contact so far (edge gestures need the outer pixels).
   if (&native_touch_stroke_count && &native_touch_strokes && &native_touch_extent && native_touch_stroke_count) {
@@ -423,6 +578,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                r[2] / 10, r[3] / 10, r[4] / 10, r[5] / 10, r[6]);
       at = put(out, at, cap, row, sizeof row);
     }
+  }
+  if (&native_swipe_stats && native_swipe_stats[3]) {
+    char row[140];
+    snprintf(row, sizeof row, "[swipe] done=%u first=%u.%03us last=%u.%03us frames=%u tap=%u.%03us home=%u.%03us", native_swipe_stats[0],
+             native_swipe_stats[1] / 1000, native_swipe_stats[1] % 1000, native_swipe_stats[2] / 1000, native_swipe_stats[2] % 1000,
+             native_swipe_stats[3], native_swipe_stats[4] / 1000, native_swipe_stats[4] % 1000, native_swipe_stats[5] / 1000,
+             native_swipe_stats[5] % 1000);
+    at = put(out, at, cap, row, sizeof row);
   }
   if (&native_adreno_map_fail && native_adreno_map_fail[0][1]) {
     char row[170];
@@ -473,13 +636,36 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   if (boot_log_reset_probe_text[0]) {
     at = put(out, at, cap, "[reset]", 8);
     at = put(out, at, cap, boot_log_reset_probe_text, sizeof boot_log_reset_probe_text);
+    if (boot_log_reset_mark[0]) at = put(out, at, cap, boot_log_reset_mark, sizeof boot_log_reset_mark);
+    if (boot_log_reset_watchdog[0]) at = put(out, at, cap, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
     if (boot_log_reset_result[0]) at = put(out, at, cap, boot_log_reset_result, sizeof boot_log_reset_result);
+  }
+  if (boot_diag_status) {
+    char row[120];
+    snprintf(row, sizeof row, "[diag] status=%d files=%u skipped=%u errors=%u bytes=%u first=%u", boot_diag_status, &boot_diag_files ? boot_diag_files : 0,
+             &boot_diag_skipped ? boot_diag_skipped : 0, &boot_diag_errors ? boot_diag_errors : 0, diag_bytes, diag_first);
+    at = put(out, at, cap, row, sizeof row);
   }
   // The signed-text fixups given as text-fixupN boot arguments: how many parsed and how many page writes they made.
   if (&cs_text_fixup_parsed && cs_text_fixup_parsed) {
     char row[64];
     snprintf(row, sizeof row, "[text fixup] parsed=%u applied=%u", cs_text_fixup_parsed, cs_text_fixup_applied);
     at = put(out, at, cap, row, sizeof row);
+  }
+  // Which processes were started and ended (BootProgress.c census) and the throw site of the last uncaught exception (kits BootFaultProbe.c).
+  if (&boot_progress_spawn_rows) {
+    static char spawn[16384];
+    const size_t n = boot_progress_spawn_rows(spawn, sizeof spawn);
+    if (n) {
+      at = put(out, at, cap, "[spawn]", 8);
+      for (char *line = spawn; *line;) {
+        char *end = strchr(line, '\n');
+        const size_t len = end ? (size_t)(end - line) : strlen(line);
+        at = put(out, at, cap, line, len);
+        if (!end) break;
+        line = end + 1;
+      }
+    }
   }
   // The sampling profile (BootProgress.c): which processes the interrupts landed in and where, at most 6 KiB of the slot.
   if (&boot_progress_profile_rows) {
@@ -539,7 +725,7 @@ static void writer(void *arg, wait_result_t result) {
   struct boot_log_header h;
   memset(&h, 0, sizeof h);
   memcpy(h.magic, "SHLOG001", 8);
-  h.version = 3; h.header_bytes = sizeof h;
+  h.version = 4; h.header_bytes = sizeof h;
   h.export_blocks = export_region; h.export_below = export_region; h.boot_id = log_ticks(); h.first_lba = first; h.window_blocks = (uint32_t)blocks;
   h.msg_first = LogMsgFirst; h.msg_blocks = LogMsgBlocks; h.slot_first = LogSlotFirst; h.slot_blocks = LogSlotBlocks; h.slot_count = slot_count;
   h.gpt_open = h.gpt_last = &native_ufs_store_gpt_check ? native_ufs_store_gpt_check() : 0xff;
@@ -553,7 +739,14 @@ static void writer(void *arg, wait_result_t result) {
   if (&boot_reset_probe) {
     reset_ok = boot_reset_probe(boot_log_reset_probe_text, sizeof boot_log_reset_probe_text) == 0;
     PE_parse_boot_argn("sheng-autoreset", &autoreset, sizeof autoreset);
+    // An unattended run must come back even if this loop never reaches its deadline (int-229 stayed on the desktop past it): mark the
+    // cell now, so any restart is fastboot, and let the hypervisor's watchdog restart the tablet a minute after the deadline at the latest.
+    if (autoreset && reset_ok && &boot_reset_mark_bootloader) boot_reset_mark_bootloader(boot_log_reset_mark, sizeof boot_log_reset_mark);
+    if (autoreset && reset_ok && &boot_reset_watchdog) boot_reset_watchdog(autoreset + 60, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
   }
+  // sheng-diag-export=<seconds of log time>: export the diagnostic files once then (set it shortly before sheng-autoreset).
+  uint32_t diag_at = 0;
+  if (&boot_diag_scan && &boot_diag_stream) PE_parse_boot_argn("sheng-diag-export", &diag_at, sizeof diag_at);
   uint32_t errors = 0;
   boot_log_state = 2;
   for (;;) {
@@ -570,7 +763,14 @@ static void writer(void *arg, wait_result_t result) {
     // The newest complete export is already on the medium; the header names it.
     IOLockLock(export_lock);
     h.export_generation = export_ready; h.export_bytes = export_ready_bytes; h.export_first = export_ready_first;
+    h.diag_first = diag_first; h.diag_bytes = diag_bytes;
     IOLockUnlock(export_lock);
+    if (diag_at && now >= diag_at && !boot_diag_status) {
+      thread_t diag;
+      boot_diag_status = 1;
+      if (kernel_thread_start_priority(diag_thread, NULL, MINPRI_KERNEL, &diag) == KERN_SUCCESS) thread_deallocate(diag);
+      else boot_diag_status = -10;
+    }
     h.uptime_s = now; h.rounds = ++boot_log_rounds; h.state = boot_log_state;
     // Every 30 rounds the GPT is read back; any change stops the writer for good.
     if (&native_ufs_store_gpt_check && !(h.rounds % 30)) h.gpt_last = native_ufs_store_gpt_check();

@@ -13,6 +13,7 @@
 #include <ipc/ipc_port.h>
 #include <string.h>
 #include "BootUiTraceCore.h"
+extern void proc_name(int pid, char *buf, int size);   // bsd/sys/proc.h; the header itself clashes with the Mach types used here
 #include "BootUiTraceDetails.h"
 static struct bt_entry samples[BT_MAX_THREADS];
 // Hot threads: the context-switch rate of each sampled thread between two snapshots, so a thread that is woken hundreds of times a second
@@ -186,9 +187,17 @@ unsigned boot_ui_trace_role_rows(unsigned role,char rows[][120],unsigned max,uns
  for(unsigned g=0;g<published.count && n<max;++g) {
   const struct bt_entry *t=&published.entries[g];
   if(t->role!=c || (detail && t->index==1 && t->count==1) || !t->frames[0])continue;   // a main group of several threads names the others
-  int at=snprintf(rows[n],120,"STK%c#%u x%u p%d %llx %llx",t->role,t->index,t->count,t->peer,t->pc,t->lr);
+  // The name of the process this thread waits on (a synchronous XPC or mach_msg to a daemon), so a stall names its peer instead of only a pid.
+  char peer[17]="";if(t->peer>0)proc_name(t->peer,peer,sizeof peer);
+  int at=snprintf(rows[n],120,"STK%c#%u x%u p%d(%.12s) %llx %llx",t->role,t->index,t->count,t->peer,peer,t->pc,t->lr);
   for(unsigned i=0;i<7 && at>0 && at<119;++i)at+=snprintf(rows[n]+at,120-at," %llx",t->frames[i]);
   ++n;
+  // detail 2 (the boot log): the group's next frames in a row of their own, so a thread blocked in a lock or a sync wait shows who called it.
+  if(detail>=2 && t->frames[7] && n<max) {
+   int more=snprintf(rows[n],120,"STK%c#%u+",t->role,t->index);
+   for(unsigned i=7;i<BT_FRAMES && t->frames[i] && more>0 && more<108;++i)more+=snprintf(rows[n]+more,120-more," %llx",t->frames[i]);
+   ++n;
+  }
  }
  __atomic_store_n(&trace_lock,0,__ATOMIC_RELEASE);
  return n;

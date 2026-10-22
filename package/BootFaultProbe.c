@@ -127,20 +127,25 @@ void boot_progress_critical_exit(int pid, char *out, unsigned long capacity) {
 #define REASON_CHUNK 65536
 static char reason_chunk[REASON_CHUNK+1];
 static volatile int reason_busy;
+// The throw site: the Metal plugin's uncaught-exception handler (drivers/NativeMetal/ExceptionDiag.h) leaves "SHENGTHROW <name> | <reason> | <return
+// addresses>" in the malloc heap before the process aborts. The abort itself loses the frames between the dispatch callout and the throw, so this is
+// where the exception came from. Filled by the same scan; BootProgress.c reads it right after.
+char boot_progress_throw_text[330];
 void boot_progress_exit_reason(int pid,unsigned signal,char *out,unsigned long capacity) {
  if(!capacity)return;
  out[0]=0;
  if(signal!=6 || pid!=proc_selfpid() || __atomic_exchange_n(&reason_busy,1,__ATOMIC_ACQUIRE))return;
  vm_map_t map=current_map();
  vm_map_offset_t addr=0;uint64_t scanned=0;int best=0;
- while(scanned<(160ull<<20) && best<2) {
+ int thrown=0;
+ while(scanned<(160ull<<20) && (best<2 || !thrown)) {
   vm_map_size_t size=0;natural_t depth=0;vm_region_submap_info_data_64_t info;
   mach_msg_type_number_t count=VM_REGION_SUBMAP_INFO_V2_COUNT_64;
   if(vm_map_region_recurse_64(map,&addr,&size,&depth,(vm_region_submap_info_64_t)&info,&count)!=KERN_SUCCESS)break;
   vm_map_offset_t base=addr;addr+=size;
   if(info.is_submap || (info.protection&(VM_PROT_READ|VM_PROT_WRITE))!=(VM_PROT_READ|VM_PROT_WRITE) ||
      info.user_tag<1 || info.user_tag>11)continue;
-  for(vm_map_offset_t off=0;off<size && best<2;off+=REASON_CHUNK) {
+  for(vm_map_offset_t off=0;off<size && (best<2 || !thrown);off+=REASON_CHUNK) {
    unsigned long len=(size-off)<REASON_CHUNK?(unsigned long)(size-off):REASON_CHUNK;
    if(copyin((user_addr_t)(base+off),reason_chunk,len))continue;
    scanned+=len;
@@ -152,13 +157,17 @@ void boot_progress_exit_reason(int pid,unsigned signal,char *out,unsigned long c
     if(run>=24) {
      // Rank 2: the full uncaught-exception line; rank 1: any run with a reason clause.
      char saved=reason_chunk[i];reason_chunk[i]=0;
+     if(!thrown && run>=32 && !strncmp(reason_chunk+start,"SHENGTHROW ",11)) {
+      unsigned long m=run<sizeof boot_progress_throw_text-1?run:sizeof boot_progress_throw_text-1;
+      memcpy(boot_progress_throw_text,reason_chunk+start,m);boot_progress_throw_text[m]=0;thrown=1;
+     }
      int rank=strnstr(reason_chunk+start,"uncaught exception",run)?2:strnstr(reason_chunk+start,"reason: ",run)?1:0;
      if(rank>best) {
       unsigned long m=run<capacity-1?run:capacity-1;
       memcpy(out,reason_chunk+start,m);out[m]=0;best=rank;
      }
      reason_chunk[i]=saved;
-     if(best>=2)break;
+     if(best>=2 && thrown)break;
     }
     start=i+1;
    }

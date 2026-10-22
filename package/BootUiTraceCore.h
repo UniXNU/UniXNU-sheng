@@ -4,7 +4,7 @@
 #define SHENG_BOOT_UI_TRACE_CORE_H
 #define BT_MAX_THREADS 64
 #define BT_MAX_GROUPS (2*BT_MAX_THREADS)
-#define BT_FRAMES 8
+#define BT_FRAMES 18   /* the banner shows 8; the boot log's deep rows the rest (a blocked thread's caller names what it waits for) */
 #define BT_ROWS 14
 #define BT_HALF 60
 struct bt_entry {
