@@ -20,7 +20,7 @@
 // [0] stage (1 mapped, 2 clocks read, 3 controller read; negative: the step that failed), [1] vote 0x52008, [2] vote 0x52000,
 // [3] GDSC, [4] halt bits (bit i set: branch i of kBranches is off), [5] GPIO 80 | 82 << 8 | 94 << 16 (bit 0 input level, bit 1 output),
 // [6] PARF LTSSM, [7] root port vendor/device, [8] link control/status, [9] PARF PHY control.
-// Stage 2 steps in [0]: 10 WLAN_EN high, 11 GDSCs on, 12 clocks on, 13 PHY ready, 14 controller set up, 15 PERST# released, 16 link up,
+// Stage 2 steps in [0]: 10 WLAN_EN high, 11 GDSCs on, 12 clocks on, 13 PARF set up, 14 PHY ready and root port set up, 15 PERST# released, 16 link up,
 // 17 endpoint ID read. [10] GPIO word after WLAN_EN, [11] GDSC bits (bit 0 PCIe0, bit 1 PHY) | halt bits << 8, [12] PCS_STATUS1 |
 // PHY poll count << 16, [13] port debug 0 (LTSSM state in bits 0-5), [14] port debug 1, [15] endpoint vendor/device, [16] link ms
 extern "C" {volatile uint32_t native_wifi_stats[17];}
@@ -126,9 +126,27 @@ void bringUp(Window &gcc, Window &tlmm) {
     pulseReset(g, kPhyBcr);
     native_wifi_stats[0] = 12;
 
+    // qcom_pcie_init_2_7_0 after its resets, before the PHY powers on (qcom_pcie_host_init): PHY_CTRL's test power-down bit holds the PHY
+    Window parf = {}, dbi = {};
+    if (!mapWindow(parf, kParf, 0x2000) || !mapWindow(dbi, kDbi, 0x1000)) {release(parf); native_wifi_stats[0] = -13; return;}
+    volatile uint32_t *f = parf.va, *d = dbi.va;
+    f[kParfDeviceType / 4] = 4u;
+    f[kParfPhyCtrl / 4] &= ~1u;
+    f[kParfDbiBase / 4] = uint32_t(kDbi);
+    f[kParfDbiBaseHi / 4] = uint32_t(kDbi >> 32);
+    f[kParfAtuBase / 4] = uint32_t(kAtu);
+    f[kParfAtuBaseHi / 4] = uint32_t(kAtu >> 32);
+    f[kParfSlvSpace / 4] = 0;                 // qcom_pcie_configure_dbi_atu_base: the slave window spans 2 GiB << 32
+    f[kParfSlvSpaceHi / 4] = kSlvSpaceBytes;
+    f[kParfSysCtrl / 4] &= ~(1u << 29);
+    f[kParfMhiClockReset / 4] |= 1u << 4;
+    f[kParfPmCtrl / 4] &= ~(1u << 5);
+    f[kParfAxiHalt / 4] |= 1u << 31;
+    native_wifi_stats[0] = 13;
+
     // qmp_pcie_power_on: power-down control, the tables (both lanes), pipe clock from the PHY, out of reset, start, PHYSTATUS low
     Window phy = {};
-    if (!mapWindow(phy, kPhy, 0x2000)) {native_wifi_stats[0] = -13; return;}
+    if (!mapWindow(phy, kPhy, 0x2000)) {release(dbi); release(parf); native_wifi_stats[0] = -14; return;}
     volatile uint32_t *p = phy.va;
     using namespace wifi_phy;
     p[kPowerDownControl / 4] |= 3u;
@@ -145,25 +163,9 @@ void bringUp(Window &gcc, Window &tlmm) {
     const bool ready = waitClear(&p[kPcsStatus1 / 4], 1u << 6, 100, &polls);
     native_wifi_stats[12] = (p[kPcsStatus1 / 4] & 0xffffu) | polls << 16;
     release(phy);
-    if (!ready) {native_wifi_stats[0] = -13; return;}
-    native_wifi_stats[0] = 13;
+    if (!ready) {release(dbi); release(parf); native_wifi_stats[0] = -14; return;}
 
-    // qcom_pcie_init_2_7_0 after its resets
-    Window parf = {}, dbi = {};
-    if (!mapWindow(parf, kParf, 0x2000) || !mapWindow(dbi, kDbi, 0x1000)) {release(parf); native_wifi_stats[0] = -14; return;}
-    volatile uint32_t *f = parf.va, *d = dbi.va;
-    f[kParfDeviceType / 4] = 4u;
-    f[kParfPhyCtrl / 4] &= ~1u;
-    f[kParfDbiBase / 4] = uint32_t(kDbi);
-    f[kParfDbiBaseHi / 4] = uint32_t(kDbi >> 32);
-    f[kParfAtuBase / 4] = uint32_t(kAtu);
-    f[kParfAtuBaseHi / 4] = uint32_t(kAtu >> 32);
-    f[kParfSlvSpace / 4] = 0;                 // qcom_pcie_configure_dbi_atu_base: the slave window spans 2 GiB << 32
-    f[kParfSlvSpaceHi / 4] = kSlvSpaceBytes;
-    f[kParfSysCtrl / 4] &= ~(1u << 29);
-    f[kParfMhiClockReset / 4] |= 1u << 4;
-    f[kParfPmCtrl / 4] &= ~(1u << 5);
-    f[kParfAxiHalt / 4] |= 1u << 31;
+    // qcom_pcie_post_init_2_7_0 and the root port's bus numbers and command (dw_pcie_setup_rc)
     d[kBusNumbers / 4] = 0x00010100;   // primary 0, secondary 1, subordinate 1
     d[kCommand / 4] |= 0x6u;           // memory space and bus master
     native_wifi_stats[7] = d[0];
