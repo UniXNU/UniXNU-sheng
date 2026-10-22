@@ -484,6 +484,8 @@ extern void native_touch_probe(void);
 extern void sheng_cpufreq_probe(void);
 extern void sheng_gpu_power_probe(void);
 extern void sheng_wifi_probe(void);
+extern void sheng_adsp_probe(void);
+extern void sheng_battery_probe(void);
 extern void sheng_buttons_probe(void);
 extern void sheng_backlight_probe(void);
 extern "C" void sheng_dpu_probe(void);
@@ -493,6 +495,8 @@ void native_legacy_display_late_probe(void) {
     sheng_gpu_power_probe();
     native_touch_probe();
     sheng_wifi_probe();
+    sheng_adsp_probe();
+    sheng_battery_probe();
     sheng_buttons_probe();
     sheng_backlight_probe();
     sheng_dpu_probe();
