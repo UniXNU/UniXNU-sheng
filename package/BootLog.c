@@ -92,6 +92,7 @@ extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import
 extern volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wc_audit[6] __attribute__((weak_import));
 extern volatile uint32_t native_touch_edge_stats[4] __attribute__((weak_import));
+extern volatile uint32_t native_touch_hid_multi[3] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_reassert_ticks __attribute__((weak_import));
 extern volatile uint64_t native_adreno_cache_stats[5] __attribute__((weak_import));
 // NativeAdrenoPublish.cpp: per process name that opened the GPU, and the processes that asked the Metal discovery for its plugin.
@@ -548,6 +549,13 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     char row[100];
     snprintf(row, sizeof row, "[touch edge] installed=%u contacts=%u from_edge=%u skipped=%u", native_touch_edge_stats[0],
              native_touch_edge_stats[1], native_touch_edge_stats[2], native_touch_edge_stats[3]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // Multi-finger reports (drivers/NativeHidInput): reports with two or more fingers down, the most at once, lifts of vanished fingers.
+  if (&native_touch_hid_multi) {
+    char row[80];
+    snprintf(row, sizeof row, "[touch multi] reports=%u max=%u lifts=%u", native_touch_hid_multi[0], native_touch_hid_multi[1],
+             native_touch_hid_multi[2]);
     at = put(out, at, cap, row, sizeof row);
   }
   // The submissions' write-combine work: audits, IB lines compared and found dirty, pages set back to write-combined, the re-assertion's
