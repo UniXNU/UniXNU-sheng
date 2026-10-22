@@ -26,7 +26,7 @@
 #include <pexpert/pexpert.h>
 #include "GeniI2c.h"
 
-// [0] stage (1 mapped, 2 engines ready, 3 published, negative: the step that failed), [1] brightness requests, [2] last level written,
+// [0] stage (1 mapped, 2 engines ready, 3 published, 4 published as AppleARMBacklight, negative: the step that failed), [1] brightness requests, [2] last level written,
 // [3] level read back from engine a at start, [4] from engine b, [5] transfer errors, [6] last M_IRQ status of a failed transfer,
 // [7] engine a protocol and clock configuration (proto << 24 | M_CLK_CFG), [8] the same for engine b, [9] last error (engine << 8 | the
 // GeniI2c.h error, or a setup code), [10] interrupts from engine a, [11] from engine b, [12] interrupt mode (0 polling, 1 attached, else
@@ -179,14 +179,14 @@ class ShengBacklight : public IOService {
         armTick();
     }
     static void inboxFired(OSObject *owner, IOInterruptEventSource *, int) {
-        if (ShengBacklight *self = OSDynamicCast(ShengBacklight, owner)) self->service();
+        if (ShengBacklight *self = static_cast<ShengBacklight *>(owner)) self->service();
     }
     static void tickFired(OSObject *owner, IOTimerEventSource *) {
-        if (ShengBacklight *self = OSDynamicCast(ShengBacklight, owner)) self->service();
+        if (ShengBacklight *self = static_cast<ShengBacklight *>(owner)) self->service();
     }
     // Attaching the two lines, retried while the GIC driver is not up yet; the engines keep working by polling meanwhile.
     static void attachFired(OSObject *owner, IOTimerEventSource *sender) {
-        ShengBacklight *self = OSDynamicCast(ShengBacklight, owner);
+        ShengBacklight *self = static_cast<ShengBacklight *>(owner);   // see impersonate()
         if (!self || self->irqMode) return;
         if (!armcpu_spi_attach) {native_backlight_stats[12] = -1; return;}
         native_backlight_stats[14] = (int32_t)++self->attachTries;
@@ -206,7 +206,7 @@ class ShengBacklight : public IOService {
         armTick();
     }
     static void fadeStep(OSObject *owner, IOTimerEventSource *sender) {
-        ShengBacklight *self = OSDynamicCast(ShengBacklight, owner);
+        ShengBacklight *self = static_cast<ShengBacklight *>(owner);   // see impersonate()
         if (!self) return;
         const uint64_t elapsed = now() - self->start;
         uint32_t next = self->to;
@@ -216,7 +216,7 @@ class ShengBacklight : public IOService {
         if (next != self->to) sender->setTimeoutMS(kStepMs);
     }
     static IOReturn startFade(OSObject *owner, void *goal, void *milliseconds, void *, void *) {
-        ShengBacklight *self = OSDynamicCast(ShengBacklight, owner);
+        ShengBacklight *self = static_cast<ShengBacklight *>(owner);   // see impersonate()
         if (!self) return kIOReturnBadArgument;
         self->fade->cancelTimeout();
         self->from = self->level;
@@ -227,7 +227,7 @@ class ShengBacklight : public IOService {
         return kIOReturnSuccess;
     }
     static IOReturn begin(OSObject *owner, void *, void *, void *, void *) {
-        ShengBacklight *self = OSDynamicCast(ShengBacklight, owner);
+        ShengBacklight *self = static_cast<ShengBacklight *>(owner);   // see impersonate()
         if (!self) return kIOReturnBadArgument;
         self->kick(0); self->kick(1);
         if (!self->published && self->engine[0].started && self->engine[1].started) self->publishFirst();
@@ -245,23 +245,47 @@ class ShengBacklight : public IOService {
         }
         OSSafeReleaseNULL(min); OSSafeReleaseNULL(max); OSSafeReleaseNULL(current); OSSafeReleaseNULL(brightness); OSSafeReleaseNULL(parameters);
     }
+    // The service presents itself as AppleARMBacklight (AppleARMPlatform's class, loaded but without a device on this board): its
+    // vtable is copied and getMetaClass (slot 7) answers that metaclass. IOObjectConformsTo and the sandbox both go through it: the
+    // sandbox decides iokit-set-properties by walking getMetaClass's superclass chain by name, and backboardd's profile lets it set
+    // the brightness keys on AppleARMBacklight only (int-275: "deny iokit-set-properties iokit-class:ShengBacklight property:FadePeriod").
+    // AppleARMBacklight and IOService stay in that chain, so OSDynamicCast to IOService works; to ShengBacklight it does not, which is
+    // why the event source actions cast statically. No loaded kext looks this class up (AppleSPU, AppleEmbeddedLightSensor and
+    // AppleM68Buttons do, and are not part of this kernel), and the service is never freed.
+    static inline const OSMetaClass *gAppleClass = nullptr;
+    static const OSMetaClass *appleMetaClass(const OSMetaClassBase *) {return gAppleClass;}
+    bool impersonate() {
+        enum {kSlots = 320, kGetMetaClass = 7};
+        const OSSymbol *name = OSSymbol::withCString("AppleARMBacklight");
+        gAppleClass = name ? OSMetaClass::getMetaClassWithName(name) : nullptr;
+        OSSafeReleaseNULL(name);
+        if (!gAppleClass) return false;
+        uintptr_t *copy = static_cast<uintptr_t *>(IOMalloc(kSlots * sizeof(uintptr_t)));
+        if (!copy) return false;
+        memcpy(copy, *reinterpret_cast<uintptr_t **>(this), kSlots * sizeof(uintptr_t));
+        copy[kGetMetaClass] = reinterpret_cast<uintptr_t>(&appleMetaClass);
+        __asm__ volatile("dmb ish" ::: "memory");
+        *reinterpret_cast<uintptr_t **>(this) = copy;
+        return true;
+    }
     // Both engines answered (or gave up) the level read: publish what the panel shows now and let CoreBrightness find the service.
     void publishFirst() {
         published = true;
         const int32_t read = native_backlight_stats[3] > 0 ? native_backlight_stats[3] : native_backlight_stats[4];
         level = to = target = read > 0 ? (uint32_t)read : kMaxLevel / 2;
         // CoreBrightness finds the backlight by backlight-control = true and takes it for the built-in display's only when
-        // IOObjectConformsTo(service, "AppleARMBacklight") holds (CBDisplayContaineriOS findBacklight); IOConformsToAlias answers
-        // that query (patches/xnu/native-conforms-alias.patch). Only for the built-in display does CoreBrightness start the libEDR
-        // server (com.apple.libEDR.Notification) that QuartzCore's IOMFBServer sends to synchronously once backlight-control makes
-        // CADeviceHasBacklight true. int-236 published backlight-control without the alias: the server never started, the send
-        // blocked with the display server lock held and the screen stopped updating. sheng-backlight-control=0 leaves both out.
+        // IOObjectConformsTo(service, "AppleARMBacklight") holds (CBDisplayContaineriOS findBacklight). Only for the built-in display
+        // does CoreBrightness start the libEDR server (com.apple.libEDR.Notification) that QuartzCore's IOMFBServer sends to
+        // synchronously once backlight-control makes CADeviceHasBacklight true. int-236 published backlight-control without the
+        // conformance: the server never started, the send blocked with the display server lock held and the screen stopped updating.
+        // sheng-backlight-control=0 leaves both out.
         uint32_t control = 1;
         PE_parse_boot_argn("sheng-backlight-control", &control, sizeof control);
-        if (control == 1) {setProperty("IOConformsToAlias", "AppleARMBacklight"); setProperty("backlight-control", true);}
+        if (control == 1 && impersonate()) setProperty("backlight-control", true);
+        const bool impersonated = control == 1 && gAppleClass;
         publish(level);
         registerService();
-        native_backlight_stats[0] = 3;
+        native_backlight_stats[0] = impersonated ? 4 : 3;
     }
 public:
     bool startBacklight(const bool usable[2]) {
