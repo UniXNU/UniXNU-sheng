@@ -88,7 +88,8 @@ static void native_keyevents_probe(void) {
     if (data && data->getLength() == sizeof(ephemeral))
         memcpy(&ephemeral, data->getBytesNoCopy(), sizeof(ephemeral));
     OSSafeReleaseNULL(chosen);
-    if (ephemeral != 1 || original) return;
+    // A persistent Data store (no ephemeral-storage) still has no SEP: sheng-aks keeps the owned service for it.
+    if ((ephemeral != 1 && !native_aks_state_enabled()) || original) return;
     const OSSymbol *name = OSSymbol::withCString("AppleKeyStore");
     bool absent = name && !OSMetaClass::getMetaClassWithName(name);
     OSSafeReleaseNULL(name);

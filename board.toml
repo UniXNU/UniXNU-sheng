@@ -186,6 +186,7 @@ kernel_args = [
   "ml-timeout-lock-panic-scale=40",
   "sheng-touch-hid=1",
   "sheng-data-persist=2",
+  "sheng-staged-apps=1",
   "sheng-vsync=144",
 ]
 
@@ -212,6 +213,7 @@ owned_memory_size = "0x130000000"
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 cpu_regs = "0,0x100,0x200,0x300,0x400,0x500,0x600,0x700"
 packed_data_ramdisk = true
+persistent_data = true               # sheng-data-persist keeps Data writes, so Data is not ephemeral storage
 ipad_identity = true
 unique_chip_id = "required"          # the platform seed is not stored in any repository
 
