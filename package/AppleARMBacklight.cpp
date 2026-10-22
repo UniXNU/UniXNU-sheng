@@ -32,6 +32,8 @@
 // GeniI2c.h error, or a setup code), [10] interrupts from engine a, [11] from engine b, [12] interrupt mode (0 polling, 1 attached, else
 // the attach result), [13] transfer timeouts, [14] attach tries, [15] transfers done
 extern "C" {extern volatile int32_t native_backlight_stats[16];}
+// The last brightness asked for: [0] level, [1] fade in milliseconds.
+extern "C" {volatile int32_t native_backlight_request[2];}
 extern "C" int armcpu_spi_attach(uint32_t, bool, void (*)(void *), void *, uint32_t *, uint64_t *) __attribute__((weak_import));
 
 namespace {
@@ -48,6 +50,8 @@ struct Window {IOMemoryMap *map; volatile uint32_t *va;};
 Window gGcc, gSe[2];
 volatile uint32_t gIrqStatus[2];
 IOInterruptEventSource *volatile gInbox;
+// The newest brightness asked for: goal << 16 | fade milliseconds, with bit 63 set while the work loop has not taken it.
+volatile uint64_t gRequest;
 
 bool mapWindow(Window &w, uint64_t base, uint64_t size) {
     IODeviceMemory *memory = IODeviceMemory::withRange(base, size);
@@ -179,7 +183,11 @@ class ShengBacklight : public IOService {
         armTick();
     }
     static void inboxFired(OSObject *owner, IOInterruptEventSource *, int) {
-        if (ShengBacklight *self = static_cast<ShengBacklight *>(owner)) self->service();
+        ShengBacklight *self = static_cast<ShengBacklight *>(owner);
+        if (!self) return;
+        const uint64_t request = __atomic_exchange_n(&gRequest, 0ull, __ATOMIC_ACQUIRE);
+        if (request >> 63) self->beginFade((uint32_t)(request >> 16) & 0xffff, (uint32_t)request & 0xffff);
+        self->service();
     }
     static void tickFired(OSObject *owner, IOTimerEventSource *) {
         if (ShengBacklight *self = static_cast<ShengBacklight *>(owner)) self->service();
@@ -215,16 +223,14 @@ class ShengBacklight : public IOService {
         if (next != self->level) {self->setLevel(next); self->level = next;}
         if (next != self->to) sender->setTimeoutMS(kStepMs);
     }
-    static IOReturn startFade(OSObject *owner, void *goal, void *milliseconds, void *, void *) {
-        ShengBacklight *self = static_cast<ShengBacklight *>(owner);   // see impersonate()
-        if (!self) return kIOReturnBadArgument;
-        self->fade->cancelTimeout();
-        self->from = self->level;
-        self->to = (uint32_t)(uintptr_t)goal;
-        self->start = now();
-        nanoseconds_to_absolutetime((uint64_t)(uintptr_t)milliseconds * NSEC_PER_MSEC, &self->period);
-        fadeStep(self, self->fade);
-        return kIOReturnSuccess;
+    // On the work loop: a fade from the level now shown to goal.
+    void beginFade(uint32_t goal, uint32_t milliseconds) {
+        fade->cancelTimeout();
+        from = level;
+        to = goal;
+        start = now();
+        nanoseconds_to_absolutetime((uint64_t)milliseconds * NSEC_PER_MSEC, &period);
+        fadeStep(this, fade);
     }
     static IOReturn begin(OSObject *owner, void *, void *, void *, void *) {
         ShengBacklight *self = static_cast<ShengBacklight *>(owner);   // see impersonate()
@@ -325,7 +331,12 @@ public:
         uint64_t milliseconds = fadePeriod ? ((uint64_t)fadePeriod->unsigned32BitValue() * 1000) >> 16 : 0;
         if (milliseconds > 5000) milliseconds = 5000;
         bump(1);
-        loop->runAction(&ShengBacklight::startFade, this, (void *)(uintptr_t)goal, (void *)(uintptr_t)milliseconds);
+        native_backlight_request[0] = (int32_t)goal;
+        native_backlight_request[1] = (int32_t)milliseconds;
+        // Handed to the work loop without waiting for it (a runAction here blocks backboardd's brightness thread on the work loop's
+        // gate; int-277 got 53 requests in the first 41 s and none after): a newer request replaces one not yet taken.
+        __atomic_store_n(&gRequest, 1ull << 63 | (uint64_t)goal << 16 | milliseconds, __ATOMIC_RELEASE);
+        inbox->interruptOccurred(nullptr, nullptr, 0);
         publish(goal);
         return kIOReturnSuccess;
     }
