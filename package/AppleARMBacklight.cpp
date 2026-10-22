@@ -9,8 +9,8 @@
 // later; attaching is retried every 250 ms from a timer) the work loop polls the status every millisecond while a transfer runs. A step
 // that gets no answer within 25 ms is cancelled, then aborted. A newer level replaces one not yet written, so a fade never queues up.
 // The class cannot be called AppleARMBacklight: AppleARMPlatform already defines that class, and a duplicate name panics the kernel when
-// this file's classes are registered (int-229). Whether CoreBrightness finds ShengBacklight is what native_backlight_stats[1] (brightness
-// sets) shows. CoreBrightness (backboardd) looks for a backlight service with backlight-control = true, reads min and max from
+// this file's classes are registered (int-229); the service answers user space's conformance query for it instead (publishFirst). Whether
+// CoreBrightness drives ShengBacklight is what native_backlight_stats[1] (brightness sets) shows. CoreBrightness (backboardd) looks for a backlight service with backlight-control = true, reads min and max from
 // IODisplayParameters brightness and sets {brightness, FadePeriod (16.16 seconds)} through setProperties. A fade is stepped every 16 ms by a
 // timer on the service's own work loop.
 #include <IOKit/IOService.h>
@@ -250,11 +250,15 @@ class ShengBacklight : public IOService {
         published = true;
         const int32_t read = native_backlight_stats[3] > 0 ? native_backlight_stats[3] : native_backlight_stats[4];
         level = to = target = read > 0 ? (uint32_t)read : kMaxLevel / 2;
-        // backlight-control makes QuartzCore's CADeviceHasBacklight true, and then IOMFBServer::register_libedr_callbacks does a
-        // synchronous libEDR send to com.apple.libEDR.Notification, which backboardd never checks in here: the send blocks with the
-        // display server lock held and the screen stops updating (int-236). Only publish it with sheng-backlight-control=1.
-        uint32_t control = 0;
-        if (PE_parse_boot_argn("sheng-backlight-control", &control, sizeof control) && control == 1) setProperty("backlight-control", true);
+        // CoreBrightness finds the backlight by backlight-control = true and takes it for the built-in display's only when
+        // IOObjectConformsTo(service, "AppleARMBacklight") holds (CBDisplayContaineriOS findBacklight); IOConformsToAlias answers
+        // that query (patches/xnu/native-conforms-alias.patch). Only for the built-in display does CoreBrightness start the libEDR
+        // server (com.apple.libEDR.Notification) that QuartzCore's IOMFBServer sends to synchronously once backlight-control makes
+        // CADeviceHasBacklight true. int-236 published backlight-control without the alias: the server never started, the send
+        // blocked with the display server lock held and the screen stopped updating. sheng-backlight-control=0 leaves both out.
+        uint32_t control = 1;
+        PE_parse_boot_argn("sheng-backlight-control", &control, sizeof control);
+        if (control == 1) {setProperty("IOConformsToAlias", "AppleARMBacklight"); setProperty("backlight-control", true);}
         publish(level);
         registerService();
         native_backlight_stats[0] = 3;
