@@ -10,7 +10,7 @@ extern kmod_info_t g_kernel_kmod_info;
 extern "C" void native_backlight_static_init(void) __asm__("__GLOBAL__sub_I_AppleARMBacklight.cpp");
 extern "C" void sheng_backlight_start(void);
 // See AppleARMBacklight.cpp for the meaning of each entry.
-extern "C" {volatile int32_t native_backlight_stats[10];}
+extern "C" {volatile int32_t native_backlight_stats[16];}
 
 extern "C" void sheng_backlight_probe(void) {
     unsigned enabled = 0;
