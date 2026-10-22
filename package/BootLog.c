@@ -73,7 +73,7 @@ extern volatile uint64_t native_adreno_wait_outer[4] __attribute__((weak_import)
 extern volatile uint32_t native_adreno_export_stats[4] __attribute__((weak_import));
 extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import));
 extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
-extern volatile uint32_t native_wifi_stats[10] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_stats[17] __attribute__((weak_import));
 extern volatile uint32_t native_dpu_stats[20] __attribute__((weak_import));
 extern volatile uint32_t native_touch_jitter[3] __attribute__((weak_import));
 extern volatile uint32_t native_touch_hold[11] __attribute__((weak_import));
@@ -578,10 +578,13 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // WiFi bring-up (WifiProbe.cpp): stage, GCC votes, PCIe0 GDSC, halted branches, WLAN_EN/SW_CTRL/PERST# pins, LTSSM, root port ID, link.
   if (&native_wifi_stats && native_wifi_stats[0]) {
-    char row[160];
+    char row[240];
     snprintf(row, sizeof row, "[wifi] st=%d v8=%x v0=%x gdsc=%x off=%x gpio=%06x ltssm=%x id=%08x lnk=%08x phy=%x", (int)native_wifi_stats[0],
              native_wifi_stats[1], native_wifi_stats[2], native_wifi_stats[3], native_wifi_stats[4], native_wifi_stats[5], native_wifi_stats[6],
              native_wifi_stats[7], native_wifi_stats[8], native_wifi_stats[9]);
+    if (native_wifi_stats[0] >= 10 || (int)native_wifi_stats[0] <= -10)
+      snprintf(row + strlen(row), sizeof row - strlen(row), " pins=%06x pwr=%x pcs=%x dbg0=%x dbg1=%x ep=%08x ms=%u", native_wifi_stats[10],
+               native_wifi_stats[11], native_wifi_stats[12], native_wifi_stats[13], native_wifi_stats[14], native_wifi_stats[15], native_wifi_stats[16]);
     at = put(out, at, cap, row, sizeof row);
   }
   // Display controller state (DisplayTimingProbe.cpp): per interface timing enable, config, counter enable, frame count then one second
