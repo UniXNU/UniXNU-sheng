@@ -54,7 +54,7 @@ extern volatile int native_gpu_addon3_status __attribute__((weak_import));
 extern volatile uint64_t native_data_persist_present __attribute__((weak_import));
 extern volatile int native_staged_apps_stage __attribute__((weak_import));
 extern volatile int32_t native_buttons_stats[10] __attribute__((weak_import));
-extern volatile int32_t native_backlight_stats[10] __attribute__((weak_import));
+extern volatile int32_t native_backlight_stats[16] __attribute__((weak_import));
 extern volatile int native_staged_apps_dirs __attribute__((weak_import));
 extern volatile int native_staged_apps_files __attribute__((weak_import));
 extern volatile int native_staged_apps_mib __attribute__((weak_import));
@@ -342,6 +342,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     snprintf(row, sizeof row, "L st=%d req=%d lvl=%d a=%d b=%d xerr=%d irq=%x ea=%x eb=%x err=%d", native_backlight_stats[0], native_backlight_stats[1],
              native_backlight_stats[2], native_backlight_stats[3], native_backlight_stats[4], native_backlight_stats[5], native_backlight_stats[6],
              native_backlight_stats[7], native_backlight_stats[8], native_backlight_stats[9]);
+    at = put(out, at, cap, row, sizeof row);
+    // How transfers complete: interrupts from each engine, interrupt mode (1 attached, 0 polling, else the attach result), timeouts,
+    // attach tries and transfers done.
+    snprintf(row, sizeof row, "L2 ia=%d ib=%d mode=%d to=%d tries=%d done=%d", native_backlight_stats[10], native_backlight_stats[11],
+             native_backlight_stats[12], native_backlight_stats[13], native_backlight_stats[14], native_backlight_stats[15]);
     at = put(out, at, cap, row, sizeof row);
   }
   if (&boot_progress_ext_wide)

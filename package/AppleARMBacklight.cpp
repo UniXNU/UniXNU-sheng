@@ -3,8 +3,11 @@
 // address 0x11, one on the QUP wrap1 serial engine 1 (i2c@a84000, "ktz8866a") and one on the I2C hub engine 2 (i2c@988000, "ktz8866b");
 // both get the same 11-bit level in BL_BRT_LSB (0x04, bits 2:0) and BL_BRT_MSB (0x05), as the mainline ktz8866 driver writes it.
 // The engines run the GENI I2C firmware the boot loaders left loaded and clocked; this code votes their clocks on again, keeps the clock
-// and SCL timing the boot loader set and only issues FIFO transfers (i2c-qcom-geni: M_CMD opcode 1 write / 2 read, slave address in
-// bits 15:9, STOP_STRETCH bit 2, TX/RX length registers 0x26c/0x270).
+// and SCL timing the boot loader set and only issues FIFO transfers through the event-driven core in GeniI2c.c.
+// Transfers never wait: each engine's interrupt (SPI 354 for a, SPI 466 for b, level) only reads and clears the engine's status, records
+// it and signals the service's work loop, which advances the transfer. Until the interrupts are attached (the GIC driver may start
+// later; attaching is retried every 250 ms from a timer) the work loop polls the status every millisecond while a transfer runs. A step
+// that gets no answer within 25 ms is cancelled, then aborted. A newer level replaces one not yet written, so a fade never queues up.
 // The class cannot be called AppleARMBacklight: AppleARMPlatform already defines that class, and a duplicate name panics the kernel when
 // this file's classes are registered (int-229). Whether CoreBrightness finds ShengBacklight is what native_backlight_stats[1] (brightness
 // sets) shows. CoreBrightness (backboardd) looks for a backlight service with backlight-control = true, reads min and max from
@@ -16,35 +19,35 @@
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOTimerEventSource.h>
+#include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSDictionary.h>
 #include <pexpert/pexpert.h>
+#include "GeniI2c.h"
 
 // [0] stage (1 mapped, 2 engines ready, 3 published, negative: the step that failed), [1] brightness requests, [2] last level written,
 // [3] level read back from engine a at start, [4] from engine b, [5] transfer errors, [6] last M_IRQ status of a failed transfer,
-// [7] engine a protocol and clock configuration (proto << 24 | M_CLK_CFG), [8] the same for engine b, [9] last error code
-extern "C" {extern volatile int32_t native_backlight_stats[10];}
+// [7] engine a protocol and clock configuration (proto << 24 | M_CLK_CFG), [8] the same for engine b, [9] last error (engine << 8 | the
+// GeniI2c.h error, or a setup code), [10] interrupts from engine a, [11] from engine b, [12] interrupt mode (0 polling, 1 attached, else
+// the attach result), [13] transfer timeouts, [14] attach tries, [15] transfers done
+extern "C" {extern volatile int32_t native_backlight_stats[16];}
+extern "C" int armcpu_spi_attach(uint32_t, bool, void (*)(void *), void *, uint32_t *, uint64_t *) __attribute__((weak_import));
 
 namespace {
 constexpr uint64_t kGcc = 0x100000, kSeA = 0xa84000, kSeB = 0x988000;
+constexpr uint32_t kSpi[2] = {354, 466};
 constexpr uint32_t kGccVote = 0x52008;
 // gcc-sm8550.c: wrap1 core_2x 18, core 19, m_ahb 20, s_ahb 21, s1 23; i2c hub s_ahb 7, core 8, s2 12.
 constexpr uint32_t kVoteBits = (1u << 18) | (1u << 19) | (1u << 20) | (1u << 21) | (1u << 23) | (1u << 7) | (1u << 8) | (1u << 12);
 constexpr uint32_t kHalt[] = {0x23294, 0x23284, 0x2327c, 0x23280, 0x1813c, 0x23140, 0x23144, 0x1703c};
-constexpr uint32_t kFwRevision = 0x68, kIfDisable = 0x64, kClkCfg = 0x48, kDmaMode = 0x258, kByteGran = 0x254;
-constexpr uint32_t kTxPack0 = 0x260, kTxPack1 = 0x264, kRxPack0 = 0x284, kRxPack1 = 0x288, kSclCounters = 0x278;
-constexpr uint32_t kTxLen = 0x26c, kRxLen = 0x270, kCmd0 = 0x600, kIrqStatus = 0x610, kIrqClear = 0x618;
-constexpr uint32_t kTxFifo = 0x700, kRxFifo = 0x780, kRxFifoStatus = 0x804, kTxWatermark = 0x80c;
-constexpr uint32_t kCmdDone = 1u << 0, kTxWatermarkIrq = 1u << 30, kErrors = (1u << 1) | (1u << 2) | (1u << 3) | (0x3fu << 9);
-constexpr uint32_t kProtoI2c = 3, kOpWrite = 1, kOpRead = 2, kStopStretch = 1u << 2;
 constexpr uint8_t kAddress = 0x11, kBrtLsb = 0x04, kBrtMsb = 0x05;
-constexpr uint32_t kMaxLevel = 2047, kStepMs = 16;
-constexpr unsigned kSpins = 200000;
+constexpr uint32_t kMaxLevel = 2047, kStepMs = 16, kPollMs = 1, kStepDeadlineMs = 25, kAttachMs = 250, kAttachTries = 240;
 
 struct Window {IOMemoryMap *map; volatile uint32_t *va;};
 Window gGcc, gSe[2];
-IOLock *gBusLock;
+volatile uint32_t gIrqStatus[2];
+IOInterruptEventSource *volatile gInbox;
 
 bool mapWindow(Window &w, uint64_t base, uint64_t size) {
     IODeviceMemory *memory = IODeviceMemory::withRange(base, size);
@@ -53,126 +56,231 @@ bool mapWindow(Window &w, uint64_t base, uint64_t size) {
     w.va = w.map ? reinterpret_cast<volatile uint32_t *>(w.map->getVirtualAddress()) : nullptr;
     return w.va != nullptr;
 }
-uint32_t rd(volatile uint32_t *se, uint32_t reg) {return se[reg / 4];}
-void wr(volatile uint32_t *se, uint32_t reg, uint32_t value) {se[reg / 4] = value; __asm__ volatile("dsb sy" ::: "memory");}
+uint32_t rd(volatile uint32_t *base, uint32_t reg) {return base[reg / 4];}
+void wr(volatile uint32_t *base, uint32_t reg, uint32_t value) {base[reg / 4] = value; __asm__ volatile("dsb sy" ::: "memory");}
+uint32_t ioRead(void *ctx, uint32_t reg) {return rd(static_cast<volatile uint32_t *>(ctx), reg);}
+void ioWrite(void *ctx, uint32_t reg, uint32_t value) {wr(static_cast<volatile uint32_t *>(ctx), reg, value);}
 void fail(int step, int error) {native_backlight_stats[9] = error; native_backlight_stats[0] = -step;}
+void bump(int index) {native_backlight_stats[index] = native_backlight_stats[index] + 1;}
 
-int waitIrq(volatile uint32_t *se, uint32_t bit) {
-    for (unsigned n = 0; n < kSpins; ++n) {
-        const uint32_t status = rd(se, kIrqStatus);
-        if (status & kErrors) {native_backlight_stats[6] = (int32_t)status; wr(se, kIrqClear, status); return 2;}
-        if (status & bit) {wr(se, kIrqClear, status & bit); return 0;}
-    }
-    native_backlight_stats[6] = (int32_t)rd(se, kIrqStatus);
-    return 1;
-}
-// One write of up to 4 bytes to the slave; stop is held when a read follows.
-int i2cWrite(volatile uint32_t *se, const uint8_t *bytes, unsigned length, bool holdStop) {
-    wr(se, kIrqClear, 0xffffffffu);
-    wr(se, kTxLen, length);
-    wr(se, kCmd0, (kOpWrite << 27) | ((uint32_t)kAddress << 9) | (holdStop ? kStopStretch : 0));
-    wr(se, kTxWatermark, 1);
-    int rc = waitIrq(se, kTxWatermarkIrq);
-    if (rc) return 10 + rc;
-    uint32_t word = 0;
-    for (unsigned i = 0; i < length; ++i) word |= (uint32_t)bytes[i] << (8 * i);
-    wr(se, kTxFifo, word);
-    wr(se, kTxWatermark, 0);
-    rc = waitIrq(se, kCmdDone);
-    return rc ? 20 + rc : 0;
-}
-int i2cReadRegister(volatile uint32_t *se, uint8_t reg, uint8_t *value) {
-    int rc = i2cWrite(se, &reg, 1, true);
-    if (rc) return rc;
-    wr(se, kIrqClear, 0xffffffffu);
-    wr(se, kRxLen, 1);
-    wr(se, kCmd0, (kOpRead << 27) | ((uint32_t)kAddress << 9));
-    rc = waitIrq(se, kCmdDone);
-    if (rc) return 30 + rc;
-    if (!(rd(se, kRxFifoStatus) & 0x1ffffffu)) return 40;
-    *value = (uint8_t)rd(se, kRxFifo);
-    return 0;
-}
-// Packing for 8-bit words, 4 per FIFO word, most significant bit first (the values i2c-qcom-geni programs).
-bool prepareEngine(int index) {
+// Interrupt context: read and clear the engine's status, keep it for the work loop and signal it. Nothing else.
+void seIrq(void *context) {
+    const unsigned index = (unsigned)(uintptr_t)context;
     volatile uint32_t *se = gSe[index].va;
-    const uint32_t proto = (rd(se, kFwRevision) >> 8) & 0xff, clock = rd(se, kClkCfg);
-    native_backlight_stats[7 + index] = (int32_t)((proto << 24) | (clock & 0xffffff));
-    if (proto != kProtoI2c || (rd(se, kIfDisable) & 1) || !(clock & 1) || !rd(se, kSclCounters)) return false;
-    wr(se, kDmaMode, 0);
-    wr(se, kTxPack0, 0x7f8fe); wr(se, kTxPack1, 0xffefe);
-    wr(se, kRxPack0, 0x7f8fe); wr(se, kRxPack1, 0xffefe);
-    wr(se, kByteGran, 0);
-    return true;
-}
-int readLevel(volatile uint32_t *se) {
-    uint8_t lsb = 0, msb = 0;
-    if (i2cReadRegister(se, kBrtLsb, &lsb) || i2cReadRegister(se, kBrtMsb, &msb)) return -1;
-    return (int)(((uint32_t)msb << 3) | (lsb & 7));
-}
-void writeLevel(uint32_t level) {
-    IOLockLock(gBusLock);
-    for (int i = 0; i < 2; ++i) {
-        const uint8_t lsb[2] = {kBrtLsb, (uint8_t)(level & 7)}, msb[2] = {kBrtMsb, (uint8_t)((level >> 3) & 0xff)};
-        int rc = i2cWrite(gSe[i].va, lsb, 2, false);
-        if (!rc) rc = i2cWrite(gSe[i].va, msb, 2, false);
-        if (rc) {native_backlight_stats[5] = native_backlight_stats[5] + 1; native_backlight_stats[9] = rc;}
-    }
-    IOLockUnlock(gBusLock);
-    native_backlight_stats[2] = (int32_t)level;
+    const uint32_t status = rd(se, GENI_M_IRQ_STATUS);
+    if (status) wr(se, GENI_M_IRQ_CLEAR, status);
+    __atomic_fetch_or(&gIrqStatus[index], status, __ATOMIC_RELEASE);
+    bump(10 + (int)index);
+    IOInterruptEventSource *inbox = gInbox;
+    if (inbox && status) inbox->interruptOccurred(nullptr, nullptr, 0);
 }
 }  // namespace
 
 class ShengBacklight : public IOService {
     OSDeclareDefaultStructors(ShengBacklight)
+    // What one engine is doing: reading the level at start, then writing LSB and MSB of the newest level asked for.
+    enum Step : uint8_t {StepNone, StepReadLsb, StepReadMsb, StepWriteLsb, StepWriteMsb};
+    struct Engine {GeniI2c bus; Step step; bool started, usable; uint8_t lsb; int32_t written; uint32_t sending; uint64_t deadline;};
+    Engine engine[2] = {};
     IOWorkLoop *loop = nullptr;
-    IOTimerEventSource *fade = nullptr;
-    uint32_t level = 0, from = 0, to = 0;
+    IOTimerEventSource *fade = nullptr, *tick = nullptr, *attachTimer = nullptr;
+    IOInterruptEventSource *inbox = nullptr;
+    uint32_t level = 0, from = 0, to = 0, target = 0, attachTries = 0;
     uint64_t start = 0, period = 0;
+    bool irqMode = false, published = false;
+
+    static uint64_t now() {return mach_absolute_time();}
+    static uint64_t after(uint32_t ms) {uint64_t delta = 0; nanoseconds_to_absolutetime((uint64_t)ms * NSEC_PER_MSEC, &delta); return now() + delta;}
+
+    // Starts the engine's next transfer when it is free.
+    void kick(unsigned i) {
+        Engine &e = engine[i];
+        if (!e.usable || geni_i2c_busy(&e.bus)) return;
+        int rc = 0;
+        if (!e.started) {e.step = StepReadLsb; rc = geni_i2c_start_read(&e.bus, kBrtLsb);}
+        else if (e.written != (int32_t)target) {e.sending = target; e.step = StepWriteLsb; rc = geni_i2c_start_write(&e.bus, kBrtLsb, (uint8_t)(target & 7));}
+        else {e.step = StepNone; return;}
+        if (rc) {e.step = StepNone; return;}
+        e.deadline = after(kStepDeadlineMs);
+    }
+    void noteFailure(unsigned i) {
+        const Engine &e = engine[i];
+        bump(5);
+        native_backlight_stats[6] = (int32_t)e.bus.error_status;
+        native_backlight_stats[9] = (int32_t)(i << 8 | e.bus.error);
+        native_backlight_stats[13] = (int32_t)(engine[0].bus.timeouts + engine[1].bus.timeouts);
+    }
+    // A transfer ended: the next step of the engine's sequence.
+    void finished(unsigned i, int result) {
+        Engine &e = engine[i];
+        const bool ok = result == GeniDone;
+        if (!ok) noteFailure(i);
+        else bump(15);
+        int rc = 0;
+        switch (e.step) {
+        case StepReadLsb:
+            if (ok) {e.lsb = e.bus.data; rc = geni_i2c_start_read(&e.bus, kBrtMsb); e.step = StepReadMsb; break;}
+            e.started = true; e.written = -1; native_backlight_stats[3 + i] = -1;
+            break;
+        case StepReadMsb:
+            e.started = true;
+            e.written = ok ? (int32_t)(((uint32_t)e.bus.data << 3) | (e.lsb & 7)) : -1;
+            native_backlight_stats[3 + i] = e.written;
+            break;
+        case StepWriteLsb:
+            if (ok) {rc = geni_i2c_start_write(&e.bus, kBrtMsb, (uint8_t)((e.sending >> 3) & 0xff)); e.step = StepWriteMsb; break;}
+            e.written = (int32_t)e.sending;  // given up: written again with the next level asked for
+            break;
+        case StepWriteMsb:
+            e.written = (int32_t)e.sending;
+            if (ok) native_backlight_stats[2] = (int32_t)e.sending;
+            break;
+        default:
+            break;
+        }
+        if (rc) noteFailure(i);
+        if (geni_i2c_busy(&e.bus)) {e.deadline = after(kStepDeadlineMs); return;}
+        e.step = StepNone;
+        if (!published && engine[0].started && engine[1].started) publishFirst();
+        kick(i);
+    }
+    void advance(unsigned i, uint32_t status) {
+        Engine &e = engine[i];
+        if (!geni_i2c_busy(&e.bus)) return;
+        const int result = geni_i2c_event(&e.bus, status);
+        if (result != GeniPending) finished(i, result);
+    }
+    void armTick() {
+        bool busy = false;
+        uint64_t soonest = UINT64_MAX;
+        for (const Engine &e : engine) if (geni_i2c_busy(&e.bus)) {busy = true; if (e.deadline < soonest) soonest = e.deadline;}
+        if (!busy) {tick->cancelTimeout(); return;}
+        if (!irqMode) {tick->setTimeoutMS(kPollMs); return;}
+        tick->wakeAtTime((AbsoluteTime)soonest);
+    }
+    // The work loop's view of the engines: what the interrupts gathered, in polling mode the status register itself, then deadlines.
+    void service() {
+        for (unsigned i = 0; i < 2; ++i) {
+            uint32_t status = __atomic_exchange_n(&gIrqStatus[i], 0u, __ATOMIC_ACQUIRE);
+            if (!irqMode) {
+                const uint32_t direct = rd(gSe[i].va, GENI_M_IRQ_STATUS);
+                if (direct) wr(gSe[i].va, GENI_M_IRQ_CLEAR, direct);
+                status |= direct;
+            }
+            if (status) advance(i, status);
+            Engine &e = engine[i];
+            if (geni_i2c_busy(&e.bus) && now() >= e.deadline) {
+                const int result = geni_i2c_timeout(&e.bus);
+                native_backlight_stats[13] = (int32_t)(engine[0].bus.timeouts + engine[1].bus.timeouts);
+                if (result != GeniPending) finished(i, result);
+                else e.deadline = after(kStepDeadlineMs);
+            }
+        }
+        armTick();
+    }
+    static void inboxFired(OSObject *owner, IOInterruptEventSource *, int) {
+        if (ShengBacklight *self = OSDynamicCast(ShengBacklight, owner)) self->service();
+    }
+    static void tickFired(OSObject *owner, IOTimerEventSource *) {
+        if (ShengBacklight *self = OSDynamicCast(ShengBacklight, owner)) self->service();
+    }
+    // Attaching the two lines, retried while the GIC driver is not up yet; the engines keep working by polling meanwhile.
+    static void attachFired(OSObject *owner, IOTimerEventSource *sender) {
+        ShengBacklight *self = OSDynamicCast(ShengBacklight, owner);
+        if (!self || self->irqMode) return;
+        if (!armcpu_spi_attach) {native_backlight_stats[12] = -1; return;}
+        native_backlight_stats[14] = (int32_t)++self->attachTries;
+        int rc = armcpu_spi_attach(32 + kSpi[0], false, seIrq, (void *)(uintptr_t)0, nullptr, nullptr);
+        if (rc == kIOReturnNotReady && self->attachTries < kAttachTries) {sender->setTimeoutMS(kAttachMs); return;}
+        if (!rc) rc = armcpu_spi_attach(32 + kSpi[1], false, seIrq, (void *)(uintptr_t)1, nullptr, nullptr);
+        // Engine a alone attached: its interrupts still arrive and are used; the deadline timer covers engine b only in polling mode.
+        if (rc) {native_backlight_stats[12] = rc; return;}
+        self->irqMode = true;
+        native_backlight_stats[12] = 1;
+        self->service();
+    }
+
+    void setLevel(uint32_t value) {
+        target = value;
+        kick(0); kick(1);
+        armTick();
+    }
     static void fadeStep(OSObject *owner, IOTimerEventSource *sender) {
         ShengBacklight *self = OSDynamicCast(ShengBacklight, owner);
         if (!self) return;
-        const uint64_t elapsed = mach_absolute_time() - self->start;
+        const uint64_t elapsed = now() - self->start;
         uint32_t next = self->to;
         if (elapsed < self->period)
             next = (uint32_t)((int64_t)self->from + ((int64_t)self->to - (int64_t)self->from) * (int64_t)elapsed / (int64_t)self->period);
-        if (next != self->level) {writeLevel(next); self->level = next;}
+        if (next != self->level) {self->setLevel(next); self->level = next;}
         if (next != self->to) sender->setTimeoutMS(kStepMs);
     }
-    static IOReturn startFade(OSObject *owner, void *target, void *milliseconds, void *, void *) {
+    static IOReturn startFade(OSObject *owner, void *goal, void *milliseconds, void *, void *) {
         ShengBacklight *self = OSDynamicCast(ShengBacklight, owner);
         if (!self) return kIOReturnBadArgument;
         self->fade->cancelTimeout();
         self->from = self->level;
-        self->to = (uint32_t)(uintptr_t)target;
-        self->start = mach_absolute_time();
+        self->to = (uint32_t)(uintptr_t)goal;
+        self->start = now();
         nanoseconds_to_absolutetime((uint64_t)(uintptr_t)milliseconds * NSEC_PER_MSEC, &self->period);
         fadeStep(self, self->fade);
         return kIOReturnSuccess;
     }
+    static IOReturn begin(OSObject *owner, void *, void *, void *, void *) {
+        ShengBacklight *self = OSDynamicCast(ShengBacklight, owner);
+        if (!self) return kIOReturnBadArgument;
+        self->kick(0); self->kick(1);
+        if (!self->published && self->engine[0].started && self->engine[1].started) self->publishFirst();
+        self->armTick();
+        self->attachTimer->setTimeoutMS(1);
+        return kIOReturnSuccess;
+    }
     void publish(uint32_t value) {
         OSDictionary *brightness = OSDictionary::withCapacity(3), *parameters = OSDictionary::withCapacity(1);
-        OSNumber *min = OSNumber::withNumber(0ULL, 32), *max = OSNumber::withNumber(kMaxLevel, 32), *now = OSNumber::withNumber(value, 32);
-        if (brightness && parameters && min && max && now) {
-            brightness->setObject("min", min); brightness->setObject("max", max); brightness->setObject("value", now);
+        OSNumber *min = OSNumber::withNumber(0ULL, 32), *max = OSNumber::withNumber(kMaxLevel, 32), *current = OSNumber::withNumber(value, 32);
+        if (brightness && parameters && min && max && current) {
+            brightness->setObject("min", min); brightness->setObject("max", max); brightness->setObject("value", current);
             parameters->setObject("brightness", brightness);
             setProperty("IODisplayParameters", parameters);
         }
-        OSSafeReleaseNULL(min); OSSafeReleaseNULL(max); OSSafeReleaseNULL(now); OSSafeReleaseNULL(brightness); OSSafeReleaseNULL(parameters);
+        OSSafeReleaseNULL(min); OSSafeReleaseNULL(max); OSSafeReleaseNULL(current); OSSafeReleaseNULL(brightness); OSSafeReleaseNULL(parameters);
     }
-public:
-    bool startBacklight(uint32_t initial) {
-        loop = IOWorkLoop::workLoop();
-        fade = IOTimerEventSource::timerEventSource(this, &ShengBacklight::fadeStep);
-        if (!loop || !fade || loop->addEventSource(fade) != kIOReturnSuccess) return false;
-        level = to = initial;
+    // Both engines answered (or gave up) the level read: publish what the panel shows now and let CoreBrightness find the service.
+    void publishFirst() {
+        published = true;
+        const int32_t read = native_backlight_stats[3] > 0 ? native_backlight_stats[3] : native_backlight_stats[4];
+        level = to = target = read > 0 ? (uint32_t)read : kMaxLevel / 2;
         // backlight-control makes QuartzCore's CADeviceHasBacklight true, and then IOMFBServer::register_libedr_callbacks does a
         // synchronous libEDR send to com.apple.libEDR.Notification, which backboardd never checks in here: the send blocks with the
         // display server lock held and the screen stops updating (int-236). Only publish it with sheng-backlight-control=1.
         uint32_t control = 0;
         if (PE_parse_boot_argn("sheng-backlight-control", &control, sizeof control) && control == 1) setProperty("backlight-control", true);
-        publish(initial);
+        publish(level);
         registerService();
+        native_backlight_stats[0] = 3;
+    }
+public:
+    bool startBacklight(const bool usable[2]) {
+        loop = IOWorkLoop::workLoop();
+        fade = IOTimerEventSource::timerEventSource(this, &ShengBacklight::fadeStep);
+        tick = IOTimerEventSource::timerEventSource(this, &ShengBacklight::tickFired);
+        attachTimer = IOTimerEventSource::timerEventSource(this, &ShengBacklight::attachFired);
+        inbox = IOInterruptEventSource::interruptEventSource(this, &ShengBacklight::inboxFired);
+        if (!loop || !fade || !tick || !attachTimer || !inbox) return false;
+        if (loop->addEventSource(fade) || loop->addEventSource(tick) || loop->addEventSource(attachTimer) || loop->addEventSource(inbox)) return false;
+        for (unsigned i = 0; i < 2; ++i) {
+            const GeniIo io = {ioRead, ioWrite, (void *)gSe[i].va};
+            uint32_t config = 0;
+            engine[i].usable = usable[i] && geni_i2c_prepare(&engine[i].bus, &io, kAddress, &config) == 0;
+            native_backlight_stats[7 + i] = (int32_t)config;
+            engine[i].started = !engine[i].usable;
+            engine[i].written = -1;
+            if (!engine[i].usable) native_backlight_stats[3 + i] = -1;
+        }
+        if (!engine[0].usable && !engine[1].usable) return false;
+        gInbox = inbox;
+        native_backlight_stats[0] = 2;
+        loop->runAction(&ShengBacklight::begin, this);
         return true;
     }
     IOReturn setProperties(OSObject *properties) override {
@@ -182,41 +290,36 @@ public:
         if (!brightness) return kIOReturnSuccess;
         OSNumber *fadePeriod = OSDynamicCast(OSNumber, dictionary->getObject("FadePeriod"));
         const int32_t requested = (int32_t)brightness->unsigned32BitValue();
-        const uint32_t target = requested < 0 ? 0 : (uint32_t)requested > kMaxLevel ? kMaxLevel : (uint32_t)requested;
+        const uint32_t goal = requested < 0 ? 0 : (uint32_t)requested > kMaxLevel ? kMaxLevel : (uint32_t)requested;
         uint64_t milliseconds = fadePeriod ? ((uint64_t)fadePeriod->unsigned32BitValue() * 1000) >> 16 : 0;
         if (milliseconds > 5000) milliseconds = 5000;
-        native_backlight_stats[1] = native_backlight_stats[1] + 1;
-        loop->runAction(&ShengBacklight::startFade, this, (void *)(uintptr_t)target, (void *)(uintptr_t)milliseconds);
-        publish(target);
+        bump(1);
+        loop->runAction(&ShengBacklight::startFade, this, (void *)(uintptr_t)goal, (void *)(uintptr_t)milliseconds);
+        publish(goal);
         return kIOReturnSuccess;
     }
 };
 OSDefineMetaClassAndStructors(ShengBacklight, IOService)
 
 // Called by BacklightProbe.cpp once this file's classes are registered (its static initializer runs between preModLoad and postModLoad).
+// The service starts with the engines' level reads in flight and publishes itself when they are answered.
 extern "C" void sheng_backlight_start(void) {
-    gBusLock = IOLockAlloc();
-    if (!gBusLock || !mapWindow(gGcc, kGcc, 0x60000) || !mapWindow(gSe[0], kSeA, 0x4000) || !mapWindow(gSe[1], kSeB, 0x4000)) {fail(1, -12); return;}
+    if (!mapWindow(gGcc, kGcc, 0x60000) || !mapWindow(gSe[0], kSeA, 0x4000) || !mapWindow(gSe[1], kSeB, 0x4000)) {fail(1, -12); return;}
     native_backlight_stats[0] = 1;
     wr(gGcc.va, kGccVote, rd(gGcc.va, kGccVote) | kVoteBits);
     for (uint32_t halt : kHalt) {
         // The AHB branches run under hardware clock gating (HW_CTL, bit 1 of the branch register): their CLK_OFF bit says off while the
         // bus is idle, so, as clk-branch.c does in that mode, they are not waited for (int-231 failed here on wrap 1 s_ahb, 0x23280).
         if (rd(gGcc.va, halt) & (1u << 1)) continue;
-        unsigned n = 0;
-        while ((rd(gGcc.va, halt) & (1u << 31)) && n < kSpins) ++n;
-        if (n == kSpins) {fail(2, (int)halt); return;}
+        unsigned us = 0;
+        while ((rd(gGcc.va, halt) & (1u << 31)) && us < 200) {IODelay(1); ++us;}
+        if (us == 200) {fail(2, (int)halt); return;}
     }
-    if (!prepareEngine(0) || !prepareEngine(1)) {fail(3, -19); return;}
-    native_backlight_stats[3] = readLevel(gSe[0].va);
-    native_backlight_stats[4] = readLevel(gSe[1].va);
-    native_backlight_stats[0] = 2;
-    const int initial = native_backlight_stats[3] > 0 ? native_backlight_stats[3] : (int)kMaxLevel / 2;
+    const bool usable[2] = {true, true};
     ShengBacklight *backlight = OSTypeAlloc(ShengBacklight);
-    if (!backlight || !backlight->init() || !backlight->attach(IOService::getPlatform()) || !backlight->startBacklight((uint32_t)initial)) {
+    if (!backlight || !backlight->init() || !backlight->attach(IOService::getPlatform()) || !backlight->startBacklight(usable)) {
         if (backlight) backlight->release();
-        fail(4, -1); return;
+        fail(3, -19); return;
     }
     backlight->release();
-    native_backlight_stats[0] = 3;
 }
