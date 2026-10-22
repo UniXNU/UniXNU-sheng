@@ -32,8 +32,8 @@
 // GeniI2c.h error, or a setup code), [10] interrupts from engine a, [11] from engine b, [12] interrupt mode (0 polling, 1 attached, else
 // the attach result), [13] transfer timeouts, [14] attach tries, [15] transfers done
 extern "C" {extern volatile int32_t native_backlight_stats[16];}
-// The last brightness asked for: [0] level, [1] fade in milliseconds.
-extern "C" {volatile int32_t native_backlight_request[2];}
+// The last brightness asked for: [0] level, [1] fade in milliseconds; [2] request timer runs, [3] fades begun from a request.
+extern "C" {volatile int32_t native_backlight_request[4];}
 extern "C" int armcpu_spi_attach(uint32_t, bool, void (*)(void *), void *, uint32_t *, uint64_t *) __attribute__((weak_import));
 
 namespace {
@@ -87,7 +87,7 @@ class ShengBacklight : public IOService {
     struct Engine {GeniI2c bus; Step step; bool started, usable; uint8_t lsb; int32_t written; uint32_t sending; uint64_t deadline;};
     Engine engine[2] = {};
     IOWorkLoop *loop = nullptr;
-    IOTimerEventSource *fade = nullptr, *tick = nullptr, *attachTimer = nullptr;
+    IOTimerEventSource *fade = nullptr, *tick = nullptr, *attachTimer = nullptr, *request = nullptr;
     IOInterruptEventSource *inbox = nullptr;
     uint32_t level = 0, from = 0, to = 0, target = 0, attachTries = 0;
     uint64_t start = 0, period = 0;
@@ -185,9 +185,15 @@ class ShengBacklight : public IOService {
     static void inboxFired(OSObject *owner, IOInterruptEventSource *, int) {
         ShengBacklight *self = static_cast<ShengBacklight *>(owner);
         if (!self) return;
-        const uint64_t request = __atomic_exchange_n(&gRequest, 0ull, __ATOMIC_ACQUIRE);
-        if (request >> 63) self->beginFade((uint32_t)(request >> 16) & 0xffff, (uint32_t)request & 0xffff);
         self->service();
+    }
+    // A brightness request on the work loop (setProperties arms this timer at once): the newest one asked for, if not yet taken.
+    static void requestFired(OSObject *owner, IOTimerEventSource *) {
+        ShengBacklight *self = static_cast<ShengBacklight *>(owner);
+        if (!self) return;
+        native_backlight_request[2] = native_backlight_request[2] + 1;
+        const uint64_t request = __atomic_exchange_n(&gRequest, 0ull, __ATOMIC_ACQUIRE);
+        if (request >> 63) {native_backlight_request[3] = native_backlight_request[3] + 1; self->beginFade((uint32_t)(request >> 16) & 0xffff, (uint32_t)request & 0xffff);}
     }
     static void tickFired(OSObject *owner, IOTimerEventSource *) {
         if (ShengBacklight *self = static_cast<ShengBacklight *>(owner)) self->service();
@@ -303,8 +309,10 @@ public:
         tick = IOTimerEventSource::timerEventSource(this, &ShengBacklight::tickFired);
         attachTimer = IOTimerEventSource::timerEventSource(this, &ShengBacklight::attachFired);
         inbox = IOInterruptEventSource::interruptEventSource(this, &ShengBacklight::inboxFired);
-        if (!loop || !fade || !tick || !attachTimer || !inbox) return false;
-        if (loop->addEventSource(fade) || loop->addEventSource(tick) || loop->addEventSource(attachTimer) || loop->addEventSource(inbox)) return false;
+        request = IOTimerEventSource::timerEventSource(this, &ShengBacklight::requestFired);
+        if (!loop || !fade || !tick || !attachTimer || !inbox || !request) return false;
+        if (loop->addEventSource(fade) || loop->addEventSource(tick) || loop->addEventSource(attachTimer) || loop->addEventSource(inbox) ||
+            loop->addEventSource(request)) return false;
         for (unsigned i = 0; i < 2; ++i) {
             const GeniIo io = {ioRead, ioWrite, (void *)gSe[i].va};
             uint32_t config = 0;
@@ -334,9 +342,10 @@ public:
         native_backlight_request[0] = (int32_t)goal;
         native_backlight_request[1] = (int32_t)milliseconds;
         // Handed to the work loop without waiting for it (a runAction here blocks backboardd's brightness thread on the work loop's
-        // gate; int-277 got 53 requests in the first 41 s and none after): a newer request replaces one not yet taken.
+        // gate; int-277 got 53 requests in the first 41 s and none after): a newer request replaces one not yet taken. The request timer, not
+        // the interrupt source, carries it: int-278 signalled the interrupt source for 345 requests and wrote none.
         __atomic_store_n(&gRequest, 1ull << 63 | (uint64_t)goal << 16 | milliseconds, __ATOMIC_RELEASE);
-        inbox->interruptOccurred(nullptr, nullptr, 0);
+        request->setTimeoutUS(1);
         publish(goal);
         return kIOReturnSuccess;
     }
