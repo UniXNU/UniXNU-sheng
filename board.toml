@@ -208,6 +208,13 @@ text_fixups = [
   "BTAudioHALPlugin,38bec,ffc300d1f44f01a9,000080d2c0035fd6",
 ]
 
+# The second boot menu entry, behind a confirmation: erase the Data seed's persistent store and start over (sheng-data-reset), with or without the Hello pages.
+[payload.install]
+title = "Install and boot"
+confirm = "ERASE all iPadOS user data and install again?"
+confirm_titles = ["Erase Data, skip Hello, boot", "Erase Data, show Hello, boot"]
+confirm_args = ["sheng-data-reset=1", "sheng-data-reset=2"]
+
 [payload.adt]
 tool = "scripts/make-sheng-adt.py"
 chip_id = "207"
