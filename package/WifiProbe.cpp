@@ -744,6 +744,48 @@ void rddmScan() {
     }
     snprintf(text, sizeof text, "rddm scan: %llu bytes, %u messages", (unsigned long long)scanned, found);
     pLog(3, text);
+    // Context: every text in the crash record (segment 0 up to 0x1000), and the runtime log the firmware kept before it (segment 1, 0x78000 on): the
+    // first as it is, the second without format strings, 4 bytes per word of the record shown where no text is.
+    struct Range {uint32_t seg; uint64_t from, to; size_t min; bool formats;};
+    const Range ranges[] = {{0, 0, 0x1000, 4, true}, {0, 0xec00, 0xf400, 4, true}, {1, 0x78000, 0x80000, 12, false}};
+    unsigned lines = 0;
+    for (const Range &r : ranges) {
+        if ((r.seg + 1) * 16 > vecBytes) continue;
+        uint64_t addr, size;
+        memcpy(&addr, table + r.seg * 16, 8); memcpy(&size, table + r.seg * 16 + 8, 8);
+        const uint8_t *seg = toVa(addr, size);
+        if (!seg) continue;
+        const uint64_t to = r.to < size ? r.to : size;
+        for (uint64_t i = r.from; i < to && lines < 160;) {
+            if (!printable(seg[i])) {++i; continue;}
+            uint64_t j = i;
+            while (j < to && printable(seg[j]) && j - i < 200) ++j;
+            const size_t n = (size_t)(j - i);
+            bool format = false;
+            for (size_t k = 0; k < n; ++k) if (seg[i + k] == '%') format = true;
+            if (n >= r.min && (r.formats || !format)) {
+                char body[85];
+                const size_t len = n < 84 ? n : 84;
+                memcpy(body, seg + i, len); body[len] = 0;
+                snprintf(text, sizeof text, "rddm-ctx %u+%llx: %s", r.seg, (unsigned long long)i, body);
+                pLog(3, text);
+                ++lines;
+            }
+            i = j;
+        }
+    }
+    // the crash record's first 0x200 bytes as words (registers and addresses sit there)
+    {
+        uint64_t addr, size;
+        memcpy(&addr, table, 8); memcpy(&size, table + 8, 8);
+        const uint8_t *seg = toVa(addr, size);
+        if (seg && size >= 0x200) for (uint32_t o = 0; o < 0x200; o += 32) {
+            uint32_t w[8];
+            memcpy(w, seg + o, 32);
+            snprintf(text, sizeof text, "rddm-rec %03x: %08x %08x %08x %08x %08x %08x %08x %08x", o, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+            pLog(3, text);
+        }
+    }
 }
 void pHalt() {for (;;) IOSleep(1000);}
 void *hAlloc(size_t n) {
