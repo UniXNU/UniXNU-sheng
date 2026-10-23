@@ -583,22 +583,32 @@ bool arenaInit() {
     bzero(gArena.va, gArena.bytes);
     return true;
 }
+// Buffers the endpoint reads or writes sit at addresses aligned to their size (a power of two, up to 2 MiB): the boot loader refuses an image address
+// that is only page aligned, before it makes any transfer (the registers that name the address and size of a failed transfer stay zero), and an
+// IOMMU-backed DMA allocator hands out size-aligned addresses.
 void *arenaAlloc(size_t n, uint64_t *bus) {
     n = (n + 63) & ~(size_t)63;
     if (n >= 4096) n = (n + 4095) & ~(size_t)4095;
+    uint32_t align = 64;
+    if (n >= 4096) {align = 4096; while (align < n && align < (2u << 20)) align <<= 1;}
     for (unsigned i = 0; i < gArena.count; ++i) {
         Arena::Block &b = gArena.blocks[i];
-        if (b.used || b.size < n) continue;
-        if (b.size > n && gArena.count < 4096) {
-            memmove(&gArena.blocks[i + 1], &gArena.blocks[i], (gArena.count - i) * sizeof(Arena::Block));
-            ++gArena.count;
-            gArena.blocks[i + 1].off = b.off + (uint32_t)n; gArena.blocks[i + 1].size = b.size - (uint32_t)n; gArena.blocks[i + 1].used = false;
-            gArena.blocks[i].size = (uint32_t)n;
-        }
-        gArena.blocks[i].used = true;
-        uint8_t *p = gArena.va + gArena.blocks[i].off;
-        bzero(p, gArena.blocks[i].size);
-        if (bus) *bus = gArena.iova + gArena.blocks[i].off;
+        if (b.used) continue;
+        const uint32_t start = (b.off + align - 1) & ~(align - 1), pad = start - b.off;
+        if (b.size < pad + n) continue;
+        const bool tail = b.size > pad + n;
+        if (gArena.count + (pad ? 1 : 0) + (tail ? 1 : 0) > 4096) continue;
+        const unsigned extra = (pad ? 1u : 0u) + (tail ? 1u : 0u);
+        const Arena::Block whole = b;
+        memmove(&gArena.blocks[i + extra], &gArena.blocks[i], (gArena.count - i) * sizeof(Arena::Block));
+        gArena.count += extra;
+        unsigned at = i;
+        if (pad) {gArena.blocks[at] = {whole.off, pad, false}; ++at;}
+        gArena.blocks[at] = {start, (uint32_t)n, true};
+        if (tail) gArena.blocks[at + 1] = {start + (uint32_t)n, whole.size - pad - (uint32_t)n, false};
+        uint8_t *p = gArena.va + start;
+        bzero(p, n);
+        if (bus) *bus = gArena.iova + start;
         return p;
     }
     return nullptr;
