@@ -87,6 +87,8 @@ extern volatile uint32_t native_wifi_mhi[16] __attribute__((weak_import));
 extern volatile uint32_t native_wifi_mhi_ms[8] __attribute__((weak_import));
 extern char native_wifi_text[512][112] __attribute__((weak_import));
 extern volatile uint32_t native_wifi_text_n __attribute__((weak_import));
+extern char native_wifi_note[128][112] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_note_n __attribute__((weak_import));
 extern int native_ufs_extra_fault(uint32_t *) __attribute__((weak_import));
 extern struct {uint32_t stage, scans, frames, beacons, bss_seen; int last_err;} nw_wifi_stats __attribute__((weak_import));
 extern volatile uint64_t nw_wifi_where[4] __attribute__((weak_import));
@@ -720,6 +722,19 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
           at = put(out, at, cap, line, sizeof line);
         }
         shown = i;
+        // the notices among them, which the debug lines cannot push out of their own ring: at most 40 new ones per slot
+        if (&native_wifi_note) {
+          static uint32_t noted;
+          const uint32_t m = native_wifi_note_n;
+          uint32_t j = noted;
+          if (m - j > 128) j = m - 128;
+          for (uint32_t k = 0; j < m && k < 40; ++j, ++k) {
+            char line[124];
+            snprintf(line, sizeof line, "[wifi-msg] %.110s", native_wifi_note[j % 128]);
+            at = put(out, at, cap, line, sizeof line);
+          }
+          noted = j;
+        }
       }
       snprintf(row, sizeof row, "[wifi-pcie] pipe-halt=%08x perst=%08x dbg0@20ms=%x dbg1@20ms=%x pipe-mux=%x", native_wifi_pmic[17], native_wifi_pmic[18], native_wifi_pmic[19],
                native_wifi_pmic[21], native_wifi_pmic[20]);

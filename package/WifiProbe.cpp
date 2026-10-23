@@ -70,7 +70,9 @@ volatile uint32_t native_wifi_mhi[16];
 // [4] the boot loader was started, [5] the contexts were programmed, [6] the run ended.
 volatile uint32_t native_wifi_mhi_ms[8];
 // The WiFi module's messages: a ring of 512 lines, newest at native_wifi_text_n - 1.
-char native_wifi_text[512][112]; volatile uint32_t native_wifi_text_n;}
+char native_wifi_text[512][112]; volatile uint32_t native_wifi_text_n;
+// The same messages of level 6 and below (notices, warnings, errors) in a ring of their own, which the driver's debug lines do not push out.
+char native_wifi_note[128][112]; volatile uint32_t native_wifi_note_n;}
 
 extern kmod_info_t g_kernel_kmod_info;
 extern "C" void native_wifi_net_static_init(void) __asm__("__GLOBAL__sub_I_WifiNet.cpp");
@@ -673,6 +675,10 @@ void pLog(int level, const char *line) {
     if (!first) first = now;
     const uint32_t i = __atomic_fetch_add(const_cast<uint32_t *>(&native_wifi_text_n), 1u, __ATOMIC_RELAXED) % 512;
     snprintf(native_wifi_text[i], sizeof native_wifi_text[i], "%u %d %.100s", static_cast<uint32_t>(now - first), level, line);
+    if (level <= 6) {
+        const uint32_t j = __atomic_fetch_add(const_cast<uint32_t *>(&native_wifi_note_n), 1u, __ATOMIC_RELAXED) % 128;
+        memcpy(native_wifi_note[j], native_wifi_text[i], sizeof native_wifi_note[j]);
+    }
     // when the driver reports a command stuck: what the root port saw (device status, link, advanced error reporting)
     static bool rootShown;
     if (!rootShown && gDbi && has(line, "stuck: wmi credits")) {
