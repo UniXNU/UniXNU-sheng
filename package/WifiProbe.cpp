@@ -672,6 +672,17 @@ void pLog(int level, const char *line) {
     if (!first) first = now;
     const uint32_t i = __atomic_fetch_add(const_cast<uint32_t *>(&native_wifi_text_n), 1u, __ATOMIC_RELAXED) % 512;
     snprintf(native_wifi_text[i], sizeof native_wifi_text[i], "%u %d %.100s", static_cast<uint32_t>(now - first), level, line);
+    // when the driver reports a command stuck: what the root port saw (device status, link, advanced error reporting)
+    static bool rootShown;
+    if (!rootShown && gDbi && has(line, "stuck: wmi credits")) {
+        rootShown = true;
+        char text[112];
+        snprintf(text, sizeof text, "root port: devctl/sta %08x link %08x ue %08x mask %08x ce %08x rootsta %08x src %08x",
+                 gDbi[0x78 / 4], gDbi[0x80 / 4], gDbi[0x104 / 4], gDbi[0x108 / 4], gDbi[0x110 / 4], gDbi[0x130 / 4], gDbi[0x134 / 4]);
+        pLog(3, text);
+        snprintf(text, sizeof text, "root port: aer header %08x %08x %08x %08x ltssm-debug %08x", gDbi[0x11c / 4], gDbi[0x120 / 4], gDbi[0x124 / 4], gDbi[0x128 / 4], gDbi[kPortDebug0 / 4]);
+        pLog(3, text);
+    }
     // the first time the device reports its RAM dump state: did its DMA fault in the SMMU (global FSR, context FSR, FAR, FSYNR0)?
     static bool faultShown;
     if (!faultShown && &native_ufs_extra_fault && hasRddm(line)) {
