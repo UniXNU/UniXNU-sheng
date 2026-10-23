@@ -652,7 +652,7 @@ void pPoll() {}
 uint32_t gLogRepeats;
 volatile uint32_t *gNwBar;   // the endpoint's registers, for the RAM dump reader
 void rddmScan();
-bool fwCached(const char *name, const uint8_t **data, size_t *size);
+extern "C" int boot_log_export_put(uint32_t generation, uint32_t total, uint32_t offset, const void *data, uint32_t size) __attribute__((weak_import));
 bool hasRddm(const char *s) {static const char w[] = "MHI_CB_EE_RDDM"; for (; *s; ++s) {size_t k = 0; while (w[k] && s[k] == w[k]) ++k; if (!w[k]) return true;} return false;}
 void pLog(int level, const char *line) {
     static uint64_t first;
@@ -788,60 +788,44 @@ void rddmScan() {
             pLog(3, text);
         }
     }
-    // Text the firmware made while it ran: every text of the dump (12 bytes or more) that is not a text of the image itself. The image's texts go into
-    // a Bloom filter (2^20 bits, two hashes) first. The lines go out in batches of 80 with a pause between, so the boot log's slots keep up.
-    const uint8_t *image = nullptr;
-    size_t imageBytes = 0;
-    if (!fwCached("amss.bin", &image, &imageBytes)) return;
-    uint8_t *bloom = static_cast<uint8_t *>(IOMallocData(1u << 17));
-    if (!bloom) return;
-    bzero(bloom, 1u << 17);
-    auto hashes = [](const uint8_t *t, size_t n, uint32_t &a, uint32_t &b) {
-        a = 2166136261u; b = 5381u;
-        for (size_t k = 0; k < n; ++k) {a = (a ^ t[k]) * 16777619u; b = b * 33u + t[k];}
-        a &= (1u << 20) - 1; b &= (1u << 20) - 1;
-    };
-    for (size_t i = 0; i < imageBytes;) {
-        if (!printable(image[i])) {++i; continue;}
-        size_t j = i;
-        while (j < imageBytes && printable(image[j])) ++j;
-        // every suffix of 12 or more is entered too: a text of the dump may start inside one of the image's
-        for (size_t k = i; k + 12 <= j && k < i + 64; ++k) {
-            uint32_t a, b;
-            hashes(image + k, j - k, a, b);
-            bloom[a >> 3] |= (uint8_t)(1u << (a & 7)); bloom[b >> 3] |= (uint8_t)(1u << (b & 7));
-        }
-        i = j;
+    // The whole dump goes to the boot log's export area, read back on the host: the receive vector table as table.bin and each of its buffers as
+    // segNN.bin, in the container the log reader unpacks (SHEXR001 holding an M2VCACH1 file list). Its generation has the top bit set, which keeps
+    // a later export from replacing it.
+    if (!&boot_log_export_put) return;
+    static const char root[] = "/rddm";
+    uint64_t total = 8 + 4 + sizeof root - 1 + 4, files = 1;
+    total += 24 + 9 + vecBytes;
+    for (uint32_t e = 0; e + 16 <= vecBytes; e += 16) {
+        uint64_t addr, size;
+        memcpy(&addr, table + e, 8); memcpy(&size, table + e + 8, 8);
+        if (toVa(addr, size)) {total += 24 + 9 + size; ++files;}
     }
-    unsigned runtime = 0, batch = 0;
-    for (uint32_t e = 0; e + 16 <= vecBytes && runtime < 2400; e += 16) {
+    const uint64_t blobBytes = 16 + total;
+    uint8_t *blob = blobBytes < (64u << 20) ? static_cast<uint8_t *>(IOMallocData(blobBytes)) : nullptr;
+    if (!blob) {pLog(3, "rddm export: no memory"); return;}
+    uint8_t *w = blob;
+    auto put = [&w](const void *d, size_t n) {memcpy(w, d, n); w += n;};
+    auto put32 = [&put](uint32_t v) {put(&v, 4);};
+    auto file = [&](const char *name, const uint8_t *d, uint64_t n) {
+        const uint32_t head[4] = {(uint32_t)strlen(name), 0644, 0, 0};
+        put(head, 16); put(&n, 8); put(name, strlen(name)); put(d, n);
+    };
+    put("SHEXR001", 8); put32((uint32_t)total); put32(0);
+    put("M2VCACH1", 8); put32(sizeof root - 1); put(root, sizeof root - 1); put32((uint32_t)files);
+    file("table.bin", table, vecBytes);
+    for (uint32_t e = 0; e + 16 <= vecBytes; e += 16) {
         uint64_t addr, size;
         memcpy(&addr, table + e, 8); memcpy(&size, table + e + 8, 8);
         const uint8_t *seg = toVa(addr, size);
         if (!seg) continue;
-        for (uint64_t i = 0; i < size && runtime < 2400;) {
-            if (!printable(seg[i])) {++i; continue;}
-            uint64_t j = i;
-            while (j < size && printable(seg[j])) ++j;
-            const size_t n = (size_t)(j - i);
-            if (n >= 12) {
-                uint32_t a, b;
-                hashes(seg + i, n, a, b);
-                if (!((bloom[a >> 3] >> (a & 7)) & 1) || !((bloom[b >> 3] >> (b & 7)) & 1)) {
-                    char body[85];
-                    const size_t len = n < 84 ? n : 84;
-                    memcpy(body, seg + i, len); body[len] = 0;
-                    snprintf(text, sizeof text, "rddm-run %u+%llx: %s", e / 16, (unsigned long long)i, body);
-                    pLog(3, text);
-                    ++runtime;
-                    if (++batch == 80) {batch = 0; IOSleep(2200);}
-                }
-            }
-            i = j;
-        }
+        char name[16];
+        snprintf(name, sizeof name, "seg%02u.bin", e / 16);
+        file(name, seg, size);
     }
-    IOFreeData(bloom, 1u << 17);
-    snprintf(text, sizeof text, "rddm runtime texts: %u", runtime);
+    const uint32_t generation = 0x80000000u | (uint32_t)(pNow() & 0x7fffffff);
+    const int rc = (uint64_t)(w - blob) == blobBytes ? boot_log_export_put(generation, (uint32_t)blobBytes, 0, blob, (uint32_t)blobBytes) : -100;
+    IOFreeData(blob, blobBytes);
+    snprintf(text, sizeof text, "rddm export: %llu bytes in %llu files, result %d", (unsigned long long)blobBytes, (unsigned long long)files, rc);
     pLog(3, text);
 }
 void pHalt() {for (;;) IOSleep(1000);}
@@ -866,10 +850,6 @@ void pDmaSync(uint64_t, size_t, int) {}
 
 // Firmware files: the container in the partition named oops ('WFW1', count, then name[24] offset size), each file read once and kept.
 struct FwCache {char name[24]; uint8_t *data; size_t size; bool tried;} gFw[8];
-bool fwCached(const char *name, const uint8_t **data, size_t *size) {
-    for (const FwCache &f : gFw) if (f.data && !strncmp(f.name, name, sizeof f.name)) {*data = f.data; *size = f.size; return true;}
-    return false;
-}
 int pFwGet(const char *path, const uint8_t **data, size_t *size) {
     const char *base = path;
     for (const char *c = path; *c; ++c) if (*c == '/') base = c + 1;

@@ -209,6 +209,7 @@ int boot_log_export_put(uint32_t generation, uint32_t total, uint32_t offset, co
   if (!half || !&native_ufs_export_write) status = -4;
   else if (total > (uint64_t)half * LogBlock) status = -5;
   else if (diag_owned) status = -7;
+  else if (export_ready & 0x80000000u) status = -10;   // a generation with the top bit set (a device's RAM dump) is kept
   if (!status && !export_stage) export_stage = (uint8_t *)IOMallocAligned(stage, LogBlock);
   if (!status && !export_stage) status = -2;
   if (!status && offset == 0) {
