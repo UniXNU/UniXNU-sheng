@@ -40,6 +40,7 @@ extern "C" volatile uint32_t native_ufs_extra_stream __attribute__((weak_import)
 extern "C" uint8_t *native_ufs_extra_va __attribute__((weak_import));
 extern "C" volatile uint32_t native_ufs_extra_uncached __attribute__((weak_import));
 extern "C" int native_ufs_extra_fault(uint32_t *) __attribute__((weak_import));
+extern "C" volatile uint32_t native_ufs_extra_atos[4] __attribute__((weak_import));
 extern "C" volatile uint32_t native_ufs_extra_iova __attribute__((weak_import)), native_ufs_extra_bytes __attribute__((weak_import));
 extern "C" int native_ufs_part_find(const char *, uint32_t *, uint64_t *, uint64_t *) __attribute__((weak_import));
 extern "C" int native_ufs_part_read(uint32_t, uint64_t, uint32_t, void *) __attribute__((weak_import));
@@ -692,6 +693,10 @@ void pLog(int level, const char *line) {
         char text[112];
         snprintf(text, sizeof text, "smmu at rddm: gfsr %08x cb-fsr %08x far %08x%08x fsynr0 %08x sctlr %08x", f[0], f[2], f[4], f[3], f[5], f[6]);
         pLog(3, text);
+        if (&native_ufs_extra_atos) {
+            snprintf(text, sizeof text, "smmu window sweep: tested %u pages, %u faults, %u elsewhere, first bad %08x", native_ufs_extra_atos[0], native_ufs_extra_atos[1], native_ufs_extra_atos[2], native_ufs_extra_atos[3]);
+            pLog(3, text);
+        }
         rddmScan();
     }
 }
