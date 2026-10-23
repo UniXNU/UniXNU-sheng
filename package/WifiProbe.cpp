@@ -586,6 +586,7 @@ bool arenaInit() {
 // Buffers the endpoint reads or writes sit at addresses aligned to their size (a power of two, up to 2 MiB): the boot loader refuses an image address
 // that is only page aligned, before it makes any transfer (the registers that name the address and size of a failed transfer stay zero), and an
 // IOMMU-backed DMA allocator hands out size-aligned addresses.
+void pLog(int level, const char *line);
 void *arenaAlloc(size_t n, uint64_t *bus) {
     n = (n + 63) & ~(size_t)63;
     if (n >= 4096) n = (n + 4095) & ~(size_t)4095;
@@ -611,6 +612,11 @@ void *arenaAlloc(size_t n, uint64_t *bus) {
         if (bus) *bus = gArena.iova + start;
         return p;
     }
+    uint32_t freeTotal = 0, freeMax = 0;
+    for (unsigned i = 0; i < gArena.count; ++i) if (!gArena.blocks[i].used) {freeTotal += gArena.blocks[i].size; if (gArena.blocks[i].size > freeMax) freeMax = gArena.blocks[i].size;}
+    char line[96];
+    snprintf(line, sizeof line, "dma window full: want %zu free %u largest %u blocks %u", n, freeTotal, freeMax, gArena.count);
+    pLog(3, line);
     return nullptr;
 }
 void arenaFree(void *p) {
