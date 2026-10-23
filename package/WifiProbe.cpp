@@ -36,6 +36,7 @@
 // PHY poll count << 16, [13] port debug 0 (LTSSM state in bits 0-5), [14] port debug 1, [15] endpoint vendor/device, [16] link ms
 extern "C" volatile uint32_t native_ufs_extra_stream __attribute__((weak_import));
 extern "C" uint8_t *native_ufs_extra_va __attribute__((weak_import));
+extern "C" volatile uint32_t native_ufs_extra_uncached __attribute__((weak_import));
 extern "C" int native_ufs_extra_fault(uint32_t *) __attribute__((weak_import));
 extern "C" volatile uint32_t native_ufs_extra_iova __attribute__((weak_import)), native_ufs_extra_bytes __attribute__((weak_import));
 extern "C" int native_ufs_part_find(const char *, uint32_t *, uint64_t *, uint64_t *) __attribute__((weak_import));
@@ -728,6 +729,7 @@ void netStart() {
 void wifiStack(volatile uint32_t *m, uint64_t barBytes) {
     volatile uint32_t *st = native_wifi_mhi;
     if (!arenaInit()) {st[0] = (uint32_t)-11; return;}
+    pLog(6, native_ufs_extra_uncached ? "wifi: DMA window mapped uncached" : "wifi: DMA window mapped cached (no second mapping)");
     if (!findCaps()) {st[0] = (uint32_t)-12; return;}
     static const struct lx_platform plat = {pNow, pSleep, pPoll, pLog, pHalt, hAlloc, hFree, pDmaAlloc, pDmaFree, pDmaMap, pDmaSync, pFwGet};
     static struct nw_board board;
