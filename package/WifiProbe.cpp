@@ -998,6 +998,9 @@ void bringUp(Window &gcc, Window &tlmm) {
     // PERST# held low, CLKREQ# to its PCIe function, then WLAN_EN high and the WCN7850 power-up delay (pwrseq-qcom-wcn.c: 50 ms)
     setPin(t, kPerst, 1u | 1u << 9, 0);
     setPin(t, kClkReq, 3u | 1u << 2, -1);
+    // the chip may still run what an earlier start left: WLAN_EN goes low first so that it starts from nothing
+    setPin(t, kWlanEn, 1u | 3u << 6 | 1u << 9, 0);
+    IOSleep(150);
     setPin(t, kWlanEn, 1u | 3u << 6 | 1u << 9, 1);
     IOSleep(60);
     native_wifi_stats[10] = pinWord(t);
