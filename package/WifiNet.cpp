@@ -24,6 +24,7 @@
 #include <net/if_types.h>
 #include <sys/mbuf.h>
 #include <kern/locks.h>
+#include <kern/thread.h>
 #include <sys/systm.h>
 #include <stdarg.h>
 #include "nw_abi.h"
@@ -302,6 +303,29 @@ void publish_registry(const char *ifname) {
   controller->release();
 }
 
+// Unattended testing: with the boot arguments sheng-wifi-ssid and sheng-wifi-psk the board joins that network by itself once a scan has found it
+// (the same call the wireless daemon's join makes). Without them nothing happens.
+void autoJoin(void *, wait_result_t) {
+  char ssid[33] = {}, psk[65] = {};
+  if (!PE_parse_boot_argn("sheng-wifi-ssid", ssid, sizeof ssid)) { thread_terminate(current_thread()); return; }
+  const bool hasPsk = PE_parse_boot_argn("sheng-wifi-psk", psk, sizeof psk);
+  const size_t sl = strlen(ssid), pl = strlen(psk);
+  log(6, "wifi-net: auto join of a network with a %zu byte name and a %zu byte key", sl, pl);
+  for (unsigned round = 0; round < 40; ++round) {
+    IOSleep(3000);
+    nw_wifi_status st; nw_wifi_status_get(&st);
+    if (st.state >= NW_STA_AUTH) { if (st.state == NW_STA_UP) break; continue; }
+    bool found = false; nw_bss_info b;
+    for (int i = 0, n = nw_wifi_bss_count(); i < n; ++i)
+      if (!nw_wifi_bss_get(i, &b) && b.ssid_len == sl && !memcmp(b.ssid, ssid, sl)) { found = true; break; }
+    log(6, "wifi-net: auto join round %u: %d networks seen, wanted one %s", round, nw_wifi_bss_count(), found ? "found" : "not found");
+    if (found) { const int r = nw_wifi_connect(reinterpret_cast<const uint8_t *>(ssid), sl, nullptr, hasPsk ? psk : nullptr, hasPsk ? pl : 0); log(6, "wifi-net: auto join requested: %d", r); }
+    else nw_wifi_scan(nullptr, 0);
+  }
+  memset(psk, 0, sizeof psk);
+  thread_terminate(current_thread());
+}
+
 }  // namespace
 
 // Called once the module has a station interface and a hardware address.
@@ -323,5 +347,6 @@ extern "C" void sheng_wifi_net_start(const uint8_t mac[6]) {
   gIf = ifp; ifnet_set_flags(ifp, IFF_UP, IFF_UP);
   nw_wifi_set_events(&gEvents);
   publish_registry("en0");
+  { thread_t t = nullptr; if (kernel_thread_start(autoJoin, nullptr, &t) == KERN_SUCCESS) thread_deallocate(t); }
   log(6, "wifi-net: en0 is up, hardware address %02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
