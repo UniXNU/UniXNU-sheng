@@ -647,8 +647,8 @@ void arenaFree(void *p) {
 uint64_t pNow() {uint64_t ns = 0; absolutetime_to_nanoseconds(mach_absolute_time(), &ns); return ns / 1000000;}
 void pSleep(unsigned ms) {IOSleep(ms);}
 void pPoll() {}
-// Each line carries the milliseconds since the first one; a line equal to one of the last four is only counted, so that a message the driver
-// repeats every round cannot push the history out of the ring.
+// Each line carries the milliseconds since the first one; a line equal to one of the last sixteen is only counted, so that the messages the driver
+// repeats every round (the seven interrupt groups it polls each millisecond, a send that waits for credits) cannot push the history out of the ring.
 uint32_t gLogRepeats;
 volatile uint32_t *gNwBar;   // the endpoint's registers, for the RAM dump reader
 void rddmScan();
@@ -656,7 +656,7 @@ extern "C" int boot_log_export_put(uint32_t generation, uint32_t total, uint32_t
 bool hasRddm(const char *s) {static const char w[] = "MHI_CB_EE_RDDM"; for (; *s; ++s) {size_t k = 0; while (w[k] && s[k] == w[k]) ++k; if (!w[k]) return true;} return false;}
 void pLog(int level, const char *line) {
     static uint64_t first;
-    static uint32_t recent[4];
+    static uint32_t recent[16];
     uint32_t h = 2166136261u;
     for (const char *c = line; *c; ++c) h = (h ^ static_cast<uint8_t>(*c)) * 16777619u;
     h ^= static_cast<uint32_t>(level);
