@@ -33,6 +33,9 @@ extern "C" void native_wifi_logf(int level, const char *fmt, ...);
 #define SIOCSA80211 0x802869c8UL   // _IOW('i', 200, struct apple80211req)
 #define SIOCGA80211 0xc02869c9UL   // _IOWR('i', 201, struct apple80211req)
 
+// (the header declares it without C linkage; the symbol is the C one)
+extern "C" int sheng_kev_post(struct kev_msg *) __asm__("_kev_post_msg");
+
 namespace {
 
 struct apple80211req {
@@ -95,7 +98,7 @@ void post_event(uint32_t code, const void *payload, size_t length) {
   struct kev_msg msg; memset(&msg, 0, sizeof msg);
   msg.vendor_code = KEV_VENDOR_APPLE; msg.kev_class = 6; msg.kev_subclass = 1; msg.event_code = code;
   msg.dv[0].data_length = static_cast<uint32_t>(16 + length); msg.dv[0].data_ptr = data;
-  kev_post_msg(&msg);
+  sheng_kev_post(&msg);
 }
 // link state for the network configuration: the interface's flags and the stack's own link events
 void post_link(bool up) {
@@ -106,7 +109,7 @@ void post_link(bool up) {
   struct kev_msg msg; memset(&msg, 0, sizeof msg);
   msg.vendor_code = KEV_VENDOR_APPLE; msg.kev_class = KEV_NETWORK_CLASS; msg.kev_subclass = KEV_DL_SUBCLASS; msg.event_code = up ? KEV_DL_LINK_ON : KEV_DL_LINK_OFF;
   msg.dv[0].data_length = sizeof payload; msg.dv[0].data_ptr = &payload;
-  kev_post_msg(&msg);
+  sheng_kev_post(&msg);
 }
 
 // ---- what the module tells us ----
