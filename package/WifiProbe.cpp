@@ -649,6 +649,8 @@ void pPoll() {}
 // Each line carries the milliseconds since the first one; a line equal to one of the last four is only counted, so that a message the driver
 // repeats every round cannot push the history out of the ring.
 uint32_t gLogRepeats;
+volatile uint32_t *gNwBar;   // the endpoint's registers, for the RAM dump reader
+void rddmScan();
 bool hasRddm(const char *s) {static const char w[] = "MHI_CB_EE_RDDM"; for (; *s; ++s) {size_t k = 0; while (w[k] && s[k] == w[k]) ++k; if (!w[k]) return true;} return false;}
 void pLog(int level, const char *line) {
     static uint64_t first;
@@ -672,7 +674,76 @@ void pLog(int level, const char *line) {
         char text[112];
         snprintf(text, sizeof text, "smmu at rddm: gfsr %08x cb-fsr %08x far %08x%08x fsynr0 %08x sctlr %08x", f[0], f[2], f[4], f[3], f[5], f[6]);
         pLog(3, text);
+        rddmScan();
     }
+}
+
+// The device uploads its RAM dump into the buffers of the receive vector table the MHI core programmed at power up. Once the transfer is complete
+// the dump is searched for the messages a firmware error leaves (an assertion or fatal error text, or a source file with a line number).
+bool printable(uint8_t c) {return c >= 0x20 && c < 0x7f;}
+bool looksLikeError(const char *t, size_t n) {
+    for (size_t i = 0; i < n; ++i) if (t[i] == '%') return false;   // a format string of the image, not a message
+    for (size_t i = 0; i + 3 < n; ++i) {
+        if (t[i] == '.' && t[i + 1] == 'c' && t[i + 2] == ':' && t[i + 3] >= '0' && t[i + 3] <= '9') return true;
+        if (i + 5 <= n && (!memcmp(t + i, "ssert", 5) || !memcmp(t + i, "SSERT", 5) || !memcmp(t + i, "FATAL", 5))) return true;
+        if (i + 8 <= n && !memcmp(t + i, "rr_fatal", 8)) return true;
+    }
+    return false;
+}
+void rddmScan() {
+    volatile uint32_t *m = gNwBar;
+    if (!m) return;
+    const uint32_t bhie = m[0x2c / 4];
+    if (bhie == 0 || bhie > 0x1000 || (bhie & 3)) return;
+    uint32_t status = 0;
+    unsigned waited = 0;
+    for (; waited < 400; ++waited) {status = m[(bhie + 0x78) / 4]; if ((status >> 30) >= 2) break; IOSleep(10);}
+    const uint64_t vec = m[(bhie + 0x60) / 4] | (uint64_t)m[(bhie + 0x64) / 4] << 32;
+    const uint32_t vecBytes = m[(bhie + 0x68) / 4];
+    char text[112];
+    snprintf(text, sizeof text, "rddm upload: status %08x after %u ms, table %llx %u bytes", status, waited * 10, (unsigned long long)vec, vecBytes);
+    pLog(3, text);
+    auto toVa = [](uint64_t iova, uint64_t n) -> const uint8_t * {
+        if (iova < gArena.iova || iova + n > gArena.iova + gArena.bytes) return nullptr;
+        return gArena.va + (iova - gArena.iova);
+    };
+    const uint8_t *table = toVa(vec, vecBytes);
+    if (!table || (status >> 30) != 2) return;
+    unsigned found = 0;
+    uint64_t scanned = 0;
+    uint32_t seen[48] = {};
+    for (uint32_t e = 0; e + 16 <= vecBytes && found < 40; e += 16) {
+        uint64_t addr, size;
+        memcpy(&addr, table + e, 8); memcpy(&size, table + e + 8, 8);
+        const uint8_t *seg = toVa(addr, size);
+        if (!seg) continue;
+        scanned += size;
+        for (uint64_t i = 0; i < size && found < 40;) {
+            if (!printable(seg[i])) {++i; continue;}
+            uint64_t j = i;
+            while (j < size && printable(seg[j]) && j - i < 200) ++j;
+            const size_t n = (size_t)(j - i);
+            if (n >= 10 && looksLikeError(reinterpret_cast<const char *>(seg + i), n)) {
+                uint32_t h = 2166136261u;
+                for (size_t k = 0; k < n; ++k) h = (h ^ seg[i + k]) * 16777619u;
+                bool dup = false;
+                for (unsigned k = 0; k < found && k < 48; ++k) if (seen[k] == h) dup = true;
+                if (!dup) {
+                    seen[found] = h;
+                    ++found;
+                    char body[85];
+                    const size_t len = n < 84 ? n : 84;
+                    memcpy(body, seg + i, len); body[len] = 0;
+                    snprintf(text, sizeof text, "rddm %u+%llx: %s", e / 16, (unsigned long long)i, body);
+                    for (char *c = text; *c; ++c) if (!printable((uint8_t)*c)) *c = '?';
+                    pLog(3, text);
+                }
+            }
+            i = j;
+        }
+    }
+    snprintf(text, sizeof text, "rddm scan: %llu bytes, %u messages", (unsigned long long)scanned, found);
+    pLog(3, text);
 }
 void pHalt() {for (;;) IOSleep(1000);}
 void *hAlloc(size_t n) {
@@ -785,6 +856,7 @@ void wifiStack(volatile uint32_t *m, uint64_t barBytes) {
     if (!findCaps()) {st[0] = (uint32_t)-12; return;}
     static const struct lx_platform plat = {pNow, pSleep, pPoll, pLog, pHalt, hAlloc, hFree, pDmaAlloc, pDmaFree, pDmaMap, pDmaSync, pFwGet};
     static struct nw_board board;
+    gNwBar = m;
     board.bar = const_cast<uint32_t *>(m); board.bar_len = barBytes; board.device_id = (uint16_t)(gCfg[0] >> 16); board.msi_cap = (uint16_t)gMsiCap; board.irq_base = 1000;
     board.cfg_read = pCfgRead; board.cfg_write = pCfgWrite; board.msi_target = pMsiTarget; board.map_phys = nullptr;
     // the board's address window for the endpoint to reach sleep clock and sibling blocks is already set up by the earlier stages
