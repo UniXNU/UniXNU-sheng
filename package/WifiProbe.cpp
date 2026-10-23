@@ -22,6 +22,8 @@
 #include "MhiBoot.h"
 #include "nw_abi.h"
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IODeviceTreeSupport.h>
+#include <libkern/c++/OSData.h>
 #include <libkern/OSKextLib.h>
 #include <mach/kmod.h>
 #include <stdarg.h>
@@ -850,9 +852,31 @@ void pDmaSync(uint64_t, size_t, int) {}
 
 // Firmware files: the container in the partition named oops ('WFW1', count, then name[24] offset size), each file read once and kept.
 struct FwCache {char name[24]; uint8_t *data; size_t size; bool tried;} gFw[8];
+// The radio's address (wlan_mac.bin): this board's firmware reports none, so a locally administered address is made from /chosen/unique-chip-id,
+// the same on every boot of the same image.
+int macFile(const uint8_t **data, size_t *size) {
+    static char text[40]; static size_t len;
+    if (!len) {
+        IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
+        OSData *id = chosen ? OSDynamicCast(OSData, chosen->getProperty("unique-chip-id")) : nullptr;
+        uint64_t seed = 0;
+        if (id && id->getLength() >= sizeof seed) memcpy(&seed, id->getBytesNoCopy(), sizeof seed);
+        OSSafeReleaseNULL(chosen);
+        if (!seed) return -1;
+        uint64_t h = 0xcbf29ce484222325ull;
+        for (unsigned i = 0; i < 8; ++i) h = (h ^ ((seed >> (8 * i)) & 0xff)) * 0x100000001b3ull;
+        uint8_t m[6];
+        for (unsigned i = 0; i < 6; ++i) m[i] = (uint8_t)(h >> (8 * i));
+        m[0] = (uint8_t)((m[0] & 0xfe) | 0x02);
+        len = (size_t)snprintf(text, sizeof text, "address=%02x%02x%02x%02x%02x%02x\n", m[0], m[1], m[2], m[3], m[4], m[5]);
+    }
+    *data = (const uint8_t *)text; *size = len;
+    return 0;
+}
 int pFwGet(const char *path, const uint8_t **data, size_t *size) {
     const char *base = path;
     for (const char *c = path; *c; ++c) if (*c == '/') base = c + 1;
+    if (!strcmp(base, "wlan_mac.bin")) return macFile(data, size);
     char want[24]; strlcpy(want, base, sizeof want);
     uint32_t which = 1;
     PE_parse_boot_argn("sheng-wifi-fw", &which, sizeof which);
