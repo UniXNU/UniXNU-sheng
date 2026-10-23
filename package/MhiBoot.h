@@ -51,6 +51,7 @@ typedef struct {
     uint32_t (*read)(void *ctx, uint32_t reg);
     void (*write)(void *ctx, uint32_t reg, uint32_t value);
     void *ctx;
+    uint32_t space;   /* bytes of register space the owner mapped (0: use the MHIREGLEN register, which only counts the MHI block itself) */
 } MhiIo;
 
 typedef struct {

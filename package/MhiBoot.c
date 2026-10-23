@@ -8,7 +8,7 @@ int mhi_boot_open(MhiBoot *m, const MhiIo *io)
 {
     for (unsigned i = 0; i < sizeof *m; ++i) ((uint8_t *)m)[i] = 0;
     m->io = *io;
-    m->reglen = rd(m, MHI_REGLEN);
+    m->reglen = io->space ? io->space : rd(m, MHI_REGLEN);
     m->bhi = rd(m, MHI_BHIOFF);
     m->bhie = rd(m, MHI_BHIEOFF);
     const int good = m->reglen >= 0x100 && m->reglen <= 0x100000 && m->bhi >= 0x100 && m->bhi + MHI_BHI_ERRCODE + 4 <= m->reglen &&
@@ -78,6 +78,7 @@ uint32_t mhi_boot_step(MhiBoot *m)
 {
     if (m->phase == MhiIdle || m->phase == MhiDone || m->phase == MhiFailed || m->phase == MhiNeedContexts) return m->phase;
     const uint32_t status = rd(m, MHI_STATUS);
+    if (status == 0xffffffffu) return m->phase;   /* the device does not answer (its link is retraining while its boot loader starts): not a status */
     m->state = (status >> MHI_STATE_SHIFT) & 0xffu;
     if (m->phase == MhiResetting) {
         if (rd(m, MHI_CTRL) & MHI_CTRL_RESET) return m->phase;
@@ -90,6 +91,7 @@ uint32_t mhi_boot_step(MhiBoot *m)
     case MhiSblLoading: {
         const uint32_t bhi = rd(m, m->bhi + MHI_BHI_STATUS);
         m->last_status = bhi;
+        if (bhi == 0xffffffffu) return m->phase;
         if (bhi >> 30 == MHI_XFER_ERROR) {m->errcode = rd(m, m->bhi + MHI_BHI_ERRCODE); return fail(m, MhiErrBhi);}
         if (bhi >> 30 != MHI_XFER_SUCCESS) return m->phase;
         m->phase = MhiWaitReady;

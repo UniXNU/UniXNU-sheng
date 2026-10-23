@@ -38,6 +38,10 @@ static const char *const diag_roots[] = {
   "/private/var/root/Library/Caches/com.apple.backboardd/m2v/prime-bad",
   "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/shadow.log",
   "/private/var/root/Library/Caches/com.apple.backboardd/m2v/shadow.log",
+  "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/frames.trace",
+  "/private/var/root/Library/Caches/com.apple.backboardd/m2v/frames.trace",
+  "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/cpu.profile",
+  "/private/var/root/Library/Caches/com.apple.backboardd/m2v/cpu.profile",
   // Safari's built-in data lists (int-269: a nil built-in list URL aborted MobileSafari): what a directory read of the framework
   // returns next to what a lookup of each file finds. Small, so they go before the log.
   "/System/Library/PrivateFrameworks/SafariShared.framework/UserAgentQuirks.plist",
