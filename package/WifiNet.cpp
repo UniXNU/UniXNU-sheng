@@ -193,7 +193,6 @@ int map_state(unsigned s) { switch (s) { case NW_STA_SCANNING: return 1; case NW
 int apple80211(bool set, apple80211req &rq) {
   nw_wifi_status st; nw_wifi_status_get(&st);
   const int type = rq.req_type;
-  if (type >= 0 && type < 256 && !(gLogged[type / 32] & (1u << (type % 32)))) { gLogged[type / 32] |= 1u << (type % 32); log(6, "wifi-net: first request: type %d %s len %u val %d", type, set ? "set" : "get", rq.req_len, rq.req_val); }
   // (not on the stack: the largest answer is 4824 bytes)
   union Out { uint8_t raw[5120]; channels_list chans; scan_result res; };
   Out *outp = static_cast<Out *>(IOMallocData(sizeof(Out)));
@@ -221,7 +220,7 @@ int apple80211(bool set, apple80211req &rq) {
       return r ? EINVAL : 0; }
     case kDisassociate: case kDeauth: log(6, "wifi-net: leave"); nw_wifi_disconnect(); post_link(false); return 0;
     case kScanCacheClear: case kLocale: case kCountryCode: case kPowerSave: case kAuthType: case kCipherKey: return 0;
-    default: return ENOENT;
+    default: return EOPNOTSUPP;
     }
   }
   switch (type) {
@@ -253,14 +252,14 @@ int apple80211(bool set, apple80211req &rq) {
     out.chans.count = n; return copy_out(rq, &out.chans, sizeof out.chans); }
   case kScanResult: {
     nw_bss_info b; const int count = nw_wifi_bss_count();
-    if (gScanCursor >= static_cast<unsigned>(count) || nw_wifi_bss_get(static_cast<int>(gScanCursor), &b)) { gScanCursor = 0; return ENOENT; }
+    if (gScanCursor >= static_cast<unsigned>(count) || nw_wifi_bss_get(static_cast<int>(gScanCursor), &b)) { gScanCursor = 0; return EIO; }   // after the last record
     gScanCursor++; fill_result(out.res, b); return copy_out(rq, &out.res, sizeof out.res); }
   case kCurrentNetwork: {
     if (st.state < NW_STA_ASSOC) return ENOENT;
     nw_bss_info b; const int count = nw_wifi_bss_count();
     for (int i = 0; i < count; i++) if (!nw_wifi_bss_get(i, &b) && !memcmp(b.bssid, st.bssid, 6)) { fill_result(out.res, b); return copy_out(rq, &out.res, sizeof out.res); }
     return ENOENT; }
-  default: return ENOENT;
+  default: return EOPNOTSUPP;
   }
 }
 
@@ -268,7 +267,12 @@ errno_t if_ioctl(ifnet_t, unsigned long cmd, void *data) {
   switch (cmd) {
   case SIOCGA80211: case SIOCSA80211: {
     apple80211req *rq = static_cast<apple80211req *>(data);
+    const uint32_t len = rq->req_len; const int32_t val = rq->req_val;
     int e = apple80211(cmd == SIOCSA80211, *rq);
+    // every request with its answer, for the first few hundred; then a type's first one only
+    static unsigned shown; const int type = rq->req_type; const bool first = type >= 0 && type < 256 && !(gLogged[type / 32] & (1u << (type % 32)));
+    if (type >= 0 && type < 256) gLogged[type / 32] |= 1u << (type % 32);
+    if (shown < 300 || first) { ++shown; log(6, "wifi-net: request %u: type %d %s len %u val %d -> %d (len %u val %d)", shown, type, cmd == SIOCSA80211 ? "set" : "get", len, val, e, rq->req_len, rq->req_val); }
     return e;
   }
   case SIOCGIFMEDIA: {
@@ -280,7 +284,7 @@ errno_t if_ioctl(ifnet_t, unsigned long cmd, void *data) {
     return 0;
   }
   case SIOCSIFFLAGS: case SIOCSIFMTU: case SIOCADDMULTI: case SIOCDELMULTI: case SIOCSIFADDR: case SIOCSIFMEDIA: return 0;
-  default: return EOPNOTSUPP;
+  default: { static unsigned said; if (said++ < 16) log(6, "wifi-net: interface request %lx not handled", cmd); return EOPNOTSUPP; }
   }
 }
 
