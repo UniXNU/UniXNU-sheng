@@ -649,7 +649,7 @@ void pPoll() {}
 // Each line carries the milliseconds since the first one; a line equal to one of the last four is only counted, so that a message the driver
 // repeats every round cannot push the history out of the ring.
 uint32_t gLogRepeats;
-bool hasRddm(const char *s) {for (; *s; ++s) if (s[0] == 'R' && s[1] == 'D' && s[2] == 'D' && s[3] == 'M') return true; return false;}
+bool hasRddm(const char *s) {static const char w[] = "MHI_CB_EE_RDDM"; for (; *s; ++s) {size_t k = 0; while (w[k] && s[k] == w[k]) ++k; if (!w[k]) return true;} return false;}
 void pLog(int level, const char *line) {
     static uint64_t first;
     static uint32_t recent[4];
