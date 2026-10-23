@@ -242,6 +242,12 @@ touch_cpp=ROOT/'kits/sheng/TouchProbe.cpp';touch_cpp_obj=touch_dir/'TouchProbe.o
 cpufreq_cpp=ROOT/'kits/sheng/CpuFreqProbe.cpp';cpufreq_obj=touch_dir/'CpuFreqProbe.o'
 gpupower_cpp=ROOT/'kits/sheng/GpuPowerProbe.cpp';gpupower_obj=touch_dir/'GpuPowerProbe.o'
 wifi_cpp=ROOT/'kits/sheng/WifiProbe.cpp';wifi_obj=touch_dir/'WifiProbe.o'
+# The WiFi network side (interface, registry entries, Apple80211 requests): its classes are registered late, like the brightness service's.
+wifinet_cpp=ROOT/'kits/sheng/WifiNet.cpp';wifinet_obj=touch_dir/'WifiNet.o';wifinet_late=touch_dir/'WifiNet.late.o'
+# The WiFi module (NativeWifi): the board code includes its interface header, and its objects join the archive.
+import os
+nativewifi=Path(os.environ.get('NATIVE_WIFI_DIR') or ROOT/'drivers/NativeWifi')
+require((nativewifi/'include/nw_abi.h').exists(),'NativeWifi module directory (set NATIVE_WIFI_DIR)')
 # The audio DSP bring-up (sheng-adsp): the driver and its protocol cores (firmware images, SMEM, SMP2P, GLINK, AOSS QMP, RPMh). The
 # firmware file reader is BSD code and is built with the boot progress archive.
 adsp_cpp=ROOT/'kits/sheng/AdspProbe.cpp';adsp_obj=touch_dir/'AdspProbe.o'
@@ -264,7 +270,8 @@ backlight_c=[ROOT/'kits/sheng/GeniI2c.c']
 run([str(touch_cpp) if str(arg)==str(source) else str(touch_cpp_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
 run([str(gpupower_cpp) if str(arg)==str(source) else str(gpupower_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd]+['-I',str(ROOT/'drivers/NativeAdreno'),'-I',str(ROOT/'kits/ArmSmmu4K'),'-I',str(ROOT/'kits/AdrenoFirmware'),'-I',str(ROOT/'kits/AdrenoPM4')],cwd=r['directory'])
 run([str(cpufreq_cpp) if str(arg)==str(source) else str(cpufreq_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
-run([str(wifi_cpp) if str(arg)==str(source) else str(wifi_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
+run([str(wifi_cpp) if str(arg)==str(source) else str(wifi_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd]+['-I',str(nativewifi/'include')],cwd=r['directory'])
+run([str(wifinet_cpp) if str(arg)==str(source) else str(wifinet_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd]+['-I',str(nativewifi/'include')],cwd=r['directory'])
 run([str(adsp_cpp) if str(arg)==str(source) else str(adsp_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
 run([str(audio_cpp) if str(arg)==str(source) else str(audio_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
 run([str(buttons_cpp) if str(arg)==str(source) else str(buttons_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
@@ -282,8 +289,10 @@ for src in touch_c+adsp_c+backlight_c:
     run([str(src) if arg==str(process_source) else str(obj) if arg==str(process_obj) else arg for arg in process_cmd],cwd=pr['directory'])
 run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_AppleARMBacklight.cpp',
      backlight_class_obj,backlight_class_late])
+run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_WifiNet.cpp',wifinet_obj,wifinet_late])
 run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_ShengBattery.cpp',
      battery_class_obj,battery_class_late])
+wifi_module_objs=[Path(l.split(' ',1)[1]) for l in subprocess.check_output(['python3',ROOT/'scripts/build-native-wifi.py',nativewifi,touch_dir/'nativewifi'],text=True,timeout=600).splitlines() if l.startswith('OBJ ')]
 archive=OUT/'libNativeLegacyDisplay.late.a';archive.unlink(missing_ok=True)
 print(run(['python3',ROOT/'scripts/build-native-hid-input.py'],text=True),end='')
 hid_dir=ROOT/'build/native-hid-input'
@@ -296,7 +305,7 @@ run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func',
 require(code((keyevents/'NativeKeyStoreEvents.o').read_bytes(),macho((keyevents/'NativeKeyStoreEvents.o').read_bytes()))==
         code(keyevents_late.read_bytes(),macho(keyevents_late.read_bytes())),'Owned event-service instructions unchanged by late init staging')
 run(['xcrun','ar','rcs',archive,late,OUT/'original-bindings.o',OUT/'LegacyDisplayProbe.o',hid_obj,keystore_obj,process_obj,trace_obj,log_obj,reset_obj,
-     hid_dir/'NativeHidInput.late.o',hid_dir/'hid-original-bindings.o',keyevents_late,touch_cpp_obj,cpufreq_obj,gpupower_obj,wifi_obj,adsp_obj,audio_obj,buttons_obj,backlight_obj,dpu_obj,backlight_class_late,battery_obj,battery_class_late,*touch_objs])
+     hid_dir/'NativeHidInput.late.o',hid_dir/'hid-original-bindings.o',keyevents_late,touch_cpp_obj,cpufreq_obj,gpupower_obj,wifi_obj,wifinet_late,adsp_obj,audio_obj,buttons_obj,backlight_obj,dpu_obj,backlight_class_late,battery_obj,battery_class_late,*touch_objs,*wifi_module_objs])
 sources=[ROOT/'drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp',
          ROOT/'drivers/NativeMobileDisplay/NativeLegacyRequest.h',source,hid_source,keystore_source,process_source,trace_source,log_source,reset_source,ROOT/'kits/sheng/BootResetCore.h',ROOT/'kits/sheng/BootUiTraceCore.h',ROOT/'kits/sheng/BootUiTraceDetails.h',
          ROOT/'drivers/NativeHidInput/NativeHidInput.cpp',ROOT/'scripts/build-native-hid-input.py',

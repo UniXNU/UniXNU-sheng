@@ -20,7 +20,11 @@
 #include "QcomRpmh.h"
 #include "BootResetCore.h"
 #include "MhiBoot.h"
+#include "nw_abi.h"
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include <libkern/OSKextLib.h>
+#include <mach/kmod.h>
+#include <stdarg.h>
 #include <kern/task.h>
 #include <stdint.h>
 
@@ -60,8 +64,13 @@ volatile uint32_t native_wifi_ldo[24];
 volatile uint32_t native_wifi_mhi[16];
 // Milliseconds since the download started when: [0] the buffers were ready, [1] the container was found, [2] the image was read, [3] the SMMU stream was mapped,
 // [4] the boot loader was started, [5] the contexts were programmed, [6] the run ended.
-volatile uint32_t native_wifi_mhi_ms[8];}
+volatile uint32_t native_wifi_mhi_ms[8];
+// The WiFi module's messages: a ring of lines, newest at native_wifi_text_n - 1.
+char native_wifi_text[96][112]; volatile uint32_t native_wifi_text_n;}
 
+extern kmod_info_t g_kernel_kmod_info;
+extern "C" void native_wifi_net_static_init(void) __asm__("__GLOBAL__sub_I_WifiNet.cpp");
+extern "C" void sheng_wifi_net_start(const uint8_t mac[6]);
 namespace {
 constexpr uint64_t kGcc = 0x100000, kTlmm = 0xf100000, kParf = 0x1c00000, kDbi = 0x60000000, kPhy = 0x1c06000, kTcsrClkref = 0x1fd5000;
 constexpr uint64_t kAtu = 0x60001000, kConfig = 0x60100000;
@@ -562,6 +571,181 @@ void endpointLinkSetup(uint64_t sinkAddress) {
     __asm__ volatile("dsb sy" ::: "memory");
 }
 
+
+// ---- Stage 6: the WiFi module (NativeWifi) on this board. It does its own chip power-up, MHI boot, QRTR/QMI and driver start; the board provides
+// register access, configuration space, DMA memory from the endpoint's SMMU window, firmware files from the container, a clock and a log.
+struct Arena {uint8_t *va; uint64_t iova; size_t bytes; struct Block {uint32_t off, size; bool used;} blocks[4096]; unsigned count;} gArena;
+bool arenaInit() {
+    if (&native_ufs_extra_va == nullptr || !native_ufs_extra_va || !native_ufs_extra_bytes) return false;
+    gArena.va = native_ufs_extra_va; gArena.iova = native_ufs_extra_iova; gArena.bytes = native_ufs_extra_bytes;
+    gArena.blocks[0] = {4096, (uint32_t)(gArena.bytes - 4096), false}; gArena.count = 1;   // the first page is the interrupt sink
+    bzero(gArena.va, gArena.bytes);
+    return true;
+}
+void *arenaAlloc(size_t n, uint64_t *bus) {
+    n = (n + 63) & ~(size_t)63;
+    if (n >= 4096) n = (n + 4095) & ~(size_t)4095;
+    for (unsigned i = 0; i < gArena.count; ++i) {
+        Arena::Block &b = gArena.blocks[i];
+        if (b.used || b.size < n) continue;
+        if (b.size > n && gArena.count < 4096) {
+            memmove(&gArena.blocks[i + 1], &gArena.blocks[i], (gArena.count - i) * sizeof(Arena::Block));
+            ++gArena.count;
+            gArena.blocks[i + 1].off = b.off + (uint32_t)n; gArena.blocks[i + 1].size = b.size - (uint32_t)n; gArena.blocks[i + 1].used = false;
+            gArena.blocks[i].size = (uint32_t)n;
+        }
+        gArena.blocks[i].used = true;
+        uint8_t *p = gArena.va + gArena.blocks[i].off;
+        bzero(p, gArena.blocks[i].size);
+        if (bus) *bus = gArena.iova + gArena.blocks[i].off;
+        return p;
+    }
+    return nullptr;
+}
+void arenaFree(void *p) {
+    if (!p || (uint8_t *)p < gArena.va || (uint8_t *)p >= gArena.va + gArena.bytes) return;
+    const uint32_t off = (uint32_t)((uint8_t *)p - gArena.va);
+    for (unsigned i = 0; i < gArena.count; ++i) {
+        if (gArena.blocks[i].off != off || !gArena.blocks[i].used) continue;
+        gArena.blocks[i].used = false;
+        if (i + 1 < gArena.count && !gArena.blocks[i + 1].used) {gArena.blocks[i].size += gArena.blocks[i + 1].size; memmove(&gArena.blocks[i + 1], &gArena.blocks[i + 2], (gArena.count - i - 2) * sizeof(Arena::Block)); --gArena.count;}
+        if (i > 0 && !gArena.blocks[i - 1].used) {gArena.blocks[i - 1].size += gArena.blocks[i].size; memmove(&gArena.blocks[i], &gArena.blocks[i + 1], (gArena.count - i - 1) * sizeof(Arena::Block)); --gArena.count;}
+        return;
+    }
+}
+
+uint64_t pNow() {uint64_t ns = 0; absolutetime_to_nanoseconds(mach_absolute_time(), &ns); return ns / 1000000;}
+void pSleep(unsigned ms) {IOSleep(ms);}
+void pPoll() {}
+void pLog(int level, const char *line) {
+    const uint32_t i = __atomic_fetch_add(const_cast<uint32_t *>(&native_wifi_text_n), 1u, __ATOMIC_RELAXED) % 96;
+    snprintf(native_wifi_text[i], sizeof native_wifi_text[i], "%d %.108s", level, line);
+}
+void pHalt() {for (;;) IOSleep(1000);}
+void *hAlloc(size_t n) {
+    uint8_t *p = static_cast<uint8_t *>(IOMallocData(n + 16));
+    if (!p) return nullptr;
+    *reinterpret_cast<size_t *>(p) = n + 16;
+    return p + 16;
+}
+void hFree(void *q) {
+    if (!q) return;
+    uint8_t *p = static_cast<uint8_t *>(q) - 16;
+    IOFreeData(p, *reinterpret_cast<size_t *>(p));
+}
+void *pDmaAlloc(size_t n, uint64_t *bus) {return arenaAlloc(n, bus);}
+void pDmaFree(size_t, void *p, uint64_t) {arenaFree(p);}
+uint64_t pDmaMap(void *p, size_t, int) {
+    if ((uint8_t *)p < gArena.va || (uint8_t *)p >= gArena.va + gArena.bytes) return 0;
+    return gArena.iova + ((uint8_t *)p - gArena.va);
+}
+void pDmaSync(uint64_t, size_t, int) {}
+
+// Firmware files: the container in the partition named oops ('WFW1', count, then name[24] offset size), each file read once and kept.
+struct FwCache {char name[24]; uint8_t *data; size_t size; bool tried;} gFw[8];
+int pFwGet(const char *path, const uint8_t **data, size_t *size) {
+    const char *base = path;
+    for (const char *c = path; *c; ++c) if (*c == '/') base = c + 1;
+    char want[24]; strlcpy(want, base, sizeof want);
+    uint32_t which = 1;
+    PE_parse_boot_argn("sheng-wifi-fw", &which, sizeof which);
+    if (!strcmp(want, "amss.bin") && which == 2) strlcpy(want, "amss2.bin", sizeof want);
+    FwCache *slot = nullptr;
+    for (auto &f : gFw) {if (f.tried && !strncmp(f.name, want, 24)) {slot = &f; break;} }
+    if (!slot) for (auto &f : gFw) if (!f.tried) {slot = &f; strlcpy(f.name, want, sizeof f.name); f.tried = true; break;}
+    if (!slot) return -1;
+    if (!slot->data && slot->size == 0) {
+        uint32_t lun = 0; uint64_t first = 0, blocks = 0;
+        if (&native_ufs_part_find == nullptr || !native_ufs_part_find("oops", &lun, &first, &blocks)) return -1;
+        uint8_t *header = static_cast<uint8_t *>(IOMallocData(4096));
+        if (!header) return -1;
+        uint32_t offset = 0, bytes = 0;
+        if (native_ufs_part_read(lun, first, 1, header) && !memcmp(header, "WFW1", 4)) {
+            uint32_t count; memcpy(&count, header + 4, 4);
+            for (uint32_t i = 0; i < count && i < 100; ++i) {
+                const uint8_t *e = header + 8 + 32 * i;
+                if (!strncmp((const char *)e, want, 24)) {memcpy(&offset, e + 24, 4); memcpy(&bytes, e + 28, 4);}
+            }
+        }
+        IOFreeData(header, 4096);
+        if (!bytes || (offset & 4095)) return -1;
+        const size_t rounded = (bytes + 4095) & ~(size_t)4095;
+        uint8_t *buf = static_cast<uint8_t *>(IOMallocData(rounded));
+        if (!buf) return -1;
+        if (!native_ufs_part_read(lun, first + offset / 4096, (uint32_t)(rounded / 4096), buf)) {IOFreeData(buf, rounded); return -1;}
+        slot->data = buf; slot->size = bytes;
+    }
+    if (!slot->data) return -1;
+    *data = slot->data; *size = slot->size;
+    return 0;
+}
+
+// Configuration space of the endpoint: 32-bit accesses through the iATU window; offsets with bit 31 set are relative to the PCI Express capability.
+uint32_t gPcieCap, gMsiCap;
+int findCaps() {
+    uint8_t cap = (uint8_t)(gCfg[0x34 / 4] & 0xff);
+    for (unsigned guard = 0; cap >= 0x40 && guard < 48; ++guard) {
+        const uint32_t w = gCfg[cap / 4];
+        if ((uint8_t)w == 0x10) gPcieCap = cap;
+        if ((uint8_t)w == 0x05) gMsiCap = cap;
+        cap = (uint8_t)(w >> 8);
+    }
+    return gPcieCap && gMsiCap;
+}
+int pCfgRead(int off, int size, uint32_t *v) {
+    uint32_t o = (uint32_t)off;
+    if (o & 0x80000000u) o = gPcieCap + (o & 0x7fffffffu);
+    const uint32_t w = gCfg[(o & ~3u) / 4];
+    *v = size == 4 ? w : size == 2 ? (w >> ((o & 2) * 8)) & 0xffff : (w >> ((o & 3) * 8)) & 0xff;
+    return 0;
+}
+int pCfgWrite(int off, int size, uint32_t v) {
+    uint32_t o = (uint32_t)off;
+    if (o & 0x80000000u) o = gPcieCap + (o & 0x7fffffffu);
+    if (size == 4) {gCfg[o / 4] = v; return 0;}
+    const unsigned shift = (size == 2 ? (o & 2) : (o & 3)) * 8;
+    const uint32_t mask = (size == 2 ? 0xffffu : 0xffu) << shift;
+    gCfg[(o & ~3u) / 4] = (gCfg[(o & ~3u) / 4] & ~mask) | ((v << shift) & mask);
+    return 0;
+}
+int pMsiTarget(uint32_t *lo, uint32_t *hi, uint32_t *data) {*lo = (uint32_t)gArena.iova; *hi = (uint32_t)(gArena.iova >> 32); *data = 0; return 0;}
+
+// The network side (WifiNet.cpp): its classes are registered with the kernel's module like the other late classes, then the interface is made.
+extern "C" void native_wifi_logf(int level, const char *fmt, ...) {
+    char line[160]; va_list ap; va_start(ap, fmt); vsnprintf(line, sizeof line, fmt, ap); va_end(ap);
+    pLog(level, line);
+}
+void netStart() {
+    struct nw_wifi_status status; nw_wifi_status_get(&status);
+    void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
+    if (!handle) {native_wifi_logf(3, "wifi: network classes: no module handle"); return;}
+    native_wifi_net_static_init();
+    const OSReturn r = OSMetaClass::postModLoad(handle);
+    if (r) {native_wifi_logf(3, "wifi: network classes not registered: %d", (int)r); return;}
+    sheng_wifi_net_start(status.mac);
+}
+
+void wifiStack(volatile uint32_t *m, uint64_t barBytes) {
+    volatile uint32_t *st = native_wifi_mhi;
+    if (!arenaInit()) {st[0] = (uint32_t)-11; return;}
+    if (!findCaps()) {st[0] = (uint32_t)-12; return;}
+    static const struct lx_platform plat = {pNow, pSleep, pPoll, pLog, pHalt, hAlloc, hFree, pDmaAlloc, pDmaFree, pDmaMap, pDmaSync, pFwGet};
+    static struct nw_board board;
+    board.bar = const_cast<uint32_t *>(m); board.bar_len = barBytes; board.device_id = (uint16_t)(gCfg[0] >> 16); board.msi_cap = (uint16_t)gMsiCap; board.irq_base = 1000;
+    board.cfg_read = pCfgRead; board.cfg_write = pCfgWrite; board.msi_target = pMsiTarget; board.map_phys = nullptr;
+    // the board's address window for the endpoint to reach sleep clock and sibling blocks is already set up by the earlier stages
+    st[0] = 20;
+    const int r = nw_wifi_start(&plat, &board);
+    st[0] = r ? (uint32_t)(0x80000000u | (uint32_t)(-r & 0xffff)) : 21;
+    bool netDone = false;
+    for (uint64_t n = 0;; ++n) {
+        nw_wifi_step();
+        if (!netDone && nw_wifi_stats.stage >= 4) {netDone = true; netStart();}
+        IOSleep(1);
+        if ((n & 63) == 0) st[1] = nw_wifi_stats.stage | nw_wifi_stats.scans << 8 | nw_wifi_stats.bss_seen << 16;
+    }
+}
+
 // The host's half of the event rings (mhi_process_ctrl_ev_ring): the device advances the ring context's read pointer past each event it posts; the host takes
 // them and tells the device the ring is free again by moving the write pointer to just behind that and ringing the ring's doorbell. Returns how many rings moved.
 unsigned eventAck(volatile uint32_t *m) {
@@ -757,6 +941,9 @@ void endpointProbe(volatile uint32_t *a, volatile uint32_t *c, volatile uint32_t
         ep[5 + i] = m[regs[i] / 4];
     }
     ep[0] = 3;
+    uint32_t level5 = 0;
+    PE_parse_boot_argn("sheng-wifi", &level5, sizeof level5);
+    if (level5 >= 5) {ep[0] = 4; wifiStack(m, size < 0x200000 ? size : 0x200000); release(bar); return;}
     const uint32_t bhi = m[0x28 / 4];
     if (bhi && bhi < 0x20000 - 0x40) {
         ep[12] = m[bhi / 4 + 1] | m[bhi / 4] << 16;

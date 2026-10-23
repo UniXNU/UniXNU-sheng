@@ -85,6 +85,9 @@ extern volatile uint32_t native_wifi_ev[48] __attribute__((weak_import));
 extern volatile uint32_t native_wifi_ldo[24] __attribute__((weak_import));
 extern volatile uint32_t native_wifi_mhi[16] __attribute__((weak_import));
 extern volatile uint32_t native_wifi_mhi_ms[8] __attribute__((weak_import));
+extern char native_wifi_text[96][112] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_text_n __attribute__((weak_import));
+extern struct {uint32_t stage, scans, frames, beacons, bss_seen; int last_err;} nw_wifi_stats __attribute__((weak_import));
 extern volatile uint32_t native_dpu_stats[20] __attribute__((weak_import));
 extern volatile uint32_t native_touch_jitter[3] __attribute__((weak_import));
 extern volatile uint32_t native_touch_hold[14] __attribute__((weak_import));
@@ -685,6 +688,19 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
           snprintf(row, sizeof row, "[wifi-mhi-ms] smmu-substep=%u last-smmu-access=%x buffers=%u found=%u read=%u smmu=%u sbl=%u ctx=%u end=%u", native_wifi_mhi[12], native_wifi_mhi_ms[7], native_wifi_mhi_ms[0], native_wifi_mhi_ms[1],
                    native_wifi_mhi_ms[2], native_wifi_mhi_ms[3], native_wifi_mhi_ms[4], native_wifi_mhi_ms[5], native_wifi_mhi_ms[6]);
           at = put(out, at, cap, row, sizeof row);
+        }
+      }
+      if (&native_wifi_text && native_wifi_text_n) {
+        if (&nw_wifi_stats) {
+          snprintf(row, sizeof row, "[wifi-nw] stage=%u scans=%u frames=%u beacons=%u networks=%u err=%d lines=%u", nw_wifi_stats.stage, nw_wifi_stats.scans, nw_wifi_stats.frames,
+                   nw_wifi_stats.beacons, nw_wifi_stats.bss_seen, nw_wifi_stats.last_err, native_wifi_text_n);
+          at = put(out, at, cap, row, sizeof row);
+        }
+        const uint32_t n = native_wifi_text_n;
+        for (uint32_t i = n > 44 ? n - 44 : 0; i < n; ++i) {
+          char line[124];
+          snprintf(line, sizeof line, "[wifi-log] %.110s", native_wifi_text[i % 96]);
+          at = put(out, at, cap, line, sizeof line);
         }
       }
       snprintf(row, sizeof row, "[wifi-pcie] pipe-halt=%08x perst=%08x dbg0@20ms=%x dbg1@20ms=%x pipe-mux=%x", native_wifi_pmic[17], native_wifi_pmic[18], native_wifi_pmic[19],
