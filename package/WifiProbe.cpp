@@ -575,7 +575,7 @@ void endpointLinkSetup(uint64_t sinkAddress) {
 
 // ---- Stage 6: the WiFi module (NativeWifi) on this board. It does its own chip power-up, MHI boot, QRTR/QMI and driver start; the board provides
 // register access, configuration space, DMA memory from the endpoint's SMMU window, firmware files from the container, a clock and a log.
-struct Arena {uint8_t *va; uint64_t iova; size_t bytes; struct Block {uint32_t off, size; bool used;} blocks[4096]; unsigned count;} gArena;
+struct Arena {uint8_t *va; uint64_t iova; size_t bytes; struct Block {uint32_t off, size; bool used;} blocks[16384]; unsigned count;} gArena;
 bool arenaInit() {
     if (&native_ufs_extra_va == nullptr || !native_ufs_extra_va || !native_ufs_extra_bytes) return false;
     gArena.va = native_ufs_extra_va; gArena.iova = native_ufs_extra_iova; gArena.bytes = native_ufs_extra_bytes;
@@ -598,7 +598,7 @@ void *arenaAlloc(size_t n, uint64_t *bus) {
         const uint32_t start = (b.off + align - 1) & ~(align - 1), pad = start - b.off;
         if (b.size < pad + n) continue;
         const bool tail = b.size > pad + n;
-        if (gArena.count + (pad ? 1 : 0) + (tail ? 1 : 0) > 4096) continue;
+        if (gArena.count + (pad ? 1 : 0) + (tail ? 1 : 0) > 16384) continue;
         const unsigned extra = (pad ? 1u : 0u) + (tail ? 1u : 0u);
         const Arena::Block whole = b;
         memmove(&gArena.blocks[i + extra], &gArena.blocks[i], (gArena.count - i) * sizeof(Arena::Block));
