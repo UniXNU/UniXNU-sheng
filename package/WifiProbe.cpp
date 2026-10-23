@@ -663,6 +663,9 @@ bool hasRddm(const char *s) {return has(s, "MHI_CB_EE_RDDM");}
 void pLog(int level, const char *line) {
     // one line per channel would push the start-up messages out of the ring
     if (has(line, "chan scan list") || has(line, "mac channel [")) {++gLogRepeats; return;}
+    // nor may the lines of every received buffer and interrupt (the beacon count is in [wifi-nw])
+    if (level >= 7 && (has(line, "htc rx completion") || has(line, "rx ce pipe") || has(line, "ext irq:") || has(line, "event mgmt rx") ||
+                       has(line, "mgmt rx event") || has(line, "chan info vdev_id") || has(line, "scan event foreign channel"))) {++gLogRepeats; return;}
     static uint64_t first;
     static uint32_t recent[16];
     uint32_t h = 2166136261u;
