@@ -89,6 +89,7 @@ extern char native_wifi_text[512][112] __attribute__((weak_import));
 extern volatile uint32_t native_wifi_text_n __attribute__((weak_import));
 extern int native_ufs_extra_fault(uint32_t *) __attribute__((weak_import));
 extern struct {uint32_t stage, scans, frames, beacons, bss_seen; int last_err;} nw_wifi_stats __attribute__((weak_import));
+extern volatile uint64_t nw_wifi_where[4] __attribute__((weak_import));
 extern volatile uint32_t native_dpu_stats[20] __attribute__((weak_import));
 extern volatile uint32_t native_touch_jitter[3] __attribute__((weak_import));
 extern volatile uint32_t native_touch_hold[14] __attribute__((weak_import));
@@ -697,6 +698,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
           snprintf(row, sizeof row, "[wifi-nw] stage=%u scans=%u frames=%u beacons=%u networks=%u err=%d lines=%u", nw_wifi_stats.stage, nw_wifi_stats.scans, nw_wifi_stats.frames,
                    nw_wifi_stats.beacons, nw_wifi_stats.bss_seen, nw_wifi_stats.last_err, native_wifi_text_n);
           at = put(out, at, cap, row, sizeof row);
+          if (&nw_wifi_where) {
+            snprintf(row, sizeof row, "[wifi-where] kind=%llu fn=%llx depth=%llu ms=%llu", (unsigned long long)nw_wifi_where[0], (unsigned long long)nw_wifi_where[1],
+                     (unsigned long long)nw_wifi_where[2], (unsigned long long)nw_wifi_where[3]);
+            at = put(out, at, cap, row, sizeof row);
+          }
           uint32_t f[10] = {0};
           if (&native_ufs_extra_fault && native_ufs_extra_fault(f)) {
             snprintf(row, sizeof row, "[wifi-smmu] gfsr=%08x cb-fsr=%08x far=%08x%08x fsynr0=%08x", f[0], f[2], f[4], f[3], f[5]);

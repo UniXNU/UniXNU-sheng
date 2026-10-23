@@ -655,8 +655,11 @@ uint32_t gLogRepeats;
 volatile uint32_t *gNwBar;   // the endpoint's registers, for the RAM dump reader
 void rddmScan();
 extern "C" int boot_log_export_put(uint32_t generation, uint32_t total, uint32_t offset, const void *data, uint32_t size) __attribute__((weak_import));
-bool hasRddm(const char *s) {static const char w[] = "MHI_CB_EE_RDDM"; for (; *s; ++s) {size_t k = 0; while (w[k] && s[k] == w[k]) ++k; if (!w[k]) return true;} return false;}
+bool has(const char *s, const char *w) {for (; *s; ++s) {size_t k = 0; while (w[k] && s[k] == w[k]) ++k; if (!w[k]) return true;} return false;}
+bool hasRddm(const char *s) {return has(s, "MHI_CB_EE_RDDM");}
 void pLog(int level, const char *line) {
+    // one line per channel would push the start-up messages out of the ring
+    if (has(line, "chan scan list") || has(line, "mac channel [")) {++gLogRepeats; return;}
     static uint64_t first;
     static uint32_t recent[16];
     uint32_t h = 2166136261u;
