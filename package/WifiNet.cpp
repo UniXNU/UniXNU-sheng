@@ -22,6 +22,7 @@
 #include <net/if_ether.h>
 #include <net/kpi_interface.h>
 #include <net/if_types.h>
+#include <netinet/in.h>
 #include <sys/mbuf.h>
 #include <kern/locks.h>
 #include <kern/thread.h>
@@ -152,6 +153,7 @@ errno_t if_output(ifnet_t, mbuf_t m) {
   if (length >= 14 && length <= 2000) {
     uint8_t frame[2000]; mbuf_copydata(m, 0, length, frame);
     if (nw_wifi_tx(frame, length)) log(6, "wifi-net: a frame was dropped (queue full)");
+    else ifnet_stat_increment_out(gIf, 1, static_cast<uint32_t>(length), 0);
   }
   mbuf_freem(m);
   return 0;
@@ -332,6 +334,18 @@ void publish_registry(const char *ifname) {
   controller->release();
 }
 
+// en0's IPv4 addresses and packet counts, for the log.
+void log_traffic() {
+  if (!gIf) return;
+  char text[64] = "none"; ifaddr_t *list = nullptr;
+  if (!ifnet_get_address_list_family(gIf, &list, AF_INET) && list) {
+    if (list[0]) { struct sockaddr_in a; memset(&a, 0, sizeof a);
+      if (!ifaddr_address(list[0], reinterpret_cast<struct sockaddr *>(&a), sizeof a)) { const uint8_t *b = reinterpret_cast<const uint8_t *>(&a.sin_addr); snprintf(text, sizeof text, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]); } }
+    ifnet_free_address_list(list); }
+  struct ifnet_stats_param stats; memset(&stats, 0, sizeof stats); ifnet_stat(gIf, &stats);
+  log(6, "wifi-net: en0 address %s, packets in %llu out %llu", text, static_cast<unsigned long long>(stats.packets_in), static_cast<unsigned long long>(stats.packets_out));
+}
+
 // Unattended testing: when the firmware container holds a file named join.txt (the network name on the first line, the key on the second) the
 // board joins that network by itself once a scan has found it, with the call the wireless daemon's join makes. Without the file nothing happens.
 void autoJoin(void *, wait_result_t) {
@@ -346,7 +360,8 @@ void autoJoin(void *, wait_result_t) {
   for (unsigned round = 0; round < 40; ++round) {
     IOSleep(3000);
     nw_wifi_status st; nw_wifi_status_get(&st);
-    if (st.state >= NW_STA_AUTH) { if (st.state == NW_STA_UP) break; continue; }
+    if (st.state == NW_STA_UP) { log_traffic(); continue; }   // the address the network configuration got, and the packets since
+    if (st.state >= NW_STA_AUTH) continue;
     bool found = false; nw_bss_info b;
     for (int i = 0, n = nw_wifi_bss_count(); i < n; ++i)
       if (!nw_wifi_bss_get(i, &b) && b.ssid_len == sl && !memcmp(b.ssid, ssid, sl)) { found = true; break; }
