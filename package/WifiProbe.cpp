@@ -16,6 +16,8 @@
 #include <kern/thread.h>
 #include <pexpert/pexpert.h>
 #include "WifiPcieTables.h"
+#include <string.h>
+#include "QcomRpmh.h"
 
 // [0] stage (1 mapped, 2 clocks read, 3 controller read; negative: the step that failed), [1] vote 0x52008, [2] vote 0x52000,
 // [3] GDSC, [4] halt bits (bit i set: branch i of kBranches is off), [5] GPIO 80 | 82 << 8 | 94 << 16 (bit 0 input level, bit 1 output),
@@ -23,7 +25,7 @@
 // Stage 2 steps in [0]: 10 WLAN_EN high, 11 GDSCs on, 12 clocks on, 13 PARF set up, 14 PHY ready and root port set up, 15 PERST# released, 16 link up,
 // 17 endpoint ID read. [10] GPIO word after WLAN_EN, [11] GDSC bits (bit 0 PCIe0, bit 1 PHY) | halt bits << 8, [12] PCS_STATUS1 |
 // PHY poll count << 16, [13] port debug 0 (LTSSM state in bits 0-5), [14] port debug 1, [15] endpoint vendor/device, [16] link ms
-extern "C" {volatile uint32_t native_wifi_stats[17];}
+extern "C" {volatile uint32_t native_wifi_stats[29];}
 
 namespace {
 constexpr uint64_t kGcc = 0x100000, kTlmm = 0xf100000, kParf = 0x1c00000, kDbi = 0x60000000, kPhy = 0x1c06000, kTcsrClkref = 0x1fd5000;
@@ -82,15 +84,107 @@ void pulseReset(volatile uint32_t *gcc, uint32_t bcr) {
     IODelay(1000);
 }
 
+// The WCN7850 PMU's six supplies are RPMh rails nothing else needs at boot, so nothing has turned them on. Each is a VRM resource of the
+// command database (smp<pmic id><n>, ldo<pmic id><n>) with its voltage in millivolts at +0 and its enable at +4. Two rails go in one active
+// request (four commands); the request's done flag is polled in the RSC's status register.
+struct Rail {const char *name; uint32_t millivolts;};
+constexpr Rail kRails[] = {{"ldob15", 1800}, {"smpg6", 1860}, {"smpg4", 1300}, {"smpe4", 950}, {"smpg5", 850}, {"smpg2", 850}};
+constexpr uint64_t kRscDrv = 0x17a20000, kRscTcs = 0xd00, kCmdDb = 0x81c60000, kCmdDbSize = 0x20000;
+
+// [20] bit i: rail i found in the command database and voted | 1 << (8 + i) request done; [21] RSC id | TCS << 24 (negative stage on failure)
+int powerRails() {
+    static uint8_t db[kCmdDbSize];
+    Window dbw = {}, rsc = {};
+    if (!mapWindow(dbw, kCmdDb, kCmdDbSize)) return -1;
+    for (uint64_t i = 0; i < kCmdDbSize; i += 4) {const uint32_t w = dbw.va[i / 4]; memcpy(db + i, &w, 4);}
+    release(dbw);
+    if (!mapWindow(rsc, kRscDrv, 0x10000)) return -2;
+    volatile uint32_t *r = rsc.va;
+    const QcomRscLayout layout = qcom_rsc_layout(r[0]);
+    int tcs = -1;
+    // apps_rsc qcom,tcs-config lists 3 wake, 2 active, 2 sleep TCSs in that order: the active ones are 3 and 4
+    for (unsigned t = 3; t < 5 && tcs < 0; ++t) if (r[(kRscTcs + layout.tcs_stride * t + layout.status) / 4]) tcs = (int)t;
+    native_wifi_stats[21] = r[0] | (tcs < 0 ? 0xffu : (uint32_t)tcs) << 24;
+    if (tcs < 0) {release(rsc); return -3;}
+    {
+        // a write that is not a request (command 0's data register, not enabled): does it read back? [26] pattern read back, [27] again
+        // for the IRQ enable register after setting this TCS's bit, [28] the DRV id register
+        volatile uint32_t *data = &r[(kRscTcs + layout.tcs_stride * tcs + layout.cmd_data) / 4];
+        *data = 0x5a5a1234;
+        __asm__ volatile("dsb sy" ::: "memory");
+        native_wifi_stats[26] = *data;
+        *data = 0;
+        r[kRscTcs / 4] |= 1u << tcs;
+        __asm__ volatile("dsb sy" ::: "memory");
+        native_wifi_stats[27] = r[kRscTcs / 4];
+        r[kRscTcs / 4] &= ~(1u << tcs);
+        native_wifi_stats[28] = r[0];
+    }
+    uint32_t result = 0;
+    for (unsigned first = 0; first < sizeof kRails / sizeof kRails[0]; first += 2) {
+        uint32_t addresses[4], values[4];
+        unsigned count = 0;
+        for (unsigned i = first; i < first + 2; ++i) {
+            QcomRpmhResource res;
+            if (qcom_cmd_db_find(db, sizeof db, kRails[i].name, &res)) continue;
+            addresses[count] = res.address;     values[count++] = kRails[i].millivolts;
+            addresses[count] = res.address + 4; values[count++] = 1;
+            result |= 1u << i;
+        }
+        if (!count) continue;
+        QcomRpmhWrite writes[16];
+        const unsigned n = qcom_rpmh_active_request(&layout, (unsigned)tcs, addresses, values, count, writes, 16);
+        if (!n) continue;
+        for (unsigned i = 0; i < n; ++i) r[(kRscTcs + writes[i].offset) / 4] = writes[i].value;
+        __asm__ volatile("dsb sy" ::: "memory");
+        if (first == 0) {
+            // right after the trigger: control, then what the first command's address and data registers hold (a write the hypervisor or
+            // secure world drops reads back as zero)
+            const uint32_t b = kRscTcs + layout.tcs_stride * tcs;
+            native_wifi_stats[25] = r[(b + layout.cmd_addr) / 4];
+            native_wifi_stats[24] = r[(b + layout.control) / 4];
+            native_wifi_stats[23] = r[(b + layout.cmd_data) / 4];
+        }
+        // Completion without the RSC's interrupt: the done bit only latches when the line is enabled, but the TCS reads idle again (its status
+        // register is non-zero, as tcs_is_free tests it) once the request went through.
+        const uint32_t bit = 1u << tcs;
+        IODelay(200);
+        unsigned polls = 0;
+        while (polls++ < 1000 && !r[(kRscTcs + layout.tcs_stride * tcs + layout.status) / 4] && !(r[(kRscTcs + layout.irq_status) / 4] & bit)) IODelay(100);
+        if (r[(kRscTcs + layout.tcs_stride * tcs + layout.status) / 4] || (r[(kRscTcs + layout.irq_status) / 4] & bit)) {
+            r[(kRscTcs + layout.irq_clear) / 4] = bit;
+            for (unsigned i = first; i < first + 2; ++i) result |= 1u << (8 + i);
+        }
+        native_wifi_stats[20] = result | polls << 16;
+        if (first == 0) {
+            // the first request's TCS afterwards: status, control, command enable, then the status of its first two commands
+            const uint32_t base = kRscTcs + layout.tcs_stride * tcs;
+            native_wifi_stats[22] = r[(base + layout.status) / 4] | r[(base + layout.cmd_enable) / 4] << 8 | r[(base + 0x40) / 4] << 16;
+        }
+        const unsigned m = qcom_rpmh_finish(&layout, (unsigned)tcs, writes, 16);
+        for (unsigned i = 0; i < m; ++i) r[(kRscTcs + writes[i].offset) / 4] = writes[i].value;
+    }
+    native_wifi_stats[20] = result;
+    release(rsc);
+    return 0;
+}
+
 // Stage 2; the step reached stays in native_wifi_stats[0], a negative value names the step that failed.
 void bringUp(Window &gcc, Window &tlmm) {
     volatile uint32_t *g = gcc.va, *t = tlmm.va;
+    const int rails = powerRails();
+    if (rails) {native_wifi_stats[0] = -9; return;}
+    IOSleep(5);
     // PERST# held low, CLKREQ# to its PCIe function, then WLAN_EN high and the WCN7850 power-up delay (pwrseq-qcom-wcn.c: 50 ms)
     setPin(t, kPerst, 1u | 1u << 9, 0);
     setPin(t, kClkReq, 3u | 1u << 2, -1);
     setPin(t, kWlanEn, 1u | 3u << 6 | 1u << 9, 1);
     IOSleep(60);
     native_wifi_stats[10] = pinWord(t);
+    // what the pin registers hold now (a write TZ or the hypervisor drops reads back as written-nothing)
+    native_wifi_stats[17] = (t[kWlanEn * 0x1000 / 4] & 0xffff) | t[(kWlanEn * 0x1000 + 4) / 4] << 16;
+    native_wifi_stats[18] = (t[kPerst * 0x1000 / 4] & 0xffff) | t[(kPerst * 0x1000 + 4) / 4] << 16;
+    native_wifi_stats[19] = (t[kClkReq * 0x1000 / 4] & 0xffff) | t[(kClkReq * 0x1000 + 4) / 4] << 16;
     native_wifi_stats[0] = 10;
 
     // both GDSCs are votable: a set bit in the collapse register (PCIe0 bit 0, PHY bit 3) keeps them collapsed
