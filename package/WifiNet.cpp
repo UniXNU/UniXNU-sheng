@@ -121,7 +121,12 @@ void on_connect_done(int result) {
   log(6, "wifi-net: join finished: module result %d", result);
   if (result == NW_RES_OK) { post_link(true); }
   post_event(kEvAssocDone, nullptr, 0);
-  if (result == NW_RES_OK) { post_event(kEvSsidChanged, nullptr, 0); post_event(kEvBssidChanged, nullptr, 0); }
+  if (result == NW_RES_OK) {
+    post_event(kEvSsidChanged, nullptr, 0); post_event(kEvBssidChanged, nullptr, 0);
+    nw_wifi_status st; nw_wifi_status_get(&st);
+    link_event ev; memset(&ev, 0, sizeof ev); ev.rssi = st.signal_dbm; ev.noise = static_cast<uint16_t>(-95); ev.snr = static_cast<uint16_t>(st.signal_dbm + 95);
+    post_event(kEvLinkChanged, &ev, sizeof ev);
+  }
 }
 void on_link_lost(int reason) {
   log(6, "wifi-net: link lost: reason %d", reason);
@@ -168,6 +173,16 @@ int copy_out(const apple80211req &rq, const void *src, size_t size) {
   if (rq.req_len == 0 || !rq.req_data) return EINVAL;
   return copyout(src, rq.req_data, rq.req_len < size ? rq.req_len : size);
 }
+// A get that gives no buffer takes a single value in req_val; one with a buffer gets {version, value}.
+int answer_value(apple80211req &rq, uint32_t value) {
+  if (rq.req_len == 0 || !rq.req_data) { rq.req_val = static_cast<int32_t>(value); return 0; }
+  const uint32_t w[2] = { 1, value }; return copyout(w, rq.req_data, rq.req_len < sizeof w ? rq.req_len : sizeof w);
+}
+// The raw bytes, their length in req_len.
+int answer_bytes(apple80211req &rq, const void *src, uint32_t size) {
+  if (!rq.req_data) return EINVAL;
+  const uint32_t n = rq.req_len < size ? rq.req_len : size; rq.req_len = size; return copyout(src, rq.req_data, n);
+}
 int copy_in(const apple80211req &rq, void *dst, size_t size) {
   if (!rq.req_data) return EINVAL;
   memset(dst, 0, size);
@@ -211,19 +226,26 @@ int apple80211(bool set, apple80211req &rq) {
   }
   switch (type) {
   case kPower: w[0] = 1; w[1] = 1; w[2] = gPower ? 1 : 0; return copy_out(rq, w, 24);
-  case kState: w[0] = 1; w[1] = static_cast<uint32_t>(gPower ? map_state(st.state) : 0); return copy_out(rq, w, 8);
-  case kOpMode: w[0] = 1; w[1] = 1; return copy_out(rq, w, 8);
+  case kState: return answer_value(rq, static_cast<uint32_t>(gPower ? map_state(st.state) : 0));
+  case kOpMode: return answer_value(rq, 1);   // station
+  case kPowerSave: return answer_value(rq, 0);
+  case kCardCaps: {   // a bitmap, bit n in byte n / 8: AES, AES-CCM, power management, short slot and preamble, WPA2, WME, short guard interval at 20 MHz
+    static const uint8_t has[] = { 2, 3, 6, 9, 10, 14, 17, 19 };
+    for (uint8_t b : has) out.raw[b / 8] |= static_cast<uint8_t>(1u << (b % 8));
+    return answer_bytes(rq, out.raw, 12); }
   case kPhyMode: w[0] = 1; w[1] = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20 | 0x40; w[2] = st.state == NW_STA_UP ? 0x8 : 0; return copy_out(rq, w, 12);
-  case kSsid: if (st.state < NW_STA_ASSOC) return ENOENT; w[0] = 1; w[1] = st.ssid_len; memcpy(out.raw + 8, st.ssid, 32); return copy_out(rq, w, 40);
-  case kBssid: if (st.state < NW_STA_ASSOC) return ENOENT; w[0] = 1; memcpy(out.raw + 4, st.bssid, 6); return copy_out(rq, w, 12);
+  case kSsid: if (st.state < NW_STA_ASSOC) return ENOENT; return answer_bytes(rq, st.ssid, st.ssid_len);
+  case kBssid: if (st.state < NW_STA_ASSOC) return ENOENT; return answer_bytes(rq, st.bssid, 6);
   case kChannel: if (st.state < NW_STA_AUTH) return ENOENT; w[0] = 1; fill_channel(*reinterpret_cast<channel *>(out.raw + 4), st.freq_mhz); return copy_out(rq, w, 16);
-  case kRssi: if (st.state != NW_STA_UP) return ENOENT; w[0] = 1; w[1] = 1; w[2] = static_cast<uint32_t>(static_cast<int32_t>(st.signal_dbm)); w[3] = w[2]; w[4] = w[2]; return copy_out(rq, w, 20);
-  case kNoise: w[0] = 1; w[1] = 1; w[2] = static_cast<uint32_t>(-95); w[3] = w[2]; w[4] = w[2]; return copy_out(rq, w, 20);
-  case kRate: w[0] = 1; w[1] = st.state == NW_STA_UP ? 54 : 0; return copy_out(rq, w, 8);
-  case kTxPower: w[0] = 1; w[1] = 15; return copy_out(rq, w, 8);
-  case kDriverVersion: case kHardwareVersion: { w[0] = 1; const char *v = type == kDriverVersion ? "nativewifi 1" : "WCN7850"; strlcpy(reinterpret_cast<char *>(out.raw + 4), v, 120); return copy_out(rq, w, 4 + 128); }
+  case kRssi: case kNoise: {   // {version, radios, unit (0: dBm), per chain[4], aggregate, extension per chain[4], its aggregate}
+    if (type == kRssi && st.state != NW_STA_UP) return ENOENT;
+    const uint32_t v = static_cast<uint32_t>(type == kRssi ? static_cast<int32_t>(st.signal_dbm) : -95);
+    w[0] = 1; w[1] = 1; w[2] = 0; for (int i = 3; i < 13; i++) w[i] = v; return copy_out(rq, w, 13 * 4); }
+  case kRate: return answer_value(rq, st.state == NW_STA_UP ? 54 : 0);
+  case kTxPower: return answer_value(rq, 15);
+  case kDriverVersion: case kHardwareVersion: { const char *v = type == kDriverVersion ? "nativewifi 1" : "WCN7850"; strlcpy(reinterpret_cast<char *>(out.raw), v, 256); return copy_out(rq, out.raw, 256); }
   case kCountryCode: w[0] = 1; out.raw[4] = 'X'; out.raw[5] = 'X'; return copy_out(rq, w, 12);
-  case kAssociateResult: w[0] = 1; w[1] = static_cast<uint32_t>(gAssocResult); return copy_out(rq, w, 8);
+  case kAssociateResult: return answer_value(rq, static_cast<uint32_t>(gAssocResult));
   case kSupportedChannels: case kHwSupportedChannels: {
     out.chans.version = 1; unsigned n = 0;
     static const uint16_t known[] = { 2412, 2417, 2422, 2427, 2432, 2437, 2442, 2447, 2452, 2457, 2462, 5180, 5200, 5220, 5240, 5745, 5765, 5785, 5805, 5825 };
@@ -252,8 +274,9 @@ errno_t if_ioctl(ifnet_t, unsigned long cmd, void *data) {
   case SIOCGIFMEDIA: {
     struct ifmediareq *m = static_cast<struct ifmediareq *>(data);
     nw_wifi_status st; nw_wifi_status_get(&st);
-    m->ifm_current = IFM_ETHER | IFM_AUTO; m->ifm_mask = 0; m->ifm_status = IFM_AVALID | (st.state == NW_STA_UP ? IFM_ACTIVE : 0);
-    m->ifm_active = IFM_ETHER | IFM_AUTO; m->ifm_count = 1;
+    // the framework lists wireless interfaces by this media type
+    m->ifm_current = IFM_IEEE80211 | IFM_AUTO; m->ifm_mask = 0; m->ifm_status = IFM_AVALID | (st.state == NW_STA_UP ? IFM_ACTIVE : 0);
+    m->ifm_active = IFM_IEEE80211 | IFM_AUTO; m->ifm_count = 1;
     return 0;
   }
   case SIOCSIFFLAGS: case SIOCSIFMTU: case SIOCADDMULTI: case SIOCDELMULTI: case SIOCSIFADDR: case SIOCSIFMEDIA: return 0;
@@ -268,15 +291,16 @@ class IO80211Controller : public IOService { OSDeclareDefaultStructors(IO80211Co
 OSDefineMetaClassAndStructors(IO80211Controller, IOService);
 class IONetworkInterface : public IOService { OSDeclareDefaultStructors(IONetworkInterface); };
 OSDefineMetaClassAndStructors(IONetworkInterface, IOService);
-class ShengWLAN : public IONetworkInterface {
-  OSDeclareDefaultStructors(ShengWLAN);
+// The system's network configuration and wireless daemon tell a wireless interface by its class name.
+class IO80211Interface : public IONetworkInterface {
+  OSDeclareDefaultStructors(IO80211Interface);
  public:
   IOReturn newUserClient(task_t, void *, UInt32 type, OSDictionary *, IOUserClient **) APPLE_KEXT_OVERRIDE {
     static unsigned said; if (said++ < 4) log(6, "wifi-net: a user client of type %u was asked for: none offered (ioctl path)", static_cast<unsigned>(type));
     return kIOReturnUnsupported;
   }
 };
-OSDefineMetaClassAndStructors(ShengWLAN, IONetworkInterface);
+OSDefineMetaClassAndStructors(IO80211Interface, IONetworkInterface);
 
 namespace {
 
@@ -290,7 +314,7 @@ IOService *publish(IOService *service, IOService *provider, const char *name) {
 void publish_registry(const char *ifname) {
   IOService *platform = IOService::getPlatform();
   IO80211Controller *controller = OSTypeAlloc(IO80211Controller);
-  ShengWLAN *wlan = OSTypeAlloc(ShengWLAN);
+  IO80211Interface *wlan = OSTypeAlloc(IO80211Interface);
   if (!platform || !controller || !wlan || !controller->init() || !wlan->init()) { OSSafeReleaseNULL(controller); OSSafeReleaseNULL(wlan); log(3, "wifi-net: registry objects not made"); return; }
   if (OSData *mac = OSData::withBytes(gMac, 6)) { controller->setProperty("IOMACAddress", mac); mac->release(); }
   controller->setProperty("IOBuiltin", true);
@@ -338,7 +362,7 @@ extern "C" void sheng_wifi_net_start(const uint8_t mac[6]) {
   memcpy(gMac, mac, 6);
   gGrp = lck_grp_alloc_init("sheng-wifi-net", LCK_GRP_ATTR_NULL); gLock = lck_mtx_alloc_init(gGrp, LCK_ATTR_NULL);
   struct ifnet_init_eparams p; memset(&p, 0, sizeof p);
-  p.ver = IFNET_INIT_CURRENT_VERSION; p.len = sizeof p; p.flags = IFNET_INIT_LEGACY; p.name = "en"; p.unit = 0; p.family = IFNET_FAMILY_ETHERNET; p.type = IFT_ETHER;
+  p.ver = IFNET_INIT_CURRENT_VERSION; p.len = sizeof p; p.flags = IFNET_INIT_LEGACY; p.name = "en"; p.unit = 0; p.family = IFNET_FAMILY_ETHERNET; p.subfamily = IFNET_SUBFAMILY_WIFI; p.type = IFT_ETHER;
   p.output = if_output; p.demux = ether_demux; p.add_proto = ether_add_proto; p.del_proto = ether_del_proto; p.check_multi = ether_check_multi; p.framer = ether_frameout;
   p.ioctl = if_ioctl; p.event = if_event_stub; static const uint8_t bcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }; p.broadcast_addr = bcast; p.broadcast_len = 6;
   ifnet_t ifp = nullptr; errno_t e = ifnet_allocate_extended(&p, &ifp);
