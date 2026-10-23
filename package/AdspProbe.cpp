@@ -232,7 +232,8 @@ int gTcs = -1;
 // Votes both rails to the given ARC index pair through an idle active TCS and waits for its done interrupt (100 ms).
 int vote(uint32_t lcx, uint32_t lmx) {
     if (gTcs < 0) {
-        for (unsigned t = 3; t < 5 && gTcs < 0; ++t) if (rd(gRsc, kRscTcs + gLayout.tcs_stride * t + gLayout.status)) gTcs = (int)t;
+        // the active TCSs are 0 to 2: tcs-config lists the active type first
+        for (unsigned t = 0; t < 3 && gTcs < 0; ++t) if (rd(gRsc, kRscTcs + gLayout.tcs_stride * t + gLayout.status)) gTcs = (int)t;
         if (gTcs < 0) return -16;
         gRscIrqBits = 1u << gTcs;
         wr(gRsc, kRscTcs + 0, rd(gRsc, kRscTcs + 0) | gRscIrqBits);  // IRQ_ENABLE for our TCS

@@ -75,6 +75,8 @@ extern volatile uint32_t native_adreno_export_stats[4] __attribute__((weak_impor
 extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import));
 extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
 extern volatile uint32_t native_wifi_stats[29] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_dump[108] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_pmic[472] __attribute__((weak_import));
 extern volatile uint32_t native_dpu_stats[20] __attribute__((weak_import));
 extern volatile uint32_t native_touch_jitter[3] __attribute__((weak_import));
 extern volatile uint32_t native_touch_hold[14] __attribute__((weak_import));
@@ -605,6 +607,40 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                native_wifi_stats[17], native_wifi_stats[18], native_wifi_stats[19], native_wifi_stats[20], native_wifi_stats[21], native_wifi_stats[22], native_wifi_stats[23], native_wifi_stats[24], native_wifi_stats[25],
                native_wifi_stats[26], native_wifi_stats[27], native_wifi_stats[28]);
     at = put(out, at, cap, row, sizeof row);
+    if (&native_wifi_dump && native_wifi_stats[20])
+      for (unsigned s = 0; s < 6; ++s) {
+        char dump[200];
+        int len = snprintf(dump, sizeof dump, "[wifi-tcs%u]", s);
+        for (unsigned w = 0; w < 18; ++w) len += snprintf(dump + len, sizeof dump - (unsigned)len, " %x", native_wifi_dump[s * 18 + w]);
+        at = put(out, at, cap, dump, sizeof dump);
+      }
+    if (&native_wifi_pmic && native_wifi_pmic[0]) {
+      char row[260];
+      snprintf(row, sizeof row, "[wifi-pmic] arb=%x apids=%u regs=%u/%u gpio3=%x before=%08x.%08x.%08x write=%x after=%08x.%08x.%08x", native_wifi_pmic[0],
+               native_wifi_pmic[1], native_wifi_pmic[2] & 0xffff, native_wifi_pmic[2] >> 16, native_wifi_pmic[3], native_wifi_pmic[4], native_wifi_pmic[5], native_wifi_pmic[6],
+               native_wifi_pmic[10], native_wifi_pmic[7], native_wifi_pmic[8], native_wifi_pmic[9]);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[wifi-rails] cmd-db addresses ldob15 smpg6 smpg4 smpe4 smpg5 smpg2: %x %x %x %x %x %x", native_wifi_pmic[11], native_wifi_pmic[12],
+               native_wifi_pmic[13], native_wifi_pmic[14], native_wifi_pmic[15], native_wifi_pmic[16]);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[wifi-rails] enabled-by-pmic-read=%x looked-at=%x last-wait-ms=%u total-ms=%u", native_wifi_pmic[22] & 0xff, native_wifi_pmic[22] >> 8 & 0xff,
+               native_wifi_pmic[22] >> 16, native_wifi_pmic[23]);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[wifi-pcie] pipe-halt=%08x perst=%08x dbg0@20ms=%x dbg1@20ms=%x pipe-mux=%x", native_wifi_pmic[17], native_wifi_pmic[18], native_wifi_pmic[19],
+               native_wifi_pmic[21], native_wifi_pmic[20]);
+      at = put(out, at, cap, row, sizeof row);
+      // every candidate regulator peripheral that exists, before and after the votes; v is the 0x41 0x40 pair
+      const unsigned nb = native_wifi_pmic[2] & 0xffff, na = native_wifi_pmic[2] >> 16;
+      for (unsigned i = 0; i < nb && i < 112; ++i) {
+        const uint32_t k0 = native_wifi_pmic[24 + 2 * i], v0 = native_wifi_pmic[25 + 2 * i];
+        uint32_t v1 = v0;
+        if (i < na && native_wifi_pmic[248 + 2 * i] == k0) v1 = native_wifi_pmic[249 + 2 * i];
+        char line[120];
+        snprintf(line, sizeof line, "[wifi-reg] ppid=%03x type=%x/%x before st=%02x en=%02x v=%02x%02x after st=%02x en=%02x", k0 >> 16, k0 >> 8 & 0xff, k0 & 0xff,
+                 v0 >> 24, v0 >> 16 & 0xff, v0 & 0xff, v0 >> 8 & 0xff, v1 >> 24, v1 >> 16 & 0xff);
+        at = put(out, at, cap, line, sizeof line);
+      }
+    }
   }
   // Display controller state (DisplayTimingProbe.cpp): per interface timing enable, config, counter enable, frame count then one second
   // later, line count, vsync period, status; then every pipe's size/address/stride/format and the CTLs.
