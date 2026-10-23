@@ -646,9 +646,22 @@ void arenaFree(void *p) {
 uint64_t pNow() {uint64_t ns = 0; absolutetime_to_nanoseconds(mach_absolute_time(), &ns); return ns / 1000000;}
 void pSleep(unsigned ms) {IOSleep(ms);}
 void pPoll() {}
+// Each line carries the milliseconds since the first one; a line equal to one of the last four is only counted, so that a message the driver
+// repeats every round cannot push the history out of the ring.
+uint32_t gLogRepeats;
 void pLog(int level, const char *line) {
+    static uint64_t first;
+    static uint32_t recent[4];
+    uint32_t h = 2166136261u;
+    for (const char *c = line; *c; ++c) h = (h ^ static_cast<uint8_t>(*c)) * 16777619u;
+    h ^= static_cast<uint32_t>(level);
+    for (uint32_t r : recent) if (r == h) {++gLogRepeats; return;}
+    memmove(&recent[1], &recent[0], sizeof recent - sizeof recent[0]);
+    recent[0] = h;
+    const uint64_t now = pNow();
+    if (!first) first = now;
     const uint32_t i = __atomic_fetch_add(const_cast<uint32_t *>(&native_wifi_text_n), 1u, __ATOMIC_RELAXED) % 96;
-    snprintf(native_wifi_text[i], sizeof native_wifi_text[i], "%d %.108s", level, line);
+    snprintf(native_wifi_text[i], sizeof native_wifi_text[i], "%u %d %.100s", static_cast<uint32_t>(now - first), level, line);
 }
 void pHalt() {for (;;) IOSleep(1000);}
 void *hAlloc(size_t n) {
