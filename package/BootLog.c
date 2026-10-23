@@ -84,7 +84,7 @@ extern volatile int32_t native_adsp_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_audio_stats[16] __attribute__((weak_import));
 extern char native_adsp_text[96] __attribute__((weak_import));
 extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
-extern volatile uint32_t native_swipe_stats[8] __attribute__((weak_import));
+extern volatile uint32_t native_swipe_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_vm_phase_us[2][8] __attribute__((weak_import));
@@ -599,7 +599,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_wifi_stats[1], native_wifi_stats[2], native_wifi_stats[3], native_wifi_stats[4], native_wifi_stats[5], native_wifi_stats[6],
              native_wifi_stats[7], native_wifi_stats[8], native_wifi_stats[9]);
     if (native_wifi_stats[0] >= 10 || (int)native_wifi_stats[0] <= -10)
-      snprintf(row + strlen(row), sizeof row - strlen(row), " pins=%06x pwr=%x pcs=%x dbg0=%x dbg1=%x ep=%08x ms=%u", native_wifi_stats[10],
+      snprintf(row + strlen(row), sizeof row - strlen(row), " pins=%06x pwr=%x pcs=%x dbg0=%x dbg1=%x ep=%08x ms=%u", native_wifi_stats[17],
                native_wifi_stats[11], native_wifi_stats[12], native_wifi_stats[13], native_wifi_stats[14], native_wifi_stats[15], native_wifi_stats[16]);
     at = put(out, at, cap, row, sizeof row);
   }
@@ -705,6 +705,10 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_swipe_stats[3], native_swipe_stats[4] / 1000, native_swipe_stats[4] % 1000, native_swipe_stats[5] / 1000,
              native_swipe_stats[5] % 1000, native_swipe_stats[6] / 1000, native_swipe_stats[6] % 1000, native_swipe_stats[7] / 1000,
              native_swipe_stats[7] % 1000);
+    at = put(out, at, cap, row, sizeof row);
+    snprintf(row, sizeof row, "[swipe2] heavy=%u.%03us controlcenter..%u.%03us notification..%u.%03us apps..%u.%03us", native_swipe_stats[16] / 1000,
+             native_swipe_stats[16] % 1000, native_swipe_stats[9] / 1000, native_swipe_stats[9] % 1000, native_swipe_stats[10] / 1000,
+             native_swipe_stats[10] % 1000, native_swipe_stats[11] / 1000, native_swipe_stats[11] % 1000);
     at = put(out, at, cap, row, sizeof row);
   }
   if (&native_adreno_map_fail && native_adreno_map_fail[0][1]) {

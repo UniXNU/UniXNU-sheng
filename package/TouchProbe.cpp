@@ -715,7 +715,7 @@ static void touchThread(void *, wait_result_t) {
 // Coordinates are published units (0.1 panel px, UI y = 20319 - raw y).
 // Tracking ids stay in the panel's own range (1..8): backboardd drops a path whose index reaches its MAX_PATH_COUNT (int-242: ids 200..219
 // were refused 5088 times, so the swipes never measured real touch handling).
-extern "C" {volatile uint32_t native_swipe_stats[8];}
+extern "C" {volatile uint32_t native_swipe_stats[16];}
 static void stroke(int id, int x0, int uiY0, int x1, int uiY1, unsigned frames) {
     nvt_contact c = {};
     c.tracking_id = id; c.peak = 100; c.area = 10; c.weight = 100;
@@ -749,7 +749,27 @@ static void swipeThread(void *parameter, wait_result_t) {
     pressHome();
     IOSleep(3000);
     native_swipe_stats[1] = touchMs();
-    for (unsigned n = 0; n < 24; ++n) {
+    // The blur-heavy scenes first (a page swipe alone is cheap): Control Center and Notification Center pulled down slowly from the top
+    // edge and dismissed with a swipe up from the bottom, then the Clock app opened and closed again.
+    native_swipe_stats[8] = touchMs();
+    for (unsigned n = 0; n < 4; ++n) {
+        stroke(1, 27500, 20, 27500, 9000, 40);  IOSleep(1500);   // Control Center: down from the top right
+        stroke(2, 15240, 20300, 15240, 10000, 24); IOSleep(1200);
+    }
+    native_swipe_stats[9] = touchMs();
+    for (unsigned n = 0; n < 4; ++n) {
+        stroke(1, 4500, 20, 4500, 12000, 40);  IOSleep(1500);   // Notification Center: down from the top left
+        stroke(2, 15240, 20300, 15240, 10000, 24); IOSleep(1200);
+    }
+    native_swipe_stats[10] = touchMs();
+    for (unsigned n = 0; n < 3; ++n) {
+        stroke(1, 3000, 3100, 3000, 3100, 10);   IOSleep(2500);   // open the Clock app
+        stroke(2, 15240, 20300, 15240, 12000, 30); IOSleep(2000);  // and leave it with the home swipe
+    }
+    pressHome();
+    native_swipe_stats[11] = touchMs();
+    IOSleep(1000);
+    for (unsigned n = 0; n < 8; ++n) {
         // 300 ms at 8 ms per frame between x 800 and 2200 px, at mid height.
         if (n & 1) stroke(1 + (int)(n & 7), 22000, 10160, 8000, 10160, 38);
         else stroke(1 + (int)(n & 7), 8000, 10160, 22000, 10160, 38);
@@ -758,7 +778,7 @@ static void swipeThread(void *parameter, wait_result_t) {
     }
     native_swipe_stats[4] = touchMs();
     stroke(1, 3000, 3100, 3000, 3100, 10);   // 80 ms tap on the Clock icon (300, 310 px)
-    IOSleep(12000);
+    IOSleep(6000);
     native_swipe_stats[5] = touchMs();
     stroke(2, 15240, 20300, 15240, 12000, 30);   // from the bottom edge up to two fifths of the height
     IOSleep(4000);
@@ -767,7 +787,7 @@ static void swipeThread(void *parameter, wait_result_t) {
     // page of a small home screen, 15 s there, then the home edge swipe back.
     native_swipe_stats[6] = touchMs();
     for (unsigned n = 0; n < 5; ++n) {stroke(3 + (int)n, 22000, 10160, 8000, 10160, 38); IOSleep(2500);}
-    IOSleep(15000);
+    IOSleep(6000);
     stroke(2, 15240, 20300, 15240, 12000, 30);
     native_swipe_stats[7] = touchMs();
     IOSleep(4000);
