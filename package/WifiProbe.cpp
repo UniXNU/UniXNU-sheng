@@ -617,6 +617,18 @@ void *arenaAlloc(size_t n, uint64_t *bus) {
     char line[96];
     snprintf(line, sizeof line, "dma window full: want %zu free %u largest %u blocks %u", n, freeTotal, freeMax, gArena.count);
     pLog(3, line);
+    // used blocks by size class: up to 4 KiB, 64 KiB, 512 KiB, larger (count and KiB)
+    uint32_t cnt[4] = {0, 0, 0, 0}, kib[4] = {0, 0, 0, 0}, big[4] = {0, 0, 0, 0};
+    for (unsigned i = 0; i < gArena.count; ++i) if (gArena.blocks[i].used) {
+        const uint32_t sz = gArena.blocks[i].size;
+        const unsigned c = sz <= 4096 ? 0 : sz <= 65536 ? 1 : sz <= 524288 ? 2 : 3;
+        ++cnt[c]; kib[c] += sz / 1024;
+        for (unsigned k = 0; k < 4; ++k) if (sz > big[k]) {for (unsigned m = 3; m > k; --m) big[m] = big[m - 1]; big[k] = sz; break;}
+    }
+    snprintf(line, sizeof line, "dma used: <=4K %u/%uK <=64K %u/%uK <=512K %u/%uK more %u/%uK", cnt[0], kib[0], cnt[1], kib[1], cnt[2], kib[2], cnt[3], kib[3]);
+    pLog(3, line);
+    snprintf(line, sizeof line, "dma largest used: %u %u %u %u", big[0], big[1], big[2], big[3]);
+    pLog(3, line);
     return nullptr;
 }
 void arenaFree(void *p) {
