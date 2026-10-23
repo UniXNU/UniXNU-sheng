@@ -85,7 +85,7 @@ extern volatile uint32_t native_wifi_ev[48] __attribute__((weak_import));
 extern volatile uint32_t native_wifi_ldo[24] __attribute__((weak_import));
 extern volatile uint32_t native_wifi_mhi[16] __attribute__((weak_import));
 extern volatile uint32_t native_wifi_mhi_ms[8] __attribute__((weak_import));
-extern char native_wifi_text[96][112] __attribute__((weak_import));
+extern char native_wifi_text[512][112] __attribute__((weak_import));
 extern volatile uint32_t native_wifi_text_n __attribute__((weak_import));
 extern struct {uint32_t stage, scans, frames, beacons, bss_seen; int last_err;} nw_wifi_stats __attribute__((weak_import));
 extern volatile uint32_t native_dpu_stats[20] __attribute__((weak_import));
@@ -696,12 +696,17 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                    nw_wifi_stats.beacons, nw_wifi_stats.bss_seen, nw_wifi_stats.last_err, native_wifi_text_n);
           at = put(out, at, cap, row, sizeof row);
         }
+        // the lines added since the last slot, at most 100 per slot; the rest wait for the next one while the ring still holds them
+        static uint32_t shown;
         const uint32_t n = native_wifi_text_n;
-        for (uint32_t i = n > 44 ? n - 44 : 0; i < n; ++i) {
+        uint32_t i = shown;
+        if (n - i > 512) i = n - 512;
+        for (uint32_t k = 0; i < n && k < 100; ++i, ++k) {
           char line[124];
-          snprintf(line, sizeof line, "[wifi-log] %.110s", native_wifi_text[i % 96]);
+          snprintf(line, sizeof line, "[wifi-log] %.110s", native_wifi_text[i % 512]);
           at = put(out, at, cap, line, sizeof line);
         }
+        shown = i;
       }
       snprintf(row, sizeof row, "[wifi-pcie] pipe-halt=%08x perst=%08x dbg0@20ms=%x dbg1@20ms=%x pipe-mux=%x", native_wifi_pmic[17], native_wifi_pmic[18], native_wifi_pmic[19],
                native_wifi_pmic[21], native_wifi_pmic[20]);

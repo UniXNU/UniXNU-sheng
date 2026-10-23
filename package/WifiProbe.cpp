@@ -66,8 +66,8 @@ volatile uint32_t native_wifi_mhi[16];
 // Milliseconds since the download started when: [0] the buffers were ready, [1] the container was found, [2] the image was read, [3] the SMMU stream was mapped,
 // [4] the boot loader was started, [5] the contexts were programmed, [6] the run ended.
 volatile uint32_t native_wifi_mhi_ms[8];
-// The WiFi module's messages: a ring of lines, newest at native_wifi_text_n - 1.
-char native_wifi_text[96][112]; volatile uint32_t native_wifi_text_n;}
+// The WiFi module's messages: a ring of 512 lines, newest at native_wifi_text_n - 1.
+char native_wifi_text[512][112]; volatile uint32_t native_wifi_text_n;}
 
 extern kmod_info_t g_kernel_kmod_info;
 extern "C" void native_wifi_net_static_init(void) __asm__("__GLOBAL__sub_I_WifiNet.cpp");
@@ -649,6 +649,7 @@ void pPoll() {}
 // Each line carries the milliseconds since the first one; a line equal to one of the last four is only counted, so that a message the driver
 // repeats every round cannot push the history out of the ring.
 uint32_t gLogRepeats;
+bool hasRddm(const char *s) {for (; *s; ++s) if (s[0] == 'R' && s[1] == 'D' && s[2] == 'D' && s[3] == 'M') return true; return false;}
 void pLog(int level, const char *line) {
     static uint64_t first;
     static uint32_t recent[4];
@@ -660,8 +661,18 @@ void pLog(int level, const char *line) {
     recent[0] = h;
     const uint64_t now = pNow();
     if (!first) first = now;
-    const uint32_t i = __atomic_fetch_add(const_cast<uint32_t *>(&native_wifi_text_n), 1u, __ATOMIC_RELAXED) % 96;
+    const uint32_t i = __atomic_fetch_add(const_cast<uint32_t *>(&native_wifi_text_n), 1u, __ATOMIC_RELAXED) % 512;
     snprintf(native_wifi_text[i], sizeof native_wifi_text[i], "%u %d %.100s", static_cast<uint32_t>(now - first), level, line);
+    // the first time the device reports its RAM dump state: did its DMA fault in the SMMU (global FSR, context FSR, FAR, FSYNR0)?
+    static bool faultShown;
+    if (!faultShown && &native_ufs_extra_fault && hasRddm(line)) {
+        faultShown = true;
+        uint32_t f[10] = {};
+        native_ufs_extra_fault(f);
+        char text[112];
+        snprintf(text, sizeof text, "smmu at rddm: gfsr %08x cb-fsr %08x far %08x%08x fsynr0 %08x sctlr %08x", f[0], f[2], f[4], f[3], f[5], f[6]);
+        pLog(3, text);
+    }
 }
 void pHalt() {for (;;) IOSleep(1000);}
 void *hAlloc(size_t n) {
