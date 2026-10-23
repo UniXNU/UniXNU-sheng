@@ -30,6 +30,7 @@
 #include "nw_abi.h"
 
 extern "C" void native_wifi_logf(int level, const char *fmt, ...);
+extern "C" int sheng_wifi_file(const char *name, const uint8_t **data, size_t *size);
 
 #define SIOCSA80211 0x802869c8UL   // _IOW('i', 200, struct apple80211req)
 #define SIOCGA80211 0xc02869c9UL   // _IOWR('i', 201, struct apple80211req)
@@ -303,13 +304,16 @@ void publish_registry(const char *ifname) {
   controller->release();
 }
 
-// Unattended testing: with the boot arguments sheng-wifi-ssid and sheng-wifi-psk the board joins that network by itself once a scan has found it
-// (the same call the wireless daemon's join makes). Without them nothing happens.
+// Unattended testing: when the firmware container holds a file named join.txt (the network name on the first line, the key on the second) the
+// board joins that network by itself once a scan has found it, with the call the wireless daemon's join makes. Without the file nothing happens.
 void autoJoin(void *, wait_result_t) {
   char ssid[33] = {}, psk[65] = {};
-  if (!PE_parse_boot_argn("sheng-wifi-ssid", ssid, sizeof ssid)) { thread_terminate(current_thread()); return; }
-  const bool hasPsk = PE_parse_boot_argn("sheng-wifi-psk", psk, sizeof psk);
-  const size_t sl = strlen(ssid), pl = strlen(psk);
+  const uint8_t *file = nullptr; size_t length = 0;
+  if (sheng_wifi_file("join.txt", &file, &length) || !file || !length) { thread_terminate(current_thread()); return; }
+  { size_t i = 0, o = 0; while (i < length && file[i] != '\n' && o < 32) ssid[o++] = static_cast<char>(file[i++]);
+    while (i < length && file[i] != '\n') ++i; ++i; o = 0;
+    while (i < length && file[i] != '\n' && o < 64) psk[o++] = static_cast<char>(file[i++]); }
+  const bool hasPsk = psk[0] != 0; const size_t sl = strlen(ssid), pl = strlen(psk);
   log(6, "wifi-net: auto join of a network with a %zu byte name and a %zu byte key", sl, pl);
   for (unsigned round = 0; round < 40; ++round) {
     IOSleep(3000);

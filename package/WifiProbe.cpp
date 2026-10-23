@@ -1408,6 +1408,9 @@ void wifiThread(void *arg, wait_result_t) {
 }
 }  // namespace
 
+// A file of the firmware container by name, for the board's own test hooks (not the driver).
+extern "C" int sheng_wifi_file(const char *name, const uint8_t **data, size_t *size) {return pFwGet(name, data, size);}
+
 extern "C" void sheng_wifi_probe(void) {
     unsigned stage = 0;
     if (!PE_parse_boot_argn("sheng-wifi", &stage, sizeof stage) || stage < 1 || native_wifi_stats[0]) return;
