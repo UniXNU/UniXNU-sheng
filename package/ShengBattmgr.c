@@ -1,0 +1,183 @@
+/* SPDX-License-Identifier: BSD-2-Clause-Patent */
+#include "ShengBattmgr.h"
+
+/* Battery properties: status 0, health 1, present 2, charge type 3, capacity 4 (hundredths of a percent), SOH 5, OCV 6, voltage now 7
+ * (uV), voltage max 8, current now 9 (uA), charge control limit 10/11, temperature 12, technology 13, charge counter 14 (uAh), cycle
+ * count 15, full design 16 (uAh), full 17 (uAh), model 18, time to full 19 (s), time to empty 20 (s). USB: online 0, voltage now 1
+ * (uV), voltage max 2, current now 3 (uA), current max 4, input current limit 5, type 6. */
+static const struct {uint8_t opcode, property, slow;} kFields[BmFields] = {
+    [BmStatus] = {SHENG_BATTMGR_OP_BATTERY_GET, 0, 0},
+    [BmPresent] = {SHENG_BATTMGR_OP_BATTERY_GET, 2, 0},
+    [BmCapacity] = {SHENG_BATTMGR_OP_BATTERY_GET, 4, 0},
+    [BmVoltage] = {SHENG_BATTMGR_OP_BATTERY_GET, 7, 0},
+    [BmCurrent] = {SHENG_BATTMGR_OP_BATTERY_GET, 9, 0},
+    [BmTemperature] = {SHENG_BATTMGR_OP_BATTERY_GET, 12, 0},
+    [BmCharge] = {SHENG_BATTMGR_OP_BATTERY_GET, 14, 0},
+    [BmUsbOnline] = {SHENG_BATTMGR_OP_USB_GET, 0, 0},
+    [BmUsbType] = {SHENG_BATTMGR_OP_USB_GET, 6, 0},
+    [BmUsbVoltage] = {SHENG_BATTMGR_OP_USB_GET, 1, 0},
+    [BmUsbCurrent] = {SHENG_BATTMGR_OP_USB_GET, 3, 0},
+    [BmTimeToEmpty] = {SHENG_BATTMGR_OP_BATTERY_GET, 20, 0},
+    [BmTimeToFull] = {SHENG_BATTMGR_OP_BATTERY_GET, 19, 0},
+    [BmFull] = {SHENG_BATTMGR_OP_BATTERY_GET, 17, 1},
+    [BmDesign] = {SHENG_BATTMGR_OP_BATTERY_GET, 16, 1},
+    [BmCycles] = {SHENG_BATTMGR_OP_BATTERY_GET, 15, 1},
+};
+#define NO_CYCLE 0xff
+
+static void put32(uint8_t *p, uint32_t v) {p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);}
+static uint32_t le32(const uint8_t *p) {return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;}
+static void header(uint8_t *out, uint32_t opcode)
+{
+    put32(out, SHENG_BATTMGR_OWNER);
+    put32(out + 4, SHENG_BATTMGR_TYPE_REQUEST);
+    put32(out + 8, opcode);
+}
+
+void sheng_battmgr_init(ShengBattmgr *b)
+{
+    for (unsigned i = 0; i < sizeof *b; ++i) ((uint8_t *)b)[i] = 0;
+    b->cursor = NO_CYCLE;
+}
+
+uint32_t sheng_battmgr_enable_request(uint8_t out[SHENG_BATTMGR_ENABLE_BYTES])
+{
+    header(out, SHENG_BATTMGR_OP_REQUEST_NOTIFICATION);
+    put32(out + 12, 0);    /* battery 0 */
+    put32(out + 16, 0);    /* power state */
+    put32(out + 20, 1);    /* low capacity notification threshold, percent */
+    put32(out + 24, 100);  /* high */
+    return SHENG_BATTMGR_ENABLE_BYTES;
+}
+
+static void skip_to_wanted(ShengBattmgr *b)
+{
+    while (b->cursor < BmFields && kFields[b->cursor].slow && !b->slow_due) b->cursor++;
+}
+
+static void advance(ShengBattmgr *b)
+{
+    b->in_flight = 0;
+    b->cursor++;
+    skip_to_wanted(b);
+}
+
+void sheng_battmgr_refresh(ShengBattmgr *b, int slow)
+{
+    if (b->cursor != NO_CYCLE) {b->refresh_wanted = 1 + (slow != 0); return;}
+    b->slow_due = slow || !(b->valid & (1u << BmFull));
+    b->cursor = 0;
+    b->in_flight = 0;
+    skip_to_wanted(b);
+}
+
+uint32_t sheng_battmgr_next(ShengBattmgr *b, uint8_t out[SHENG_BATTMGR_REQUEST_BYTES])
+{
+    if (b->cursor == NO_CYCLE || b->in_flight || b->cursor >= BmFields) return 0;
+    header(out, kFields[b->cursor].opcode);
+    put32(out + 12, 0);
+    put32(out + 16, kFields[b->cursor].property);
+    put32(out + 20, 0);
+    b->in_flight = 1;
+    return SHENG_BATTMGR_REQUEST_BYTES;
+}
+
+/* Ends the cycle when the cursor ran past the last field; starts the remembered one. Returns 1 when a cycle ended. */
+static int finish(ShengBattmgr *b)
+{
+    if (b->cursor == NO_CYCLE || b->cursor < BmFields) return 0;
+    b->cursor = NO_CYCLE;
+    b->cycles_done++;
+    if (b->refresh_wanted) {
+        const int slow = b->refresh_wanted == 2;
+        b->refresh_wanted = 0;
+        sheng_battmgr_refresh(b, slow);
+    }
+    return 1;
+}
+
+void sheng_battmgr_timeout(ShengBattmgr *b)
+{
+    if (b->cursor == NO_CYCLE || !b->in_flight) return;
+    b->timeouts++;
+    b->valid &= ~(1u << b->cursor);
+    advance(b);
+    finish(b);
+}
+
+int sheng_battmgr_receive(ShengBattmgr *b, const uint8_t *data, uint32_t length)
+{
+    if (length < 12 || le32(data) != SHENG_BATTMGR_OWNER) {b->ignored++; return BmIgnored;}
+    const uint32_t type = le32(data + 4), opcode = le32(data + 8);
+    if (opcode == SHENG_BATTMGR_OP_NOTIFICATION) {
+        b->notifications++;
+        sheng_battmgr_refresh(b, 0);
+        return BmNotified;
+    }
+    if (type != SHENG_BATTMGR_TYPE_REQUEST) {b->ignored++; return BmIgnored;}
+    if (opcode == SHENG_BATTMGR_OP_REQUEST_NOTIFICATION) {b->enabled = 1; return BmEnabled;}
+    if (b->cursor == NO_CYCLE || b->cursor >= BmFields || !b->in_flight || length < 24) {b->ignored++; return BmIgnored;}
+    const uint32_t property = le32(data + 12), value = le32(data + 16), result = le32(data + 20);
+    if (opcode != kFields[b->cursor].opcode || property != kFields[b->cursor].property) {b->ignored++; return BmIgnored;}
+    b->responses++;
+    if (result) {
+        b->errors++;
+        b->valid &= ~(1u << b->cursor);
+    } else {
+        b->value[b->cursor] = (int32_t)value;
+        b->valid |= 1u << b->cursor;
+    }
+    advance(b);
+    return finish(b) ? BmCycleDone : BmAnswer;
+}
+
+/* POWER_SUPPLY_USB_TYPE (unknown 0, SDP 1, DCP 2, CDP 3, ACA 4, C 5, PD 6, PD_DRP 7, PD_PPS 8) to the kIOPSFamilyCode values (the
+ * USB family's error space, 0xe0004000 + n: host 0, dedicated charging port 4, downstream charging port 5, unknown 7, Type-C 9, PD 10). */
+static uint32_t family(int type)
+{
+    switch (type) {
+    case 1: return 0xe0004000u;
+    case 2: return 0xe0004004u;
+    case 3: return 0xe0004005u;
+    case 5: return 0xe0004009u;
+    case 6: case 7: case 8: return 0xe000400au;
+    default: return 0xe0004007u;
+    }
+}
+
+void sheng_battmgr_snapshot(const ShengBattmgr *b, ShengBatterySnapshot *s)
+{
+#define HAS(f) ((b->valid >> (f)) & 1u)
+#define V(f) (b->value[(f)])
+    const int status = HAS(BmStatus) ? V(BmStatus) : 0;  /* POWER_SUPPLY_STATUS: 1 charging, 2 discharging, 3 not charging, 4 full */
+    s->present = HAS(BmPresent) ? V(BmPresent) != 0 : HAS(BmCapacity);
+    s->external = HAS(BmUsbOnline) && V(BmUsbOnline) != 0;
+    int percent = HAS(BmCapacity) ? (V(BmCapacity) + 50) / 100 : 0;
+    s->percent = percent < 0 ? 0 : percent > 100 ? 100 : percent;
+    s->charging = s->external && status == 1;
+    s->fully_charged = s->external && (status == 4 || s->percent == 100);
+    s->critical = s->present && !s->external && s->percent <= 2;
+    s->voltage_mv = HAS(BmVoltage) ? V(BmVoltage) / 1000 : 0;
+    s->current_ma = HAS(BmCurrent) ? V(BmCurrent) / 1000 : 0;
+    s->temperature = HAS(BmTemperature) ? V(BmTemperature) : 0;
+    s->raw_mah = HAS(BmCharge) ? V(BmCharge) / 1000 : 0;
+    s->full_mah = HAS(BmFull) ? V(BmFull) / 1000 : 0;
+    s->design_mah = HAS(BmDesign) ? V(BmDesign) / 1000 : 0;
+    s->cycles = HAS(BmCycles) ? V(BmCycles) : 0;
+    /* The gauge reports times in seconds, and a negative or huge value when it has none. */
+    s->time_to_empty_min = HAS(BmTimeToEmpty) && V(BmTimeToEmpty) > 0 && V(BmTimeToEmpty) < 100 * 3600 ? V(BmTimeToEmpty) / 60 : -1;
+    s->time_to_full_min = HAS(BmTimeToFull) && V(BmTimeToFull) > 0 && V(BmTimeToFull) < 100 * 3600 ? V(BmTimeToFull) / 60 : -1;
+    if (s->external) {
+        s->adapter_family = family(HAS(BmUsbType) ? V(BmUsbType) : 0);
+        s->adapter_mv = HAS(BmUsbVoltage) ? V(BmUsbVoltage) / 1000 : 0;
+        s->adapter_ma = HAS(BmUsbCurrent) ? V(BmUsbCurrent) / 1000 : 0;
+        if (s->adapter_mv < 0) s->adapter_mv = 0;
+        if (s->adapter_ma < 0) s->adapter_ma = -s->adapter_ma;
+        s->adapter_watts = (int)(((int64_t)s->adapter_mv * s->adapter_ma + 500000) / 1000000);
+    } else {
+        s->adapter_family = 0;
+        s->adapter_mv = s->adapter_ma = s->adapter_watts = 0;
+    }
+#undef HAS
+#undef V
+}

@@ -188,7 +188,7 @@ with (OUT / 'stderr.log').open('w') as errors:
             qmp('pmemsave', {'val': frame, 'size': rowbytes * height,
                             'filename': str(OUT / 'framebuffer.bin')})
             if '_boot_progress_panic_text' in names:
-                qmp('pmemsave', {'val': physical(names['_boot_progress_panic_text']), 'size': 256,
+                qmp('pmemsave', {'val': physical(names['_boot_progress_panic_text']), 'size': 2048,
                                 'filename': str(OUT / 'panic-text.bin')})
             registers = qmp('human-monitor-command', {'command-line': 'info registers'})
             (OUT / 'registers.txt').write_text(registers)

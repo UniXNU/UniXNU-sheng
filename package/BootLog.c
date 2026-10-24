@@ -29,7 +29,7 @@ extern char boot_progress_banner_text[49][120] __attribute__((weak_import));
 extern volatile unsigned boot_progress_banner_rows __attribute__((weak_import));
 extern char boot_progress_ext[8][48] __attribute__((weak_import));
 extern char boot_progress_ext_wide[2][112] __attribute__((weak_import));
-extern char boot_progress_panic_text[256] __attribute__((weak_import));
+extern char boot_progress_panic_text[2048] __attribute__((weak_import));
 extern volatile uint32_t native_data_persist_state __attribute__((weak_import));
 extern volatile uint32_t native_data_persist_header __attribute__((weak_import));
 extern volatile uint32_t native_data_persist_gpt __attribute__((weak_import));
@@ -51,6 +51,10 @@ extern volatile int native_gpu_addon2_stage __attribute__((weak_import));
 extern volatile int native_gpu_addon2_status __attribute__((weak_import));
 extern volatile int native_gpu_addon3_stage __attribute__((weak_import));
 extern volatile int native_gpu_addon3_status __attribute__((weak_import));
+extern volatile int native_cryptex_os_stage __attribute__((weak_import));
+extern volatile int native_cryptex_os_status __attribute__((weak_import));
+extern volatile int native_gestalt_cache_status __attribute__((weak_import));
+extern volatile int native_ls_store_status __attribute__((weak_import));
 extern volatile uint64_t native_data_persist_present __attribute__((weak_import));
 extern volatile int native_staged_apps_stage __attribute__((weak_import));
 extern volatile int32_t native_buttons_stats[10] __attribute__((weak_import));
@@ -67,11 +71,41 @@ extern unsigned boot_ui_trace_hot_rows(char [][120], unsigned) __attribute__((we
 extern unsigned long vm_kernel_slide;
 extern volatile uint64_t native_gop_wait_stats[7] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_fence_wait[8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_stall[24] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_stall_mem[59] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_unstick[15] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_wait_outer[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_export_stats[4] __attribute__((weak_import));
 extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import));
 extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
-extern volatile uint32_t native_wifi_stats[10] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_stats[29] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_dump[108] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_pmic[472] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_ep[16] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_pon[12] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_cfg[32] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_chip[16] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_ev[48] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_ldo[24] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_mhi[16] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_mhi_ms[8] __attribute__((weak_import));
+extern char native_wifi_text[512][112] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_text_n __attribute__((weak_import));
+extern char native_wifi_note[128][112] __attribute__((weak_import));
+extern volatile uint32_t native_wifi_note_n __attribute__((weak_import));
+extern int native_ufs_extra_fault(uint32_t *) __attribute__((weak_import));
+extern struct {uint32_t stage, scans, frames, beacons, bss_seen; int last_err;} nw_wifi_stats __attribute__((weak_import));
+extern volatile uint64_t nw_wifi_where[4] __attribute__((weak_import));
+extern volatile uint32_t native_dpu_stats[20] __attribute__((weak_import));
+extern volatile uint32_t native_touch_jitter[3] __attribute__((weak_import));
+extern volatile uint32_t native_touch_hold[14] __attribute__((weak_import));
+extern char native_lookup_log[160][112] __attribute__((weak_import));
+extern volatile unsigned native_lookup_count __attribute__((weak_import));
+extern volatile uint32_t native_dpu_pipes[54] __attribute__((weak_import));
+extern volatile int32_t native_adsp_stats[16] __attribute__((weak_import));
+extern volatile int32_t native_audio_stats[16] __attribute__((weak_import));
+extern char native_adsp_text[96] __attribute__((weak_import));
+extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
 extern volatile uint32_t native_swipe_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
@@ -79,7 +113,9 @@ extern volatile uint64_t native_adreno_vm_phase_us[2][8] __attribute__((weak_imp
 extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wc_audit[6] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_submit_ibs[4] __attribute__((weak_import));
 extern volatile uint32_t native_touch_edge_stats[4] __attribute__((weak_import));
+extern volatile uint32_t native_touch_hid_multi[3] __attribute__((weak_import));
 extern volatile int32_t native_backlight_request[6] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_reassert_ticks __attribute__((weak_import));
 extern volatile uint64_t native_adreno_cache_stats[5] __attribute__((weak_import));
@@ -181,6 +217,7 @@ int boot_log_export_put(uint32_t generation, uint32_t total, uint32_t offset, co
   if (!half || !&native_ufs_export_write) status = -4;
   else if (total > (uint64_t)half * LogBlock) status = -5;
   else if (diag_owned) status = -7;
+  else if (export_ready & 0x80000000u) status = -10;   // a generation with the top bit set (a device's RAM dump) is kept
   if (!status && !export_stage) export_stage = (uint8_t *)IOMallocAligned(stage, LogBlock);
   if (!status && !export_stage) status = -2;
   if (!status && offset == 0) {
@@ -285,7 +322,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // The Data store's counters (NativeRamBlock), a row of their own: the ext slots they once shared are taken by other kits.
   if (&native_data_persist_state && native_data_persist_state) {
-    char row[160];
+    char row[400];
     snprintf(row, sizeof row, "D st=%u hdr=%u gpt=%x/%x lba=%llx pres=%llu ld=%llu wr=%llu cm=%llu er=%llu pages=%llu", native_data_persist_state,
              native_data_persist_header, native_data_persist_gpt, native_data_persist_gpt_after, (unsigned long long)native_data_persist_first_lba,
              (unsigned long long)native_data_persist_present, (unsigned long long)native_data_persist_loaded, (unsigned long long)native_data_persist_writes,
@@ -301,6 +338,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_gpu_addon_written, native_gpu_addon_same, native_gpu_addon_failed, native_gpu_addon_error, native_gpu_addon_stage,
              native_gpu_addon_status, native_gpu_addon2_stage, native_gpu_addon2_status, &native_gpu_addon3_stage ? native_gpu_addon3_stage : 0,
              &native_gpu_addon3_status ? native_gpu_addon3_status : 0);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // The OS cryptex path (kern_exec.c native_cryptex_os_view; stage 5 = a WebKit extension found through /System/Cryptexes/OS) and the
+  // removed MobileGestalt cache (0 removed, 2 none there).
+  if (&native_cryptex_os_stage && &native_gestalt_cache_status) {
+    char row[80];
+    snprintf(row, sizeof row, "[cryptex os] stage=%d status=%d gestalt-cache=%d ls-store=%d", native_cryptex_os_stage, native_cryptex_os_status,
+             native_gestalt_cache_status, &native_ls_store_status ? native_ls_store_status : -9);
     at = put(out, at, cap, row, sizeof row);
   }
   // The one-time copy of the OS volume's staged system apps into Data (kern_exec.c native_staged_apps_prepare): stage (2 copied, 3 copied
@@ -546,6 +591,20 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_touch_edge_stats[1], native_touch_edge_stats[2], native_touch_edge_stats[3]);
     at = put(out, at, cap, row, sizeof row);
   }
+  // Multi-finger reports (drivers/NativeHidInput): reports with two or more fingers down, the most at once, lifts of vanished fingers.
+  if (&native_touch_hid_multi) {
+    char row[80];
+    snprintf(row, sizeof row, "[touch multi] reports=%u max=%u lifts=%u", native_touch_hid_multi[0], native_touch_hid_multi[1],
+             native_touch_hid_multi[2]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // IBs per GPU submission: submissions, IBs, the most in one, and those with more than 16 (a frame used to be split at 16).
+  if (&native_adreno_submit_ibs) {
+    char row[120];
+    snprintf(row, sizeof row, "[gpu ibs] submissions=%u ibs=%u max=%u over16=%u", native_adreno_submit_ibs[0], native_adreno_submit_ibs[1],
+             native_adreno_submit_ibs[2], native_adreno_submit_ibs[3]);
+    at = put(out, at, cap, row, sizeof row);
+  }
   // The submissions' write-combine work: audits, IB lines compared and found dirty, pages set back to write-combined, the re-assertion's
   // total time, and the CPU cache maintenance passes (count, total ms, MiB).
   if (&native_adreno_wc_audit && &native_adreno_reassert_ticks && &native_adreno_cache_stats) {
@@ -574,10 +633,223 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // WiFi bring-up (WifiProbe.cpp): stage, GCC votes, PCIe0 GDSC, halted branches, WLAN_EN/SW_CTRL/PERST# pins, LTSSM, root port ID, link.
   if (&native_wifi_stats && native_wifi_stats[0]) {
-    char row[160];
+    char row[400];
     snprintf(row, sizeof row, "[wifi] st=%d v8=%x v0=%x gdsc=%x off=%x gpio=%06x ltssm=%x id=%08x lnk=%08x phy=%x", (int)native_wifi_stats[0],
              native_wifi_stats[1], native_wifi_stats[2], native_wifi_stats[3], native_wifi_stats[4], native_wifi_stats[5], native_wifi_stats[6],
              native_wifi_stats[7], native_wifi_stats[8], native_wifi_stats[9]);
+    if (native_wifi_stats[0] >= 10 || (int)native_wifi_stats[0] <= -10)
+      snprintf(row + strlen(row), sizeof row - strlen(row), " pins=%06x pwr=%x pcs=%x dbg0=%x dbg1=%x ep=%08x ms=%u wlan=%08x perst=%08x clkreq=%08x rails=%x rsc=%08x tcs=%x/%x/%x/%x rsctest=%x/%x/%x", native_wifi_stats[10],
+               native_wifi_stats[11], native_wifi_stats[12], native_wifi_stats[13], native_wifi_stats[14], native_wifi_stats[15], native_wifi_stats[16],
+               native_wifi_stats[17], native_wifi_stats[18], native_wifi_stats[19], native_wifi_stats[20], native_wifi_stats[21], native_wifi_stats[22], native_wifi_stats[23], native_wifi_stats[24], native_wifi_stats[25],
+               native_wifi_stats[26], native_wifi_stats[27], native_wifi_stats[28]);
+    at = put(out, at, cap, row, sizeof row);
+    if (&native_wifi_dump && native_wifi_stats[20])
+      for (unsigned s = 0; s < 6; ++s) {
+        char dump[200];
+        int len = snprintf(dump, sizeof dump, "[wifi-tcs%u]", s);
+        for (unsigned w = 0; w < 18; ++w) len += snprintf(dump + len, sizeof dump - (unsigned)len, " %x", native_wifi_dump[s * 18 + w]);
+        at = put(out, at, cap, dump, sizeof dump);
+      }
+    if (&native_wifi_pmic && native_wifi_pmic[0]) {
+      char row[260];
+      snprintf(row, sizeof row, "[wifi-pmic] arb=%x apids=%u regs=%u/%u gpio3=%x before=%08x.%08x.%08x write=%x after=%08x.%08x.%08x", native_wifi_pmic[0],
+               native_wifi_pmic[1], native_wifi_pmic[2] & 0xffff, native_wifi_pmic[2] >> 16, native_wifi_pmic[3], native_wifi_pmic[4], native_wifi_pmic[5], native_wifi_pmic[6],
+               native_wifi_pmic[10], native_wifi_pmic[7], native_wifi_pmic[8], native_wifi_pmic[9]);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[wifi-rails] cmd-db addresses ldob15 smpg6 smpg4 smpe4 smpg5 smpg2: %x %x %x %x %x %x", native_wifi_pmic[11], native_wifi_pmic[12],
+               native_wifi_pmic[13], native_wifi_pmic[14], native_wifi_pmic[15], native_wifi_pmic[16]);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[wifi-rails] enabled-by-pmic-read=%x looked-at=%x last-wait-ms=%u total-ms=%u", native_wifi_pmic[22] & 0xff, native_wifi_pmic[22] >> 8 & 0xff,
+               native_wifi_pmic[22] >> 16, native_wifi_pmic[23]);
+      at = put(out, at, cap, row, sizeof row);
+      if (&native_wifi_ldo && (native_wifi_ldo[0] || native_wifi_ldo[12])) {
+        snprintf(row, sizeof row, "[wifi-1v8] before: %08x/%08x %08x/%08x %08x/%08x %08x/%08x %08x/%08x %08x/%08x", native_wifi_ldo[0], native_wifi_ldo[1], native_wifi_ldo[2], native_wifi_ldo[3],
+                 native_wifi_ldo[4], native_wifi_ldo[5], native_wifi_ldo[6], native_wifi_ldo[7], native_wifi_ldo[8], native_wifi_ldo[9], native_wifi_ldo[10], native_wifi_ldo[11]);
+        at = put(out, at, cap, row, sizeof row);
+        snprintf(row, sizeof row, "[wifi-1v8] after: %08x/%08x %08x/%08x %08x/%08x %08x/%08x %08x/%08x %08x/%08x", native_wifi_ldo[12], native_wifi_ldo[13], native_wifi_ldo[14], native_wifi_ldo[15],
+                 native_wifi_ldo[16], native_wifi_ldo[17], native_wifi_ldo[18], native_wifi_ldo[19], native_wifi_ldo[20], native_wifi_ldo[21], native_wifi_ldo[22], native_wifi_ldo[23]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+      if (&native_wifi_cfg && (native_wifi_cfg[0] || native_wifi_cfg[8])) {
+        snprintf(row, sizeof row, "[wifi-cfg] first(at %u): ep=%08x cmd=%08x bar0=%08x bar1=%08x lnk=%08x dbg0=%08x mem=%08x rcmd=%08x | end: ep=%08x cmd=%08x bar0=%08x bar1=%08x lnk=%08x dbg0=%08x mem=%08x rcmd=%08x restored=%u",
+                 native_wifi_cfg[16], native_wifi_cfg[0], native_wifi_cfg[1], native_wifi_cfg[2], native_wifi_cfg[3], native_wifi_cfg[4], native_wifi_cfg[5], native_wifi_cfg[6], native_wifi_cfg[7],
+                 native_wifi_cfg[8], native_wifi_cfg[9], native_wifi_cfg[10], native_wifi_cfg[11], native_wifi_cfg[12], native_wifi_cfg[13], native_wifi_cfg[14], native_wifi_cfg[15], native_wifi_cfg[17]);
+        at = put(out, at, cap, row, sizeof row);
+        snprintf(row, sizeof row, "[wifi-smmu] gfsr=%x gfsynr0=%x cb-fsr=%x far=%x.%x fsynr0=%x sctlr=%x tcr=%x ttbr0=%x cbar=%x", native_wifi_cfg[18], native_wifi_cfg[19], native_wifi_cfg[20], native_wifi_cfg[22], native_wifi_cfg[21], native_wifi_cfg[23], native_wifi_cfg[24], native_wifi_cfg[25], native_wifi_cfg[26], native_wifi_cfg[27]);
+        at = put(out, at, cap, row, sizeof row);
+        snprintf(row, sizeof row, "[wifi-img] sum32(first 512K)=%u after=%u first-word=%08x size=%u", native_wifi_cfg[28], native_wifi_cfg[30], native_wifi_cfg[29], native_wifi_cfg[31]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+      if (&native_wifi_ev) for (unsigned k = 0; k < 2; ++k) {
+        volatile uint32_t *e = native_wifi_ev + 24 * k;
+        if (!e[8] && !e[0] && !e[12] && !e[13] && !e[18]) continue;
+        snprintf(row, sizeof row, "[wifi-ev%u] er0: %08x %08x %08x %08x | %08x %08x %08x %08x er1: %08x %08x %08x %08x ctx rp/wp: %x/%x %x/%x sink: %08x %08x bhie: addrlo=%x hi=%x size=%x db=%x status=%x", k,
+                 e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[8], e[9], e[10], e[11], e[12], e[13], e[14], e[15], e[16], e[17], e[18], e[19], e[20], e[22], e[23]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+      if (&native_wifi_chip && native_wifi_chip[0]) {
+        snprintf(row, sizeof row, "[wifi-chip] ltssm=%x hotrst=%x cookie=%x warm=%x warm-after=%x cause=%x global-before=%x after=%x mhistatus=%x->%x ee=%x aspm-ctl=%x msi-ctl=%x",
+                 native_wifi_chip[0], native_wifi_chip[1], native_wifi_chip[2], native_wifi_chip[3], native_wifi_chip[4], native_wifi_chip[5], native_wifi_chip[6], native_wifi_chip[7],
+                 native_wifi_chip[8], native_wifi_chip[9], native_wifi_chip[10], native_wifi_chip[11], native_wifi_chip[12]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+      if (&native_wifi_pon && native_wifi_pon[0]) {
+        snprintf(row, sizeof row, "[wifi-pon] ppid/owner=%x bytes08..27=%08x %08x %08x %08x %08x %08x %08x %08x sn7=%08x sid=%08x", native_wifi_pon[0], native_wifi_pon[1], native_wifi_pon[2],
+                 native_wifi_pon[3], native_wifi_pon[4], native_wifi_pon[5], native_wifi_pon[6], native_wifi_pon[7], native_wifi_pon[8], native_wifi_pon[9], native_wifi_pon[10]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+      if (&native_wifi_ep && native_wifi_ep[0]) {
+        snprintf(row, sizeof row, "[wifi-ep] st=%u bar0-mask=%08x bar0=%08x cmd=%08x rp-mem=%08x mhi: len=%x ver=%x cfg=%x bhioff=%x bhieoff=%x ctrl=%x status=%x bhi: ver=%x exec=%x st=%x err=%x",
+                 native_wifi_ep[0], native_wifi_ep[1], native_wifi_ep[2], native_wifi_ep[3], native_wifi_ep[4], native_wifi_ep[5], native_wifi_ep[6], native_wifi_ep[7],
+                 native_wifi_ep[8], native_wifi_ep[9], native_wifi_ep[10], native_wifi_ep[11], native_wifi_ep[12], native_wifi_ep[13], native_wifi_ep[14], native_wifi_ep[15]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+      if (&native_wifi_mhi && native_wifi_mhi[0]) {
+        snprintf(row, sizeof row, "[wifi-mhi] step=%d smmu=%x part=%x amss=%u segs=%u boot=%x ee=%x state=%x bhi-status=%x bhi-err=%x dbg=%x.%x.%x mhistatus=%x ms=%u bhie=%x",
+                 (int)native_wifi_mhi[0], native_wifi_mhi[1], native_wifi_mhi[2], native_wifi_mhi[3], native_wifi_mhi[4], native_wifi_mhi[5], native_wifi_mhi[6], native_wifi_mhi[7],
+                 native_wifi_mhi[8], native_wifi_mhi[9], native_wifi_mhi[10], native_wifi_mhi[11], native_wifi_mhi[12], native_wifi_mhi[13], native_wifi_mhi[14], native_wifi_mhi[15]);
+        at = put(out, at, cap, row, sizeof row);
+        if (&native_wifi_mhi_ms) {
+          snprintf(row, sizeof row, "[wifi-mhi-ms] smmu-substep=%u last-smmu-access=%x buffers=%u found=%u read=%u smmu=%u sbl=%u ctx=%u end=%u", native_wifi_mhi[12], native_wifi_mhi_ms[7], native_wifi_mhi_ms[0], native_wifi_mhi_ms[1],
+                   native_wifi_mhi_ms[2], native_wifi_mhi_ms[3], native_wifi_mhi_ms[4], native_wifi_mhi_ms[5], native_wifi_mhi_ms[6]);
+          at = put(out, at, cap, row, sizeof row);
+        }
+      }
+      if (&native_wifi_text && native_wifi_text_n) {
+        if (&nw_wifi_stats) {
+          snprintf(row, sizeof row, "[wifi-nw] stage=%u scans=%u frames=%u beacons=%u networks=%u err=%d lines=%u", nw_wifi_stats.stage, nw_wifi_stats.scans, nw_wifi_stats.frames,
+                   nw_wifi_stats.beacons, nw_wifi_stats.bss_seen, nw_wifi_stats.last_err, native_wifi_text_n);
+          at = put(out, at, cap, row, sizeof row);
+          if (&nw_wifi_where) {
+            snprintf(row, sizeof row, "[wifi-where] kind=%llu fn=%llx depth=%llu ms=%llu", (unsigned long long)nw_wifi_where[0], (unsigned long long)nw_wifi_where[1],
+                     (unsigned long long)nw_wifi_where[2], (unsigned long long)nw_wifi_where[3]);
+            at = put(out, at, cap, row, sizeof row);
+          }
+          uint32_t f[10] = {0};
+          if (&native_ufs_extra_fault && native_ufs_extra_fault(f)) {
+            snprintf(row, sizeof row, "[wifi-smmu] gfsr=%08x cb-fsr=%08x far=%08x%08x fsynr0=%08x", f[0], f[2], f[4], f[3], f[5]);
+            at = put(out, at, cap, row, sizeof row);
+          }
+        }
+        // the lines added since the last slot, at most 100 per slot; the rest wait for the next one while the ring still holds them
+        static uint32_t shown;
+        const uint32_t n = native_wifi_text_n;
+        uint32_t i = shown;
+        if (n - i > 512) i = n - 512;
+        for (uint32_t k = 0; i < n && k < 100; ++i, ++k) {
+          char line[124];
+          snprintf(line, sizeof line, "[wifi-log] %.110s", native_wifi_text[i % 512]);
+          at = put(out, at, cap, line, sizeof line);
+        }
+        shown = i;
+        // the notices among them, which the debug lines cannot push out of their own ring: at most 40 new ones per slot
+        if (&native_wifi_note) {
+          static uint32_t noted;
+          const uint32_t m = native_wifi_note_n;
+          uint32_t j = noted;
+          if (m - j > 128) j = m - 128;
+          for (uint32_t k = 0; j < m && k < 40; ++j, ++k) {
+            char line[124];
+            snprintf(line, sizeof line, "[wifi-msg] %.110s", native_wifi_note[j % 128]);
+            at = put(out, at, cap, line, sizeof line);
+          }
+          noted = j;
+        }
+      }
+      snprintf(row, sizeof row, "[wifi-pcie] pipe-halt=%08x perst=%08x dbg0@20ms=%x dbg1@20ms=%x pipe-mux=%x", native_wifi_pmic[17], native_wifi_pmic[18], native_wifi_pmic[19],
+               native_wifi_pmic[21], native_wifi_pmic[20]);
+      at = put(out, at, cap, row, sizeof row);
+      // every candidate regulator peripheral that exists, before and after the votes; v is the 0x41 0x40 pair
+      const unsigned nb = native_wifi_pmic[2] & 0xffff, na = native_wifi_pmic[2] >> 16;
+      for (unsigned i = 0; i < nb && i < 112; ++i) {
+        const uint32_t k0 = native_wifi_pmic[24 + 2 * i], v0 = native_wifi_pmic[25 + 2 * i];
+        uint32_t v1 = v0;
+        if (i < na && native_wifi_pmic[248 + 2 * i] == k0) v1 = native_wifi_pmic[249 + 2 * i];
+        char line[120];
+        snprintf(line, sizeof line, "[wifi-reg] ppid=%03x type=%x/%x before st=%02x en=%02x v=%02x%02x after st=%02x en=%02x", k0 >> 16, k0 >> 8 & 0xff, k0 & 0xff,
+                 v0 >> 24, v0 >> 16 & 0xff, v0 & 0xff, v0 >> 8 & 0xff, v1 >> 24, v1 >> 16 & 0xff);
+        at = put(out, at, cap, line, sizeof line);
+      }
+    }
+  }
+  // Display controller state (DisplayTimingProbe.cpp): per interface timing enable, config, counter enable, frame count then one second
+  // later, line count, vsync period, status; then every pipe's size/address/stride/format and the CTLs.
+  if (&native_dpu_stats && &native_dpu_pipes && native_dpu_stats[0]) {
+    char row[200];
+    const volatile uint32_t *d = native_dpu_stats, *p = native_dpu_pipes;
+    snprintf(row, sizeof row, "[dpu] st=%d hw=%x us=%u i1 en=%x cfg=%x cnt=%x f=%u..%u ln=%u vp=%u s=%x i2 en=%x cfg=%x cnt=%x f=%u..%u ln=%u vp=%u s=%x",
+             (int)d[0], d[1], d[18], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15], d[16], d[17]);
+    at = put(out, at, cap, row, sizeof row);
+    for (int half = 0; half < 2; ++half) {
+      int n = snprintf(row, sizeof row, "[dpu pipes%d]", half);
+      for (int i = half * 5; i < half * 5 + 5 && n < (int)sizeof row; ++i)
+        n += snprintf(row + n, sizeof row - n, " %x/%x/%x/%x", p[4 * i], p[4 * i + 1], p[4 * i + 2], p[4 * i + 3]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    snprintf(row, sizeof row, "[dpu ctl] fb=%x%08x %x/%x/%x %x/%x/%x %x/%x/%x %x/%x/%x", p[41], p[40], p[42], p[43], p[44], p[45], p[46], p[47],
+             p[48], p[49], p[50], p[51], p[52], p[53]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // Touch noise before the fuzz filter: resting or slow frames, mean step (x + y) and largest single-axis step, in 0.1 px.
+  if (&native_touch_hold && native_touch_hold[7]) {
+    char row[200];
+    snprintf(row, sizeof row, "[touch hold] bridged=%u lifts none=%u far=%u weak=%u palm=%u taken=%u frames t2=%u t4=%u merges=%u peaks=%u full=%u ref=%u",
+             native_touch_hold[0], native_touch_hold[1], native_touch_hold[2], native_touch_hold[3], native_touch_hold[4], native_touch_hold[5],
+             native_touch_hold[6], native_touch_hold[7], native_touch_hold[10], native_touch_hold[11], native_touch_hold[12], native_touch_hold[13]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  if (&native_touch_jitter && native_touch_jitter[0]) {
+    char row[128];
+    snprintf(row, sizeof row, "[touch jitter] frames=%u mean=%u max=%u smoothed mean=%u max=%u (0.1 px)", native_touch_jitter[0],
+             native_touch_jitter[1] / native_touch_jitter[0], native_touch_jitter[2], &native_touch_hold ? native_touch_hold[8] / native_touch_jitter[0] : 0,
+             &native_touch_hold ? native_touch_hold[9] : 0);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // Distinct path lookups that failed for MobileSafari (S) and lsd (L): errno and path, in the order they first failed.
+  if (&native_lookup_count && native_lookup_count) {
+    char row[128];
+    const unsigned n = native_lookup_count < 160 ? native_lookup_count : 160;
+    snprintf(row, sizeof row, "[safari lookups] failed=%u", native_lookup_count);
+    at = put(out, at, cap, row, sizeof row);
+    for (unsigned i = 0; i < n; ++i) {
+      snprintf(row, sizeof row, "SL%u %s", i, native_lookup_log[i]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // Audio DSP bring-up (AdspProbe.cpp): stage and error, IPCC interrupts, the DSP's slave-kernel bits, SMEM items, AOSS mailbox, RSC id,
+  // adsp.mbn KiB, ms to ready, GLINK messages in/out, channels up, opens nobody serves, last SCM result, rail votes; then its note.
+  if (&native_adsp_stats && native_adsp_stats[0]) {
+    char row[200];
+    snprintf(row, sizeof row, "[adsp] st=%d err=%d irq=%d slave=%x items=%x qmp=%x rsc=%x fw=%dK rdy=%dms rx=%d tx=%d ch=%x unk=%d scm=%d/%x votes=%x",
+             native_adsp_stats[0], native_adsp_stats[1], native_adsp_stats[2], native_adsp_stats[3], native_adsp_stats[4], native_adsp_stats[5],
+             native_adsp_stats[6], native_adsp_stats[7], native_adsp_stats[8], native_adsp_stats[9], native_adsp_stats[10], native_adsp_stats[11],
+             native_adsp_stats[12], native_adsp_stats[13], native_adsp_stats[14], native_adsp_stats[15]);
+    at = put(out, at, cap, row, sizeof row);
+    if (&native_adsp_text && native_adsp_text[0]) {
+      snprintf(row, sizeof row, "[adsp] %.95s", native_adsp_text);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // Battery power source (ShengBattery.cpp): stage, percent, mV, mA, temperature (raw), flags (present, external, charging, full,
+  // notifications on), refresh cycles, answers, timeouts|errors<<16, notifications, USB type, full/design mAh, cycles, dropped|ignored<<16,
+  // send refusals.
+  if (&native_battery_stats && native_battery_stats[0]) {
+    char row[200];
+    snprintf(row, sizeof row, "[battery] st=%d pct=%d mv=%d ma=%d temp=%d fl=%x cyc=%d ans=%d to=%x ntf=%d usb=%d full=%d design=%d cycles=%d drop=%x refuse=%d",
+             native_battery_stats[0], native_battery_stats[1], native_battery_stats[2], native_battery_stats[3], native_battery_stats[4],
+             native_battery_stats[5], native_battery_stats[6], native_battery_stats[7], native_battery_stats[8], native_battery_stats[9],
+             native_battery_stats[10], native_battery_stats[11], native_battery_stats[12], native_battery_stats[13], native_battery_stats[14],
+             native_battery_stats[15]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // Audio framework readiness over the packet router channel (AudioProbe.cpp): stage (5 ready), queries, answers, last status, refusals,
+  // timeouts, ignored packets, ms from channel up to ready, channel ups/downs, last opcode, ring drops, send refusals, mode.
+  if (&native_audio_stats && native_audio_stats[0]) {
+    char row[200];
+    snprintf(row, sizeof row, "[audio] st=%d q=%d ans=%d status=%d refused=%d to=%d ign=%d rdy=%dms up=%d down=%d op=%x drop=%d sendfail=%d mode=%d",
+             native_audio_stats[0], native_audio_stats[1], native_audio_stats[2], native_audio_stats[3], native_audio_stats[4], native_audio_stats[5],
+             native_audio_stats[6], native_audio_stats[7], native_audio_stats[8], native_audio_stats[9], native_audio_stats[10], native_audio_stats[11],
+             native_audio_stats[12], native_audio_stats[13]);
     at = put(out, at, cap, row, sizeof row);
   }
   // Touch strokes in panel pixels as the digitizer published them (y mirrored, 0 = the edge the UI calls top): where each finger came
@@ -603,8 +875,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_swipe_stats[5] % 1000, native_swipe_stats[6] / 1000, native_swipe_stats[6] % 1000, native_swipe_stats[7] / 1000,
              native_swipe_stats[7] % 1000);
     at = put(out, at, cap, row, sizeof row);
-    snprintf(row, sizeof row, "[swipe2] heavy=%u.%03us controlcenter..%u.%03us notification..%u.%03us apps..%u.%03us", native_swipe_stats[8] / 1000,
-             native_swipe_stats[8] % 1000, native_swipe_stats[9] / 1000, native_swipe_stats[9] % 1000, native_swipe_stats[10] / 1000,
+    snprintf(row, sizeof row, "[swipe2] heavy=%u.%03us controlcenter..%u.%03us notification..%u.%03us apps..%u.%03us", native_swipe_stats[16] / 1000,
+             native_swipe_stats[16] % 1000, native_swipe_stats[9] / 1000, native_swipe_stats[9] % 1000, native_swipe_stats[10] / 1000,
              native_swipe_stats[10] % 1000, native_swipe_stats[11] / 1000, native_swipe_stats[11] % 1000);
     at = put(out, at, cap, row, sizeof row);
   }
@@ -636,6 +908,41 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       snprintf(row, sizeof row, "[fence wait] outer waits=%llu us=%llu pauses outside the lock=%llu longest=%lluus",
                (unsigned long long)native_adreno_wait_outer[0], (unsigned long long)native_adreno_wait_outer[1],
                (unsigned long long)native_adreno_wait_outer[2], (unsigned long long)native_adreno_wait_outer[3]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // The CP's registers once a fence stopped advancing: RBBM status 0-3, interrupt, CP fault, status 1, protect, ring rptr/wptr,
+  // IB1 base/rem, IB2 base/rem, BV rptr, BV IB1 base/rem, BV IB2 rem, BV IB2 base.
+  if (&native_adreno_unstick && native_adreno_unstick[0]) {
+    char row[200];
+    // [0] write-pointer retries, [1] fence of the last, [2] translation drops, [4] bus drains with ack [5]/[6], [9..11] stalls that ended after
+    // the write pointer / translations / drain stage, [12] the most timeouts one stall took, [13] a wait's timeout in us.
+    snprintf(row, sizeof row, "[gpu unstick] kick=%u last=%u tlb=%u drain=%u ack=%x/%x ended: kick=%u tlb=%u drain=%u longest=%u unit=%uus",
+             native_adreno_unstick[0], native_adreno_unstick[1], native_adreno_unstick[2], native_adreno_unstick[4],
+             native_adreno_unstick[5], native_adreno_unstick[6], native_adreno_unstick[9], native_adreno_unstick[10],
+             native_adreno_unstick[11], native_adreno_unstick[12], native_adreno_unstick[13]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  if (&native_adreno_stall && native_adreno_stall[0]) {
+    char row[240];
+    int n = snprintf(row, sizeof row, "[gpu stall] fence=%u n=%u", native_adreno_stall[0], native_adreno_stall[1]);
+    for (unsigned k = 2; k < 24 && n > 0 && (size_t)n < sizeof row; ++k) n += snprintf(row + n, sizeof row - n, " %x", native_adreno_stall[k]);
+    at = put(out, at, cap, row, sizeof row);
+    // SMMU FSR, FAR lo/hi, FSYNR0, then for the BR IB1, BV IB1 and BV IB2: the dword index in the IB where the 16 words start
+    // (ffff00NN: NN words before the fetch address, the IB start being unknown), then 16 words; deadbeef = not readable.
+    if (&native_adreno_stall_mem)
+      for (unsigned part = 0; part < 4; ++part) {
+        static const char *const names[4] = {"smmu", "br ib1", "bv ib1", "bv ib2"};
+        n = snprintf(row, sizeof row, "[gpu stall] %s", names[part]);
+        if (part) n += snprintf(row + n, sizeof row - n, " @%x:", native_adreno_stall_mem[4 + 17 * (part - 1)]);
+        const unsigned first = part ? 5 + 17 * (part - 1) : 0, count = part ? 16 : 4;
+        for (unsigned k = first; k < first + count && n > 0 && (size_t)n < sizeof row; ++k) n += snprintf(row + n, sizeof row - n, " %x", native_adreno_stall_mem[k]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+    // Map handles: next at the stalled job's submission, then under the BR IB1, BV IB1, BV IB2 (>= the first: mapped after it).
+    if (&native_adreno_stall_mem) {
+      snprintf(row, sizeof row, "[gpu stall] handles job>=%u br=%u bv=%u bv2=%u", native_adreno_stall_mem[55], native_adreno_stall_mem[56],
+               native_adreno_stall_mem[57], native_adreno_stall_mem[58]);
       at = put(out, at, cap, row, sizeof row);
     }
   }
@@ -727,7 +1034,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   if (&boot_progress_panic_text && boot_progress_panic_text[0]) {
     at = put(out, at, cap, "[panic]", 8);
-    at = put(out, at, cap, boot_progress_panic_text, 256);
+    at = put(out, at, cap, boot_progress_panic_text, 2048);
   }
   return at;
 }

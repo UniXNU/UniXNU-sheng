@@ -132,7 +132,7 @@ BUILDID_STRING = "sheng-research"
 # the optional trust cache and Data seed. The loader (DarwinBoot) is part of the firmware volume.
 [payload]
 volume = "SHENGESP"
-size_mib = 192
+size_mib = 208
 loader = "firmware"
 title = "Boot"
 dram_size = "0x80000000"             # SMEM RAM table observed on the device
@@ -166,7 +166,6 @@ kernel_args = [
   "offline-key-events=1",
   "native-ufs-root=1",
   "sheng-pmgr=2",
-  "armcpu-diagnostics=1",
   "sheng-disable-watchdogd=1",
   "sheng-lite=1",
   "boot-ui-focus4=SpringBoard",
@@ -188,8 +187,7 @@ kernel_args = [
   "sheng-staged-apps=1",
   "sheng-buttons=1",
   "sheng-backlight=1",
-  "sheng-wifi=1",
-  "sheng-vsync=144",
+  "sheng-vsync=120",
 ]
 
 # Fixups of signed text, applied by the kernel after signature validation (patches/xnu/native-text-fixup.patch); they reach it as
@@ -220,7 +218,7 @@ tool = "scripts/make-sheng-adt.py"
 chip_id = "207"
 owned_memory_size = "0x130000000"
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
-cpu_regs = "0,0x300,0x400,0x500,0x600,0x700"   # cpu0 is the little boot core; the other two little cores (0x100, 0x200) are left off
+cpu_regs = "0,0x300,0x400,0x500,0x600,0x700"
 packed_data_ramdisk = true
 persistent_data = true               # sheng-data-persist keeps Data writes, so Data is not ephemeral storage
 ipad_identity = true

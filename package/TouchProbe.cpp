@@ -325,6 +325,12 @@ void trackStrokes(unsigned count, const int *ids, const int *xs, const int *ys) 
 }
 
 // Whoever consumes the finger set (NativeHidInput) registers a function here; it is called from the thread that published, after the seqlock closes.
+// Raw frame-to-frame movement of resting or slow contacts (NvtTouchCore jitter_*): frames, summed steps, largest step, in 0.1 px.
+extern "C" {volatile uint32_t native_touch_jitter[3];}
+// Fingers held through frames without their blob (NvtTouchCore holds_bridged), lifts by miss reason (none, far, weak, palm, taken),
+// then frames of type 2 and type 4, then the smoothed steps of the jitter frames (summed, largest), merges, then the most maxima in a frame, frames that overflowed the
+// peak table and frames that moved the reference.
+extern "C" {volatile uint32_t native_touch_hold[14];}
 static void (*gTouchSink)(void *);
 static void *gTouchSinkContext;
 extern "C" void native_touch_set_sink(void (*sink)(void *), void *context) {gTouchSinkContext = context; __atomic_store_n(&gTouchSink, sink, __ATOMIC_RELEASE);}
@@ -673,6 +679,19 @@ static void touchThread(void *, wait_result_t) {
                 struct nvt_contact out[NVT_SLOTS];
                 native_touch_loop_step = 6;
                 const int n = nvt_touch_process(s->core, matrix, type, out, NVT_SLOTS);
+                native_touch_jitter[0] = static_cast<uint32_t>(s->core->jitter_frames);
+                native_touch_jitter[1] = static_cast<uint32_t>(s->core->jitter_sum);
+                native_touch_jitter[2] = static_cast<uint32_t>(s->core->jitter_max);
+                native_touch_hold[0] = static_cast<uint32_t>(s->core->holds_bridged);
+                for (unsigned q = 0; q < NVT_MISS_KINDS; ++q) native_touch_hold[1 + q] = static_cast<uint32_t>(s->core->ends[q]);
+                native_touch_hold[6] = static_cast<uint32_t>(s->core->frames_by_type[0]);
+                native_touch_hold[7] = static_cast<uint32_t>(s->core->frames_by_type[1]);
+                native_touch_hold[8] = static_cast<uint32_t>(s->core->smoothed_sum);
+                native_touch_hold[9] = static_cast<uint32_t>(s->core->smoothed_max);
+                native_touch_hold[10] = static_cast<uint32_t>(s->core->merges);
+                native_touch_hold[11] = static_cast<uint32_t>(s->core->peaks_max);
+                native_touch_hold[12] = static_cast<uint32_t>(s->core->peak_overflows);
+                native_touch_hold[13] = static_cast<uint32_t>(s->core->reference_frames);
                 native_touch_loop_step = 7;
                 native_touch_frames = native_touch_frames + 1;
                 if (n > 0 || (n == 0 && !gScriptedDown)) {
@@ -694,7 +713,9 @@ static void touchThread(void *, wait_result_t) {
 // began), then a tap on the first icon of page 2 (Clock), and after 12 s a swipe up from the bottom edge back home; the swap timeline records
 // each animation; a last swipe returns to page 1 for the closing screenshot. [0] swipes done, [1] first swipe start ms, [2] last action end ms, [3] frames published, [4] app tap ms, [5] home swipe ms.
 // Coordinates are published units (0.1 panel px, UI y = 20319 - raw y).
-extern "C" {volatile uint32_t native_swipe_stats[16];}   // [8] heavy phase start, [9] Control Center end, [10] Notification Center end, [11] app open/close end
+// Tracking ids stay in the panel's own range (1..8): backboardd drops a path whose index reaches its MAX_PATH_COUNT (int-242: ids 200..219
+// were refused 5088 times, so the swipes never measured real touch handling).
+extern "C" {volatile uint32_t native_swipe_stats[16];}
 static void stroke(int id, int x0, int uiY0, int x1, int uiY1, unsigned frames) {
     nvt_contact c = {};
     c.tracking_id = id; c.peak = 100; c.area = 10; c.weight = 100;
@@ -761,6 +782,7 @@ static void swipeThread(void *parameter, wait_result_t) {
     native_swipe_stats[5] = touchMs();
     stroke(2, 15240, 20300, 15240, 12000, 30);   // from the bottom edge up to two fifths of the height
     IOSleep(4000);
+    pressHome();   // the edge swipe alone did not always leave the app (int-243 ended inside one), so the run returns home for sure
     // The App Library, to the right of the last page (int-231 froze on entering it by hand): five swipes to the left reach it from any
     // page of a small home screen, 15 s there, then the home edge swipe back.
     native_swipe_stats[6] = touchMs();
@@ -769,6 +791,7 @@ static void swipeThread(void *parameter, wait_result_t) {
     stroke(2, 15240, 20300, 15240, 12000, 30);
     native_swipe_stats[7] = touchMs();
     IOSleep(4000);
+    pressHome();
     stroke(1, 8000, 10160, 22000, 10160, 38);    // back to page 1, which the run's closing screenshot then shows
 }
 
