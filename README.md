@@ -49,6 +49,11 @@ changing storage resources or policy.
 
 ## Build
 
+The firmware must embed UniXNU, UniXNUDxe, DarwinBoot and the shared
+`UniXNURamDiskDxe`, with DiskIoDxe and FAT support. These modules expose the
+payload configuration and its boot entries. Follow
+[firmware integration](https://unixnu.com/porting/uefi-firmware#required-integration).
+
 Run these commands from the UniXNU checkout:
 
 ```sh

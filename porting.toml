@@ -30,9 +30,9 @@ status = "implemented"
 components = ["ShengPreflight"]
 paths = ["proprietary-files.txt", "scripts/extract-files.py", "scripts/gen-touch-firmware.py"]
 inputs = ["uefi-sheng firmware, stock firmware DTB, GOP handoff, PSCI SMC interface and vendor firmware inventory."]
-configuration = ["firmware.dsc = Platforms/Xiaomi/shengPkg/sheng.dsc; firmware.config = sheng.", "proprietary-files.txt records input paths and provenance."]
-procedure = ["Run ./unixnu build firmware -D ../UniXNU-sheng --uefi ../uefi-sheng.", "Record the firmware commit, output FD and handoff memory map before a boot attempt."]
-findings = ["The firmware DTB is an input to boot-image assembly. XNU consumes the separately generated ADT.", "The sheng preflight component belongs with board integration and its firmware requirements."]
+configuration = ["firmware.dsc = Platforms/Xiaomi/shengPkg/sheng.dsc; firmware.config = sheng.", "proprietary-files.txt records input paths and provenance.", "The firmware DSC and FDF embed UniXNU, UniXNUDxe, DarwinBoot, UniXNURamDiskDxe, DiskIoDxe and FAT support."]
+procedure = ["Run ./unixnu build firmware -D ../UniXNU-sheng --uefi ../uefi-sheng.", "Record the firmware commit, output FD and handoff memory map before a boot attempt.", "Build the payload, then run ./unixnu bootimg with the firmware DTB. Inspect boot.json ramdisk_bytes and the required firmware modules."]
+findings = ["The firmware DTB is an input to boot-image assembly. XNU consumes the separately generated ADT.", "The sheng preflight component belongs with board integration and its firmware requirements.", "The shared UniXNURamDiskDxe reads the Mu-Silicium entry-argument HOB and FDT initrd range to publish the payload block device. ShengBootMemoryDxe owns memory expansion.", "Configured menu entries require a payload FAT filesystem containing EFI/UniXNU/unixnu.toml. Check the UNIXNURAMDISK initrd block-device status when entries are absent."]
 completion = ["Firmware image builds, enters UniXNU, publishes the framebuffer and preserves the documented memory reservations."]
 limits = ["Boot-image assembly requires the selected firmware DTB and proprietary input files."]
 next_action = ["Capture firmware revision and memory reservations with the next image verification."]
@@ -41,6 +41,11 @@ next_action = ["Capture firmware revision and memory reservations with the next 
 kind = "source"
 reference = "proprietary-files.txt"
 result = "Implementation and configuration described in this section"
+
+[[area.evidence]]
+kind = "source"
+reference = "https://github.com/UniXNU/UniXNU/blob/8d157ee18ae9c4d518aba28cb3040a84e860dcd1/package/UniXNUPkg/Driver/UniXNURamDiskDxe/UniXNURamDiskDxe.c"
+result = "Shared FDT initrd block-device publication; board memory policy remains in uefi-sheng."
 
 [[area]]
 id = "cpu"
