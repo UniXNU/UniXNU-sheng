@@ -109,7 +109,7 @@ paths = ["package/*Display*", "package/*Framebuffer*", "package/*Backlight*", "p
 inputs = ["UEFI GOP framebuffer, stride, pixel format, splash reservation and board panel/backlight controls."]
 configuration = ["Select GopFramebuffer; CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y; artwork-display-gamut = sRGB.", "sheng-vsync=120 requests board display timing."]
 procedure = ["Verify GOP address, dimensions, stride and pixel layout before enabling presentation.", "Build the late display archive with the selected OS ABI records, then check display publication and frame presentation."]
-findings = ["The display source and ABI binding are selected independently from the physical panel configuration.", "The board configuration declares sRGB for the current 8-bit framebuffer path."]
+findings = ["The display source and ABI binding are selected independently from the physical panel configuration.", "The board configuration declares sRGB for the current 8-bit framebuffer path.", "scripts/build-gop-legacy-display.py also builds the board driver objects in the display archive, including the ADSP, IPC router, FAT reader and battery manager."]
 completion = ["A known frame appears with correct geometry and colors, then userland presentation and backlight controls work."]
 limits = ["The late display builder needs qualified prelink candidates and ABI records. A timing request requires a measured presentation result."]
 next_action = ["Record frame timing, pixel format and presentation evidence for each image used to qualify display."]
@@ -177,11 +177,11 @@ result = "Implementation and configuration described in this section"
 id = "audio"
 status = "implemented"
 components = []
-paths = ["package/*Adsp*", "package/*Audio*", "package/*Gpr*", "package/QcomGlink*", "package/QcomMdt*", "package/QcomSmem*", "package/QcomSmp2p*", "scripts/*adsp*", "scripts/*audio*", "scripts/*gpr*"]
+paths = ["package/*Adsp*", "package/*Audio*", "package/*Gpr*", "package/FatVolume*", "package/QcomGlink*", "package/QcomMdt*", "package/QcomQrtr*", "package/ShengQrtr*", "package/QcomSmem*", "package/QcomSmp2p*", "scripts/*adsp*", "scripts/*audio*", "scripts/*gpr*", "scripts/*modem-fw*", "scripts/*qrtr*"]
 inputs = ["ADSP firmware, SMEM, SMP2P, GLINK, GPR services, board codec and audio routing."]
 configuration = ["The board display archive includes ADSP and audio probe objects."]
 procedure = ["Check firmware loading and ADSP service readiness before configuring audio endpoints.", "Record route, format and playback/capture observations for each enabled endpoint."]
-findings = ["Firmware startup, service registration and audible playback require separate evidence.", "The GPR client and firmware loading helpers can be inspected independently from codec routing."]
+findings = ["The ADSP image loads in place from the split adsp and adsp_dtb files in /image of the modem_a FAT volume (modem_b as fallback); sheng-adsp-fw=DIR reads adsp.mbn and adsp_dtb.mbn from DIR instead.", "The DSP reaches GLINK and opens the battery manager and IPCRTR channels. The IPC router answers the DSP's service locator requests.", "Firmware startup, service registration and audible playback require separate evidence.", "The GPR client and firmware loading helpers can be inspected independently from codec routing."]
 completion = ["Each declared route carries the selected audio format through playback or capture and handles start/stop correctly."]
 limits = ["Current source contains ADSP bring-up and audio framework probes. Endpoint playback qualification needs route-specific evidence."]
 next_action = ["Document the codec, clocks and endpoint routing before claiming playback completion."]
@@ -196,18 +196,32 @@ id = "power"
 status = "implemented"
 components = ["AppleKeyStoreState"]
 paths = ["package/*Battery*", "package/*Battmgr*", "package/*Power*", "package/*PlatformPower*", "package/QcomQmp*", "package/QcomRpmh*", "package/QcomScm.h", "scripts/*power*", "scripts/*battery*", "scripts/*pmgr*"]
-inputs = ["Board PMGR integration, clocks/regulators, ADSP battery manager and per-peripheral power requirements."]
-configuration = ["CONFIG_XNU_SHENG_PMGR=y; sheng-pmgr=2 selects the board integration.", "AppleKeyStoreState is selected with the OS event integration."]
-procedure = ["Document each clock, regulator and firmware-owned state before enabling power transitions.", "Check battery units and update behavior separately from suspend/resume and peripheral power."]
-findings = ["Battery reporting uses the ADSP battery-manager path. It depends on firmware/service readiness.", "Power policy belongs to the board even when controller operations are shared."]
+inputs = ["Board PMGR integration, clocks/regulators and per-peripheral power requirements.", "ADSP battery manager: PMIC GLINK owner 32778 on PMIC_RTR_ADSP_APPS; board properties use opcode 0x50; fuel gauges 0x8a/0x8b and 0xa6/0xa7."]
+configuration = ["CONFIG_XNU_SHENG_PMGR=y; sheng-pmgr=2 selects the board integration.", "AppleKeyStoreState is selected with the OS event integration.", "sheng-adsp=2 sheng-battery=1 publish the battery as an IOPMPowerSource.", "sheng-usb-sdp-ma sets the input limit on a standard computer port (default 900; 0 keeps the firmware limit)."]
+procedure = ["Document each clock, regulator and firmware-owned state before enabling power transitions.", "Check battery units and update behavior separately from suspend/resume and peripheral power.", "Read the [battery], [battery-raw] and [charger] log lines with scripts/read-sheng-log.py."]
+findings = ["The ADSP firmware runs charging and PD/PPS negotiation without host requests.", "Battery properties after 11 are shifted by one: charge current 12, temperature 13, charge counter 15, cycles 16, design 17, full 18, time to full 20, time to empty 21.", "Charge is the sum of both fuel gauges' remaining over full capacity. Battery current is reported discharge-positive.", "USB property 6 reads SDP on every port. Property 7 carries the adapter type (6 PD, 8 PD PPS).", "A PPS adapter gets a 3 A input limit at about 8.7 V; the battery charges at the 2000 mA charge current with the charge pump off.", "Both cells and the PD adapter read unauthenticated.", "A Mac USB-C port negotiates PD 5 V with a 1.2 A input limit, below the load during boot.", "Power policy belongs to the board even when controller operations are shared."]
 completion = ["Declared power controls and battery readings match observations; each claimed sleep/resume transition restores its dependent peripherals."]
-limits = ["Per-peripheral controls and battery publication have separate coverage from system suspend."]
-next_action = ["Record each supported transition and its dependent peripherals in this section."]
+limits = ["Adapter details shown to iOS come from USB property 6, so every adapter reads as a computer port.", "Charge current stays at 2 A without fuel gauge and adapter authentication.", "A low-battery shutdown panics in vnode_rele_ext during unmount.", "Per-peripheral controls and battery publication have separate coverage from system suspend."]
+next_action = ["Take adapter details from property 7.", "Authenticate both fuel gauges, then qualify PPS charge pump charging; Xiaomi adapter authentication follows."]
 
 [[area.evidence]]
 kind = "source"
 reference = "package/ShengBattery.cpp"
 result = "Implementation and configuration described in this section"
+
+[[area.evidence]]
+kind = "host"
+reference = "scripts/check-battery-host.py"
+command = "python3 scripts/check-battery-host.py"
+revision = "8719a19294bc79eed72366a19070acfd8e131737"
+result = "PASS battery manager: 4074 checks"
+
+[[area.evidence]]
+kind = "device"
+reference = "scripts/read-sheng-log.py"
+command = "fastboot boot boot.img; python3 scripts/read-sheng-log.py --wait 240"
+revision = "8719a19294bc79eed72366a19070acfd8e131737"
+result = "PPS adapter: 8.72 V at 1.3 A in, battery +1.99 A, 1 to 3 percent in 3 minutes. Mac: PD 5 V, 1.2 A limit, battery -0.9 to -1.2 A. Temperature 31.4 to 32.9 C; full 9353 mAh, design 9800 mAh, 172 cycles."
 
 [[area]]
 id = "packaging"
@@ -235,7 +249,7 @@ paths = ["scripts/check-*", "scripts/probe-*", "scripts/audit-*", "scripts/read-
 inputs = ["Serial or framebuffer diagnostics, panic region, boot checkpoints and a recovery path."]
 configuration = ["boot-progress=2 enables checkpoints; source and image revisions accompany every log."]
 procedure = ["Run the existing check for the changed area and keep its command, output and input revision.", "Record the last completed checkpoint and the first failing operation; link the captured output."]
-findings = ["A source implementation, a host check and a device observation establish different completion levels.", "Keep an unresolved cause explicit and record the next measurement that can distinguish it."]
+findings = ["A source implementation, a host check and a device observation establish different completion levels.", "Keep an unresolved cause explicit and record the next measurement that can distinguish it.", "The UFS log carries [adsp], [qrtr], [battery], [battery-raw] and [charger] lines for the DSP, the IPC router and the charger.", "Host checks for the ADSP path: check-adsp-host.py, check-modem-fw-host.py, check-qrtr-host.py and check-battery-host.py."]
 completion = ["Each claimed milestone has a reproducible command, a matching source/image revision and an accessible result."]
 limits = ["Source references in this record describe implemented behavior. Host and device status require their respective evidence entries."]
 next_action = ["Add captured host or device evidence when repeating a checkpoint on a known image."]
