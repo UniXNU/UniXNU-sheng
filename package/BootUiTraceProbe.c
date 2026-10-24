@@ -8,6 +8,9 @@
 #include <kern/misc_protos.h>
 #include <machine/machine_routines.h>
 #include <arm/thread.h>
+#include <arm/cpu_data_internal.h>
+#include <arm/cpu_internal.h>
+#include <kern/processor.h>
 #include <vm/vm_map.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_port.h>
@@ -315,18 +318,43 @@ int boot_kthread_report(const char *name,char *out,unsigned size) {
  queue_iterate(&kernel_task->threads,thread,thread_t,task_threads) {
   char tn[64];tn[0]=0;thread_get_thread_name(thread,tn);
   if(strcmp(tn,name))continue;
-  uint64_t frames[BT_KFRAMES];unsigned state=0,hint=0;int pri=0;uint64_t event=0;
+  uint64_t frames[BT_KFRAMES];unsigned state=0,hint=0,stack=0;int pri=0,runq=-1,last=-1,bound=-1,chosen=-1;uint64_t event=0;
   bool irq=ml_set_interrupts_enabled(false);
   if(simple_lock_try(&thread->sched_lock,&thread_lck_grp)) {
    bt_kernel_stack(thread,frames);state=(unsigned)thread->state;hint=(unsigned)thread->block_hint;pri=thread->sched_pri;event=(uint64_t)thread->wait_event;
+   processor_t q=thread_get_runq_locked(thread);if(q)runq=q->cpu_id;
+   if(thread->last_processor)last=thread->last_processor->cpu_id;
+   if(thread->bound_processor)bound=thread->bound_processor->cpu_id;
+   if(thread->chosen_processor)chosen=thread->chosen_processor->cpu_id;
+   stack=thread->kernel_stack!=0;
    thread_unlock(thread);found=0;
   }
   ml_set_interrupts_enabled(irq);
   if(found)break;
-  int at=snprintf(out,size,"st=%x hint=%u pri=%d ev=%llx k",state,hint,pri,(unsigned long long)VM_KERNEL_UNSLIDE_OR_PERM(event));
+  // runq: the processor whose run queue holds it (-1 none); last/bound/chosen: processors by cpu id; stk: whether it owns a kernel stack
+  // (a thread blocked with a continuation gives its stack away, and its frames are then another thread's)
+  int at=snprintf(out,size,"st=%x hint=%u pri=%d ev=%llx runq %d last %d bound %d chosen %d stk %u k",state,hint,pri,
+   (unsigned long long)VM_KERNEL_UNSLIDE_OR_PERM(event),runq,last,bound,chosen,stack);
   for(unsigned i=0;i<BT_KFRAMES && frames[i] && at>0 && (unsigned)at<size;++i)at+=snprintf(out+at,size-(unsigned)at," %llx",(unsigned long long)VM_KERNEL_UNSLIDE(frames[i]));
   break;
  }
  task_unlock(kernel_task);
  return found;
+}
+// Every other processor asked to check its ASTs again, as the scheduler's own preemption signal does. For a thread that was made runnable
+// while the processor meant to run it never took the signal. out: per processor its state, the priority it runs at and the signal bits
+// still pending before this one was sent (bits that stay set mean a processor that does not take its interrupts).
+unsigned boot_cpu_kick(char *out,unsigned size) {
+ out[0]=0;int at=0;unsigned sent=0;
+ const bool irq=ml_set_interrupts_enabled(false);
+ cpu_data_t *self=getCpuDatap();
+ for(int i=0;i<=ml_get_max_cpu_number() && at>=0 && (unsigned)at<size;++i) {
+  processor_t p=processor_array[i];if(!p)continue;
+  cpu_data_t *cd=processor_to_cpu_datap(p);if(!cd)continue;
+  const unsigned pending=cd->cpu_signal;
+  at+=snprintf(out+at,size-(unsigned)at,"%sc%d s%d p%d g%x",at?" ":"",p->cpu_id,(int)p->state,p->current_pri,pending);
+  if(cd!=self && cpu_signal(cd,SIGPast,NULL,NULL)==KERN_SUCCESS)++sent;
+ }
+ ml_set_interrupts_enabled(irq);
+ return sent;
 }

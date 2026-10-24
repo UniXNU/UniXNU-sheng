@@ -31,6 +31,7 @@ extern "C" {
 #include <sys/mbuf.h>
 #include <kern/locks.h>
 #include <kern/thread.h>
+#include <kern/thread_call.h>
 #include <sys/systm.h>
 #include <stdarg.h>
 #include "nw_abi.h"
@@ -44,6 +45,7 @@ extern "C" int sheng_wifi_file(const char *name, const uint8_t **data, size_t *s
 // (the header declares it without C linkage; the symbol is the C one)
 extern "C" int sheng_kev_post(struct kev_msg *) __asm__("_kev_post_msg");
 extern "C" int boot_kthread_report(const char *name, char *out, unsigned size);   // BootUiTraceProbe.c
+extern "C" unsigned boot_cpu_kick(char *out, unsigned size);                      // BootUiTraceProbe.c
 
 namespace {
 
@@ -91,7 +93,9 @@ lck_grp_t *gGrp;
 lck_mtx_t *gLock;
 bool gPower = true;
 bool gKeyed;   // the last join used a passphrase
-uint32_t gRxFrames, gRxErrors; int gRxLastError;   // frames handed to the stack, refused ones and the last refusal
+uint32_t gRxFrames, gRxErrors; int gRxLastError;
+uint32_t gRxNoBuffer, gRxChains, gRxLongest;   // frames dropped for want of a buffer, frames that took a chain, the longest frame
+struct { unsigned count, kicks, cleared, longest; bool kicked; } gStall;   // input thread stalls (check_input)   // frames handed to the stack, refused ones and the last refusal
 int gAssocResult = kAssocOk;
 unsigned gScanCursor, gScanning;
 bool gUserJoin;   // the wireless daemon joined, left or switched the radio itself: the unattended test join steps aside
@@ -99,7 +103,7 @@ uint32_t gLogged[256 / 32];
 
 void log(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void log(int level, const char *fmt, ...) {
-  char line[120]; va_list ap; va_start(ap, fmt); vsnprintf(line, sizeof line, fmt, ap); va_end(ap);
+  char line[160]; va_list ap; va_start(ap, fmt); vsnprintf(line, sizeof line, fmt, ap); va_end(ap);
   native_wifi_logf(level, "%s", line);
 }
 
@@ -126,6 +130,9 @@ void post_link(bool up) {
 
 // ---- what the module tells us ----
 void on_scan_done() { __atomic_store_n(&gScanning, 0u, __ATOMIC_RELEASE); gScanCursor = 0; post_event(kEvScanDone, nullptr, 0); }
+// A scan answered from the cache finishes after the time a short scan takes: answered at once, the daemon asks again straight away.
+thread_call_t gCachedScan;
+void cached_scan_done(thread_call_param_t, thread_call_param_t) { on_scan_done(); }
 void on_connect_done(int result) {
   gAssocResult = result == NW_RES_OK ? kAssocOk : result == NW_RES_BAD_KEY ? kAssocBadKey : result == NW_RES_TIMEOUT ? kAssocTimeout : kAssocFailed;
   log(6, "wifi-net: join finished: module result %d", result);
@@ -144,12 +151,62 @@ void on_link_lost(int reason) {
   link_event ev; memset(&ev, 0, sizeof ev); ev.down = 1; ev.involuntary = 1; ev.reason = static_cast<uint32_t>(reason);
   post_event(kEvLinkChanged, &ev, sizeof ev);
 }
+// What the address configuration exchanges, as it crosses the interface: DHCP messages (type, transaction, offered address) and ARP, the first
+// ones of each direction, and per-kind counts for the traffic line.
+struct Kinds { uint32_t arp, ip4, dhcp, ip6, other; } gKindsIn, gKindsOut;
+void note_frame(const uint8_t *e, size_t n, bool out) {
+  Kinds &k = out ? gKindsOut : gKindsIn; const unsigned type = n >= 14 ? (e[12] << 8 | e[13]) : 0; const char *dir = out ? "out" : "in";
+  if (type == 0x0806) {
+    k.arp++; static unsigned shown[2];
+    if (n >= 42 && shown[out]++ < 12) log(6, "wifi-net: arp %s op %u %u.%u.%u.%u asks %u.%u.%u.%u", dir, e[21], e[28], e[29], e[30], e[31], e[38], e[39], e[40], e[41]);
+    return; }
+  if (type == 0x86dd) { k.ip6++; return; }
+  if (type != 0x0800 || n < 34) { k.other++; return; }
+  k.ip4++; const uint8_t *ip = e + 14; const unsigned ihl = (ip[0] & 15) * 4;
+  if (ip[9] != 17 || n < 14 + ihl + 8) return;
+  const uint8_t *udp = ip + ihl; const unsigned sp = udp[0] << 8 | udp[1], dp = udp[2] << 8 | udp[3];
+  if (!((sp == 67 || sp == 68) && (dp == 67 || dp == 68))) return;
+  k.dhcp++; const uint8_t *b = udp + 8; const size_t bl = n - (b - e); unsigned msg = 0;
+  for (size_t o = 240; bl >= 240 && o + 2 <= bl && b[o] != 255; o += b[o] ? 2 + b[o + 1] : 1) if (b[o] == 53 && o + 2 < bl) { msg = b[o + 2]; break; }
+  static unsigned shown[2]; if (shown[out]++ < 24 && bl >= 240)
+    log(6, "wifi-net: dhcp %s type %u xid %02x%02x%02x%02x flags %02x%02x to %02x:%02x:%02x:%02x:%02x:%02x yiaddr %u.%u.%u.%u", dir, msg, b[4], b[5], b[6], b[7], b[10], b[11],
+        e[0], e[1], e[2], e[3], e[4], e[5], b[16], b[17], b[18], b[19]);
+  // An offer or acknowledgement: the network settings the server hands out (mask, router, name servers, lease), to tell a server that
+  // gives no IPv4 name server from a client that drops one.
+  if (out || (msg != 2 && msg != 5)) return;
+  char opts[124]; int at = 0;   // fits the 160-byte log line
+  for (size_t o = 240; o + 2 <= bl && b[o] != 255 && at >= 0 && at < static_cast<int>(sizeof opts) - 24; o += b[o] ? 2 + b[o + 1] : 1) {
+    if (!b[o]) continue;
+    const unsigned code = b[o], len = b[o + 1]; const uint8_t *v = b + o + 2;
+    if (o + 2 + len > bl) break;
+    if ((code == 1 || code == 3 || code == 6 || code == 54) && len >= 4)
+      for (unsigned i = 0; i + 4 <= len && at < static_cast<int>(sizeof opts) - 24; i += 4)
+        at += snprintf(opts + at, sizeof opts - at, " %u=%u.%u.%u.%u", code, v[i], v[i + 1], v[i + 2], v[i + 3]);
+    else if (code == 51 && len == 4) at += snprintf(opts + at, sizeof opts - at, " 51=%u", v[0] << 24 | v[1] << 16 | v[2] << 8 | v[3]);
+    else at += snprintf(opts + at, sizeof opts - at, " %u", code);
+  }
+  log(6, "wifi-net: dhcp %s type %u options%s", dir, msg, opts);
+}
 void on_rx(const uint8_t *eth, size_t length) {
   if (!gIf || length < 14) return;
+  note_frame(eth, length, false);
+  // Two bytes ahead of the Ethernet header put the IP header on a 4-byte boundary. The packet may come back as a chain (a frame larger
+  // than one cluster, or no large cluster free): each buffer gets only what fits in it. Setting the whole length on the first one (as
+  // before) let the stack read past that buffer's end (i469: a data abort in m_copydata reading across a page).
+  enum : size_t { Align = 2 };
   mbuf_t m = nullptr;
-  if (mbuf_allocpacket(MBUF_DONTWAIT, length, nullptr, &m) || !m) return;
-  mbuf_copyback(m, 0, length, eth, MBUF_DONTWAIT);
-  mbuf_pkthdr_setlen(m, length); mbuf_setlen(m, length); mbuf_pkthdr_setrcvif(m, gIf);
+  if (mbuf_allocpacket(MBUF_DONTWAIT, length + Align, nullptr, &m) || !m) { gRxNoBuffer++; return; }
+  if (length > gRxLongest) gRxLongest = static_cast<uint32_t>(length);
+  if (mbuf_next(m)) gRxChains++;
+  size_t done = 0; bool first = true;
+  for (mbuf_t n = m; n; n = mbuf_next(n)) {
+    size_t room = mbuf_maxlen(n) - mbuf_leadingspace(n);
+    if (first) { if (room < Align + 14) break; mbuf_setdata(n, static_cast<uint8_t *>(mbuf_datastart(n)) + mbuf_leadingspace(n) + Align, 0); room -= Align; }
+    const size_t take = length - done < room ? length - done : room;
+    memcpy(mbuf_data(n), eth + done, take); mbuf_setlen(n, take); done += take; first = false;
+  }
+  if (done != length) { gRxNoBuffer++; mbuf_freem(m); return; }
+  mbuf_pkthdr_setlen(m, length); mbuf_pkthdr_setrcvif(m, gIf);
   mbuf_pkthdr_setheader(m, mbuf_data(m)); mbuf_adj(m, 14);   // the stack wants the Ethernet header apart from the payload
   struct ifnet_stat_increment_param inc; memset(&inc, 0, sizeof inc); inc.packets_in = 1; inc.bytes_in = static_cast<uint32_t>(length);
   const errno_t e = ifnet_input(gIf, m, &inc);
@@ -162,6 +219,7 @@ errno_t if_output(ifnet_t, mbuf_t m) {
   size_t length = mbuf_pkthdr_len(m);
   if (length >= 14 && length <= 2000) {
     uint8_t frame[2000]; mbuf_copydata(m, 0, length, frame);
+    note_frame(frame, length, true);
     if (nw_wifi_tx(frame, length)) log(6, "wifi-net: a frame was dropped (queue full)");
     else ifnet_stat_increment_out(gIf, 1, static_cast<uint32_t>(length), 0);
   }
@@ -230,6 +288,12 @@ int apple80211(bool set, apple80211req &rq) {
     case kScanReq: case kScanReqMultiple: {
       uint8_t buf[0x80]; if (copy_in(rq, buf, sizeof buf)) return EFAULT;
       uint32_t ssidLength; memcpy(&ssidLength, buf + 16, 4); const uint8_t *ssid = buf + 20;
+      // joining or joined: a scan takes the radio off channel for seconds and the access point's beacons and handshake frames are missed, so
+      // the daemon gets the last results instead
+      if (st.state >= NW_STA_AUTH && nw_wifi_bss_count() > 0) {
+        if (!gCachedScan) gCachedScan = thread_call_allocate(cached_scan_done, nullptr);
+        static unsigned answered; if (++answered <= 8 || answered % 64 == 0) log(6, "wifi-net: scan %u while joined: answered from the cache", answered);
+        gScanning = 1; gScanCursor = 0; gResultsShown = 24; uint64_t at; clock_interval_to_deadline(2000, kMillisecondScale, &at); thread_call_enter_delayed(gCachedScan, at); return 0; }
       gScanning = 1; gScanCursor = 0; gResultsShown = 0; nw_wifi_scan(ssidLength && ssidLength <= 32 ? ssid : nullptr, ssidLength <= 32 ? ssidLength : 0); return 0; }
     case kAssociate: {
       assoc_request a; if (copy_in(rq, &a, sizeof a)) return EFAULT;
@@ -408,14 +472,34 @@ void log_traffic() {
   log(6, "wifi-net: en0 address %s, packets in %llu out %llu; frames to the stack %u, refused %u (last %d)", text, static_cast<unsigned long long>(stats.packets_in),
       static_cast<unsigned long long>(stats.packets_out), gRxFrames, gRxErrors, gRxLastError);
   log(6, "wifi-net: tx %s", tx);
-  // frames handed over but the counter of the interface's input thread standing still: where that thread is (kernel frames, unslid)
-  static uint64_t lastIn; static uint32_t lastFrames;
-  if (stats.packets_in == lastIn && gRxFrames != lastFrames) {
-    char where[240];
-    if (boot_kthread_report("dlil_input_en0", where, sizeof where)) log(6, "wifi-net: input thread not found");
-    else for (size_t at = 0, n = strlen(where); at < n; at += 90) log(6, "wifi-net: input thread %u: %.90s", static_cast<unsigned>(at / 90), where + at);
-  }
+  log(6, "wifi-net: in arp %u ip4 %u dhcp %u ip6 %u other %u", gKindsIn.arp, gKindsIn.ip4, gKindsIn.dhcp, gKindsIn.ip6, gKindsIn.other);
+  log(6, "wifi-net: out arp %u ip4 %u dhcp %u ip6 %u other %u", gKindsOut.arp, gKindsOut.ip4, gKindsOut.dhcp, gKindsOut.ip6, gKindsOut.other);
+  log(6, "wifi-net: input stalls %u, kicks %u, cleared after a kick %u, longest %u s", gStall.count, gStall.kicks, gStall.cleared, gStall.longest);
+  log(6, "wifi-net: rx no buffer %u, chained %u, longest frame %u", gRxNoBuffer, gRxChains, gRxLongest);
+}
+
+// The interface's input thread made runnable and then never run while frames kept coming (i468: from 231 s on, a priority 81 thread with no
+// stack, so the DHCP answers never reached the client and the lease was lost). Checked every second: on a stall where that thread is, and
+// every processor asked to check its ASTs again, which is what a preemption signal that never arrived would have done.
+void check_input() {
+  static uint64_t lastIn; static uint32_t lastFrames; static unsigned stalled;
+  struct ifnet_stats_param stats; memset(&stats, 0, sizeof stats); ifnet_stat(gIf, &stats);
+  const bool moving = stats.packets_in != lastIn, offered = gRxFrames != lastFrames;
   lastIn = stats.packets_in; lastFrames = gRxFrames;
+  if (moving) {
+    if (stalled) { if (gStall.kicked) gStall.cleared++; log(6, "wifi-net: input moves again after %u s%s", stalled, gStall.kicked ? " and a kick" : ""); }
+    stalled = 0; gStall.kicked = false; return;
+  }
+  if (!offered) return;   // nothing new handed over: an idle link, not a stall
+  if (++stalled > gStall.longest) gStall.longest = stalled;
+  if (stalled == 1) gStall.count++;
+  if (stalled > 3) return;   // reported and kicked twice; the per-ten-seconds line keeps the counts
+  char where[240];
+  if (boot_kthread_report("dlil_input_en0", where, sizeof where)) log(6, "wifi-net: input thread not found");
+  else for (size_t at = 0, n = strlen(where); at < n; at += 90) log(6, "wifi-net: input thread %u: %.90s", static_cast<unsigned>(at / 90), where + at);
+  if (stalled < 2) return;   // one quiet second can be a slow thread
+  char cpus[240]; const unsigned sent = boot_cpu_kick(cpus, sizeof cpus); gStall.kicks++; gStall.kicked = true;
+  for (size_t at = 0, n = strlen(cpus); at < n; at += 90) log(6, "wifi-net: kick %u (%u sent) %u: %.90s", gStall.kicks, sent, static_cast<unsigned>(at / 90), cpus + at);
 }
 
 // IOKit's busy services: the network configuration waits for IOKit to be quiet before it names interfaces, and the wireless daemon waits
@@ -440,6 +524,15 @@ void log_busy() {
   log(6, "%s", line);
 }
 
+// While joined, every 10 s: the address, the packet counts and the kinds of traffic (whoever made the join).
+void trafficLog(void *, wait_result_t) {
+  for (unsigned second = 1;; ++second) {
+    IOSleep(1000); nw_wifi_status st; nw_wifi_status_get(&st);
+    if (st.state != NW_STA_UP) continue;
+    check_input(); if (second % 10 == 0) log_traffic();
+  }
+}
+
 // Unattended testing: when the firmware container holds a file named join.txt (the network name on the first line, the key on the second) the
 // board joins that network by itself once a scan has found it, with the call the wireless daemon's join makes. Without the file nothing happens.
 void autoJoin(void *, wait_result_t) {
@@ -456,7 +549,7 @@ void autoJoin(void *, wait_result_t) {
     log_busy();
     if (gUserJoin) { log(6, "wifi-net: auto join stops: the wireless daemon took over"); break; }
     nw_wifi_status st; nw_wifi_status_get(&st);
-    if (st.state == NW_STA_UP) { log_traffic(); continue; }   // the address the network configuration got, and the packets since
+    if (st.state == NW_STA_UP) continue;   // the traffic thread logs the address and the packets
     if (st.state >= NW_STA_AUTH) continue;
     bool found = false; nw_bss_info b;
     for (int i = 0, n = nw_wifi_bss_count(); i < n; ++i)
@@ -496,7 +589,8 @@ extern "C" void sheng_wifi_net_start(const uint8_t mac[6]) {
   publish_registry("en0");
   // sheng-wifi-aj=0 leaves joining to Settings even when the container holds join.txt.
   { uint32_t aj = 1; PE_parse_boot_argn("sheng-wifi-aj", &aj, sizeof aj);
-    thread_t t = nullptr; if (aj && kernel_thread_start(autoJoin, nullptr, &t) == KERN_SUCCESS) thread_deallocate(t); }
+    thread_t t = nullptr; if (aj && kernel_thread_start(autoJoin, nullptr, &t) == KERN_SUCCESS) thread_deallocate(t);
+    t = nullptr; if (kernel_thread_start(trafficLog, nullptr, &t) == KERN_SUCCESS) thread_deallocate(t); }
   log(6, "wifi-net: en0 is up, hardware address %02x:%02x:%02x:%02x:%02x:%02x, capabilities 0x%x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
       ifnet_capabilities_enabled(ifp));
 }
