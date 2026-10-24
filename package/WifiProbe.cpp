@@ -36,6 +36,7 @@
 // Stage 2 steps in [0]: 10 WLAN_EN high, 11 GDSCs on, 12 clocks on, 13 PARF set up, 14 PHY ready and root port set up, 15 PERST# released, 16 link up,
 // 17 endpoint ID read. [10] GPIO word after WLAN_EN, [11] GDSC bits (bit 0 PCIe0, bit 1 PHY) | halt bits << 8, [12] PCS_STATUS1 |
 // PHY poll count << 16, [13] port debug 0 (LTSSM state in bits 0-5), [14] port debug 1, [15] endpoint vendor/device, [16] link ms
+extern "C" int armcpu_spi_attach(uint32_t, bool, void (*)(void *), void *, uint32_t *, uint64_t *) __attribute__((weak_import));
 extern "C" volatile uint32_t native_ufs_extra_stream __attribute__((weak_import));
 extern "C" uint8_t *native_ufs_extra_va __attribute__((weak_import));
 extern "C" volatile uint32_t native_ufs_extra_uncached __attribute__((weak_import));
@@ -1005,6 +1006,51 @@ void netStart() {
     sheng_wifi_net_start(status.mac);
 }
 
+// ---- the endpoint's MSIs as a real interrupt ----
+// The root complex's own MSI receiver (DesignWare iMSI): an inbound write to the address in MSI_ADDR is taken by the controller instead of
+// memory, sets bit <data> of controller 0's status and raises PCIe0's "msi0" line (SPI 141, level). The address is the arena's first page,
+// the one the endpoint was already given as its MSI target, so nothing changes for the driver. The handler clears the status and wakes
+// the WiFi thread, which otherwise sleeps: no polling while the link is quiet.
+constexpr uint32_t kMsiAddrLo = 0x820, kMsiAddrHi = 0x824, kMsiEnable0 = 0x828, kMsiMask0 = 0x82c, kMsiStatus0 = 0x830, kMsiSpi = 141;
+Window gMsiDbi;
+volatile uint32_t gMsiCount, gMsiBits, gMsiWake;
+bool gMsiAttached;
+void msiIrq(void *) {
+    const uint32_t status = gMsiDbi.va[kMsiStatus0 / 4];
+    if (status) gMsiDbi.va[kMsiStatus0 / 4] = status;   // write-one-to-clear: the level line drops before the end of interrupt
+    gMsiCount = gMsiCount + 1;
+    gMsiBits = gMsiBits | status;
+    // a line with nothing to clear would storm: turn the receiver off and let the loop poll again
+    static uint32_t empty;
+    empty = status ? 0 : empty + 1;
+    if (empty > 100000) {gMsiDbi.va[kMsiEnable0 / 4] = 0; gMsiAttached = false;}
+    gMsiWake = 1;
+    thread_wakeup(event_t(&gMsiWake));
+}
+int msiAttach() {
+    if (!armcpu_spi_attach) return -78;
+    if (!gMsiDbi.va && !mapWindow(gMsiDbi, kDbi, 0x1000)) return -12;
+    gMsiDbi.va[kMsiAddrLo / 4] = uint32_t(gArena.iova);
+    gMsiDbi.va[kMsiAddrHi / 4] = uint32_t(gArena.iova >> 32);
+    gMsiDbi.va[kMsiMask0 / 4] = 0;
+    gMsiDbi.va[kMsiEnable0 / 4] = 0xffffffffu;
+    const int rc = armcpu_spi_attach(32 + kMsiSpi, false, msiIrq, nullptr, nullptr, nullptr);
+    gMsiAttached = rc == 0;
+    return rc;
+}
+// Sleeps until an MSI, a frame to send (sheng_wifi_wake) or ms milliseconds pass; returns at once if one came since the last wait.
+void msiWait(unsigned ms) {
+    if (__atomic_exchange_n(&gMsiWake, 0u, __ATOMIC_ACQ_REL)) return;
+    assert_wait_timeout(event_t(&gMsiWake), THREAD_UNINT, ms, NSEC_PER_MSEC);
+    if (__atomic_exchange_n(&gMsiWake, 0u, __ATOMIC_ACQ_REL)) {clear_wait(current_thread(), THREAD_AWAKENED); return;}
+    thread_block(THREAD_CONTINUE_NULL);
+    gMsiWake = 0;
+}
+}  // namespace
+// The network side calls this after it queued a frame: the WiFi thread sends it now instead of at its next wake.
+extern "C" void sheng_wifi_wake(void) {gMsiWake = 1; thread_wakeup(event_t(&gMsiWake));}
+namespace {
+
 void wifiStack(volatile uint32_t *m, uint64_t barBytes) {
     volatile uint32_t *st = native_wifi_mhi;
     if (!arenaInit()) {st[0] = (uint32_t)-11; return;}
@@ -1020,16 +1066,19 @@ void wifiStack(volatile uint32_t *m, uint64_t barBytes) {
     const int r = nw_wifi_start(&plat, &board);
     st[0] = r ? (uint32_t)(0x80000000u | (uint32_t)(-r & 0xffff)) : 21;
     bool netDone = false;
-    // The endpoint's interrupts are not delivered, so this loop is the only thing that moves frames: a fixed 1 ms sleep per round made every
-    // receive batch, transmit and TCP acknowledgement wait for the next round. While frames move it runs again at once, for 2 ms after the
-    // last frame it polls every 50 us (a TCP sender answers within that), and only then it sleeps.
-    unsigned quiet = 0;
+    // The loop runs on interrupts once the MSI line is attached: it sleeps until the endpoint signals, a frame is queued to send or the
+    // module's next timer may be due (10 ms), and goes round again at once while frames move. Without the line it falls back to polling
+    // every millisecond.
+    const int msi = msiAttach();
+    pLog(6, msi ? "wifi: MSI line not attached, polling" : "wifi: MSI line attached (SPI 141), sleeping between interrupts");
+    if (msi) native_wifi_logf(4, "wifi: MSI attach result %d", msi);
+    uint64_t nextReport = 0;
     for (uint64_t n = 0;; ++n) {
         const int busy = nw_wifi_step();
         if (!netDone && nw_wifi_stats.stage >= 4) {netDone = true; netStart();}
-        if (busy) quiet = 0;
-        else if (quiet < 40) {++quiet; IODelay(50);}
-        else IOSleep(1);
+        if (!busy) {if (gMsiAttached) msiWait(10); else IOSleep(1);}
+        const uint64_t now = pNow();
+        if (gMsiAttached && now >= nextReport) {nextReport = now + 30000; native_wifi_logf(6, "wifi: %u MSIs so far, vectors seen %08x", gMsiCount, gMsiBits);}
         if ((n & 63) == 0) st[1] = nw_wifi_stats.stage | nw_wifi_stats.scans << 8 | nw_wifi_stats.bss_seen << 16;
     }
 }

@@ -38,6 +38,7 @@ extern "C" {
 
 extern "C" void native_wifi_logf(int level, const char *fmt, ...);
 extern "C" int sheng_wifi_file(const char *name, const uint8_t **data, size_t *size);
+extern "C" void sheng_wifi_wake(void);   // WifiProbe.cpp: the WiFi thread sends the queued frame now
 
 #define SIOCSA80211 0x802869c8UL   // _IOW('i', 200, struct apple80211req)
 #define SIOCGA80211 0xc02869c9UL   // _IOWR('i', 201, struct apple80211req)
@@ -221,7 +222,7 @@ errno_t if_output(ifnet_t, mbuf_t m) {
     uint8_t frame[2000]; mbuf_copydata(m, 0, length, frame);
     note_frame(frame, length, true);
     if (nw_wifi_tx(frame, length)) log(6, "wifi-net: a frame was dropped (queue full)");
-    else ifnet_stat_increment_out(gIf, 1, static_cast<uint32_t>(length), 0);
+    else {ifnet_stat_increment_out(gIf, 1, static_cast<uint32_t>(length), 0); sheng_wifi_wake();}
   }
   mbuf_freem(m);
   return 0;
