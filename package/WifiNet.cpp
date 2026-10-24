@@ -40,6 +40,7 @@ extern "C" int sheng_wifi_file(const char *name, const uint8_t **data, size_t *s
 
 // (the header declares it without C linkage; the symbol is the C one)
 extern "C" int sheng_kev_post(struct kev_msg *) __asm__("_kev_post_msg");
+extern "C" int boot_kthread_report(const char *name, char *out, unsigned size);   // BootUiTraceProbe.c
 
 namespace {
 
@@ -387,6 +388,14 @@ void log_traffic() {
   log(6, "wifi-net: en0 address %s, packets in %llu out %llu; frames to the stack %u, refused %u (last %d)", text, static_cast<unsigned long long>(stats.packets_in),
       static_cast<unsigned long long>(stats.packets_out), gRxFrames, gRxErrors, gRxLastError);
   log(6, "wifi-net: tx %s", tx);
+  // frames handed over but the counter of the interface's input thread standing still: where that thread is (kernel frames, unslid)
+  static uint64_t lastIn; static uint32_t lastFrames;
+  if (stats.packets_in == lastIn && gRxFrames != lastFrames) {
+    char where[240];
+    if (boot_kthread_report("dlil_input_en0", where, sizeof where)) log(6, "wifi-net: input thread not found");
+    else for (size_t at = 0, n = strlen(where); at < n; at += 90) log(6, "wifi-net: input thread %u: %.90s", static_cast<unsigned>(at / 90), where + at);
+  }
+  lastIn = stats.packets_in; lastFrames = gRxFrames;
 }
 
 // IOKit's busy services: the network configuration waits for IOKit to be quiet before it names interfaces, and the wireless daemon waits

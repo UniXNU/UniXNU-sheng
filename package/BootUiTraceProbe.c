@@ -306,3 +306,27 @@ void boot_ui_trace_snapshot(unsigned seconds) {
  boot_ui_trace_threads=published.threads;boot_ui_trace_pages=pages;
  __atomic_store_n(&trace_lock,0,__ATOMIC_RELEASE);
 }
+// One kernel thread found by its name (a driver asks for its network input thread when that stops taking packets): state, block hint,
+// priority, wait event and up to BT_KFRAMES kernel return addresses, unslid where they lie in the kernel. 0 when found, -1 when busy or absent.
+int boot_kthread_report(const char *name,char *out,unsigned size) {
+ out[0]=0;
+ if(!task_lock_try(kernel_task))return -1;
+ int found=-1;thread_t thread;
+ queue_iterate(&kernel_task->threads,thread,thread_t,task_threads) {
+  char tn[64];tn[0]=0;thread_get_thread_name(thread,tn);
+  if(strcmp(tn,name))continue;
+  uint64_t frames[BT_KFRAMES];unsigned state=0,hint=0;int pri=0;uint64_t event=0;
+  bool irq=ml_set_interrupts_enabled(false);
+  if(simple_lock_try(&thread->sched_lock,&thread_lck_grp)) {
+   bt_kernel_stack(thread,frames);state=(unsigned)thread->state;hint=(unsigned)thread->block_hint;pri=thread->sched_pri;event=(uint64_t)thread->wait_event;
+   thread_unlock(thread);found=0;
+  }
+  ml_set_interrupts_enabled(irq);
+  if(found)break;
+  int at=snprintf(out,size,"st=%x hint=%u pri=%d ev=%llx k",state,hint,pri,(unsigned long long)VM_KERNEL_UNSLIDE_OR_PERM(event));
+  for(unsigned i=0;i<BT_KFRAMES && frames[i] && at>0 && (unsigned)at<size;++i)at+=snprintf(out+at,size-(unsigned)at," %llx",(unsigned long long)VM_KERNEL_UNSLIDE(frames[i]));
+  break;
+ }
+ task_unlock(kernel_task);
+ return found;
+}
