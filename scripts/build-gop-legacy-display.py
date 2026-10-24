@@ -249,9 +249,9 @@ import os
 nativewifi=Path(os.environ.get('ATH12K_WIFI_DIR') or os.environ.get('NATIVE_WIFI_DIR') or ROOT/'drivers/Ath12kWifi')
 require((nativewifi/'include/nw_abi.h').exists(),'Ath12kWifi module directory (set ATH12K_WIFI_DIR)')
 # The audio DSP bring-up (sheng-adsp): the driver and its protocol cores (firmware images, SMEM, SMP2P, GLINK, AOSS QMP, RPMh). The
-# firmware file reader is BSD code and is built with the boot progress archive.
+# firmware file reader is BSD code and is built with the boot progress archive; the FAT reader it uses for the firmware partition is here.
 adsp_cpp=ROOT/'kits/sheng/AdspProbe.cpp';adsp_obj=touch_dir/'AdspProbe.o'
-adsp_c=[ROOT/'kits/sheng'/(n+'.c') for n in ('QcomMdt','QcomSmem','QcomSmp2p','QcomGlink','QcomQmp','QcomRpmh','ShengBattmgr','ShengGpr','MhiBoot')]
+adsp_c=[ROOT/'kits/sheng'/(n+'.c') for n in ('QcomMdt','FatVolume','QcomQrtr','ShengQrtr','QcomSmem','QcomSmp2p','QcomGlink','QcomQmp','QcomRpmh','ShengBattmgr','ShengGpr','MhiBoot')]
 # The audio packet router client (sheng-audio): registers "adsp_apps" and asks the audio framework whether it is ready.
 audio_cpp=ROOT/'kits/sheng/AudioProbe.cpp';audio_obj=touch_dir/'AudioProbe.o'
 buttons_cpp=ROOT/'kits/sheng/ButtonProbe.cpp';buttons_obj=touch_dir/'ButtonProbe.o'

@@ -31,6 +31,7 @@ extern "C" {
 #include "QcomSmp2p.h"
 #include "ShengAdsp.h"
 int sheng_fw_open(const char *path, void **handle, uint64_t *size);
+void sheng_qrtr_start(void);
 int sheng_fw_read(void *handle, uint64_t offset, void *to, size_t length);
 void sheng_fw_close(void *handle);
 }
@@ -56,7 +57,7 @@ constexpr uint32_t kItemGlinkDesc = 478, kItemGlinkTx = 479, kItemGlinkRx = 480,
 constexpr uint32_t kSpiIpcc = 229, kSpiRsc = 5;
 constexpr uint32_t kFatal = 1u << 0, kReady = 1u << 1, kHandover = 1u << 2;
 constexpr uint32_t kEvSmp2p = 1, kEvGlink = 2, kEvAop = 4, kEvRsc = 8, kEvSend = 16;
-constexpr unsigned kClients = 4, kQueue = 4;
+constexpr unsigned kClients = 4, kQueue = 8;
 
 struct Window {IOMemoryMap *map; volatile uint8_t *va;};
 bool mapWindow(Window &w, uint64_t base, uint64_t size, IOOptionBits cache = kIOMapInhibitCache) {
@@ -229,12 +230,12 @@ bool readCmdDb(uint8_t *copy) {
 QcomRpmhResource gLcx, gLmx;
 int gTcs = -1;
 
-// Votes both rails to the given ARC index pair through an idle active TCS and waits for its done interrupt (100 ms).
+// Votes both rails to the given ARC index pair through active TCS 1 and waits up to 100 ms for its done interrupt. The active TCSs are 0
+// to 2 (tcs-config lists the active type first); the WiFi bring-up sends through TCS 0, so the two never share one. A request whose done
+// interrupt is not seen still counts (bit 15 of [15]): the WiFi rails show such requests take effect.
 int vote(uint32_t lcx, uint32_t lmx) {
     if (gTcs < 0) {
-        // the active TCSs are 0 to 2: tcs-config lists the active type first
-        for (unsigned t = 0; t < 3 && gTcs < 0; ++t) if (rd(gRsc, kRscTcs + gLayout.tcs_stride * t + gLayout.status)) gTcs = (int)t;
-        if (gTcs < 0) return -16;
+        gTcs = 1;
         gRscIrqBits = 1u << gTcs;
         wr(gRsc, kRscTcs + 0, rd(gRsc, kRscTcs + 0) | gRscIrqBits);  // IRQ_ENABLE for our TCS
     }
@@ -251,8 +252,8 @@ int vote(uint32_t lcx, uint32_t lmx) {
     if (!done && (rd(gRsc, kRscTcs + gLayout.irq_status) & gRscIrqBits)) done = true;  // one look in case the line is not ours
     const unsigned m = qcom_rpmh_finish(&gLayout, (unsigned)gTcs, writes, 16);
     for (unsigned i = 0; i < m; ++i) wr(gRsc, kRscTcs + writes[i].offset, writes[i].value);
-    native_adsp_stats[15] = (native_adsp_stats[15] & ~0xffff) | (int32_t)(lcx | lmx << 8);
-    return done ? 0 : -60;
+    native_adsp_stats[15] = (native_adsp_stats[15] & ~0xffff) | (int32_t)(lcx | lmx << 8 | (done ? 0 : 1u << 15));
+    return 0;
 }
 
 // ---- secure world calls ----
@@ -387,7 +388,7 @@ void serviceGlink() {
     native_adsp_stats[10] = (int32_t)gGlink.tx_messages;
     native_adsp_stats[11] = (int32_t)(up | (uint32_t)gGlink.version_agreed << 14 | (uint32_t)gGlink.broken << 15);
     native_adsp_stats[12] = (int32_t)gGlink.unknown_opens;
-    if (gGlink.unknown_opens && !native_adsp_text[0]) note("open: ", gGlink.last_unknown);
+    if (gGlink.unknown_opens && strncmp(native_adsp_text, "crash: ", 7)) note("open: ", gGlink.unknown_names);
     if (gGlink.version_agreed && native_adsp_stats[0] >= StReady && native_adsp_stats[0] < StGlink) stage(StGlink);
     if (up && native_adsp_stats[0] >= StGlink) stage(StChannel);
 }
@@ -468,20 +469,34 @@ bool attachIrqs() {
     return true;
 }
 
-// The firmware lives on the Data volume, which is mounted after this thread starts: a few tries with growing pauses (about two
-// minutes in all), not a poll.
-// Without sheng-adsp-fw, each try also looks in the directory a GPU addon installs to (fallback); path gets the directory that opened.
-int openFirmware(Image &image, char *path, size_t size, const char *dir, const char *fallback) {
+// The firmware comes from the device's own firmware partition ("modem:", read in place) or, with sheng-adsp-fw=DIR, from DIR/adsp.mbn
+// and DIR/adsp_dtb.mbn on a mounted volume. Without the argument the partition is tried first, then the two directories files may be
+// installed in. The UFS driver and the Data volume may not be up when this thread starts: a few tries with growing pauses (about two
+// minutes in all), not a poll. source gets the source that opened ("modem:" or a directory).
+int openPair(Image &dtb, Image &adsp, const char *source, char *path, size_t size) {
+    const bool modem = !strcmp(source, "modem:");
+    snprintf(path, size, modem ? "%sadsp_dtb" : "%s/adsp_dtb.mbn", source);
+    int rc = openImage(dtb, path);
+    if (rc) return rc;
+    snprintf(path, size, modem ? "%sadsp" : "%s/adsp.mbn", source);
+    if ((rc = openImage(adsp, path))) release(dtb);
+    return rc;
+}
+int openFirmware(Image &dtb, Image &adsp, char *path, size_t size, const char *chosen) {
     static const uint32_t pauses[] = {1, 2, 4, 8, 16, 30, 30, 30};
+    const char *sources[3] = {"modem:", "/private/var/firmware/qcom/sm8550/sheng", "/private/var/ngpu/fw"};
+    const unsigned count = chosen ? 1 : 3;
+    if (chosen) sources[0] = chosen;
     int rc = 0;
     for (unsigned i = 0;; ++i) {
-        snprintf(path, size, "%s/adsp_dtb.mbn", dir);
-        rc = openImage(image, path);
-        if (rc == ENOENT && fallback) {
-            snprintf(path, size, "%s/adsp_dtb.mbn", fallback);
-            if ((rc = openImage(image, path)) == ENOENT) snprintf(path, size, "%s/adsp_dtb.mbn", dir);
+        int first = 0;
+        for (unsigned s = 0; s < count; ++s) {
+            rc = openPair(dtb, adsp, sources[s], path, size);
+            if (!rc) return 0;
+            if (!s) first = rc;
+            if (rc != ENOENT && rc != ENXIO && rc != EIO) return rc;  // found but unusable: no other source is tried
         }
-        if (rc != ENOENT && rc != ENXIO && rc != EIO) return rc;
+        rc = first;  // the reason the first source failed is the one worth reporting
         if (i == sizeof pauses / sizeof pauses[0]) return rc;
         IOSleep(pauses[i] * 1000);
     }
@@ -493,13 +508,12 @@ void shutdownDsp(bool dtb, bool adsp) {
 }
 
 bool start() {
-    char dir[80] = "/private/var/firmware/qcom/sm8550/sheng";
-    const bool chosen = PE_parse_boot_argn("sheng-adsp-fw", dir, sizeof dir);
+    char dir[80] = "";
+    const bool chosen = PE_parse_boot_argn("sheng-adsp-fw", dir, sizeof dir) && dir[0];
     char path[112];
     Image &dtb = gDtbImage, &adsp = gAdspImage;
-    int rc = openFirmware(dtb, path, sizeof path, dir, chosen ? nullptr : "/private/var/ngpu/fw");
-    if (!rc) {path[strlen(path) - sizeof "adsp_dtb.mbn" + 1] = 0; strlcat(path, "adsp.mbn", sizeof path); rc = openImage(adsp, path);}
-    if (rc) {note("fw: ", path); fail(StFirmware, rc); release(dtb); release(adsp); return false;}
+    int rc = openFirmware(dtb, adsp, path, sizeof path, chosen ? dir : nullptr);
+    if (rc) {note("fw: ", path); fail(StFirmware, rc); return false;}
     native_adsp_stats[7] = (int32_t)(adsp.size >> 10);
     stage(StFirmware);
     if (native_adsp_stats[3] > 0) {fail(StFirmware, -114); release(dtb); release(adsp); return false;}  // running already: left alone
@@ -649,6 +663,7 @@ extern "C" void sheng_adsp_probe(void) {
     unsigned mode = 0;
     if (!PE_parse_boot_argn("sheng-adsp", &mode, sizeof mode) || !mode || native_adsp_stats[0]) return;
     gClientLock = IOLockAlloc();
+    if (gClientLock && mode >= 2) sheng_qrtr_start();  // the router link registers before the DSP can open it
     thread_t thread = nullptr;
     if (!gClientLock || kernel_thread_start(adspThread, nullptr, &thread) != KERN_SUCCESS) {fail(StMapped, -7); return;}
     thread_deallocate(thread);

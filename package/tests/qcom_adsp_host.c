@@ -67,7 +67,7 @@ static void test_mdt(void)
     CHECK(!image.elf64 && image.count == 4 && image.hash == 1 && image.relocatable);
     CHECK(image.header_size == 52 + 4 * 32);
     CHECK(image.min_address == 0x8a100000 && image.max_address == 0x8a101200);
-    CHECK(qcom_mdt_span(&image) == 0x1200);
+    CHECK(qcom_mdt_span(&image) == 0x2000);  /* the end rounded up to 4 KiB */
     CHECK(image.segment[2].load && image.segment[3].load && !image.segment[0].load && !image.segment[1].load);
     uint8_t meta[1024];
     CHECK(qcom_mdt_metadata_size(&image) == image.header_size + 0x40);
@@ -323,6 +323,18 @@ static void test_glink(void)
         desc[3] = head;
     }
     CHECK(qcom_glink_poll(&a) == 1 && a.unknown_opens == 1 && !strcmp(a.last_unknown, "qrtrx"));
+    /* Every distinct unknown name is listed once. */
+    {
+        const char *names[3] = {"apr", "qrtrx", "IPCRTR"};
+        for (unsigned k = 0; k < 3; ++k) {
+            uint8_t m[8 + 8] = {QCOM_GLINK_OPEN, 0, (uint8_t)(10 + k), 0, (uint8_t)(strlen(names[k]) + 1), 0, 0, 0};
+            memcpy(m + 8, names[k], strlen(names[k]));
+            uint32_t head = desc[3];
+            for (unsigned i = 0; i < sizeof m; ++i) {fifo_b[head] = m[i]; head = (head + 1) % FIFO;}
+            desc[3] = head;
+        }
+    }
+    CHECK(qcom_glink_poll(&a) == 3 && a.unknown_opens == 4 && !strcmp(a.unknown_names, "qrtrx apr IPCRTR"));
     /* The remote opens our channel again: OPEN_ACK, then our OPEN with the name, padded. */
     {
         const uint32_t before = desc[1];
