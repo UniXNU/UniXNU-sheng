@@ -11,7 +11,8 @@ static uint32_t le32(const uint8_t *p) {return (uint32_t)p[0] | (uint32_t)p[1] <
 static void put32(uint8_t *p, uint32_t v) {p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);}
 
 /* The scripted firmware: battery and USB property tables; a property marked failing answers with result 1. */
-static int32_t battery[24], usb[8];
+static int32_t battery[24], usb[8], board[256];
+static int board_answers;  /* 0: the firmware refuses the board properties */
 static uint32_t failing_battery = 0xffffffffu;
 static unsigned asked_battery[24], asked_usb[8];
 static uint32_t answer(const uint8_t *request, uint8_t *out)
@@ -24,6 +25,9 @@ static uint32_t answer(const uint8_t *request, uint8_t *out)
         CHECK(property < 24);
         asked_battery[property]++;
         put32(out + 16, (uint32_t)battery[property]); put32(out + 20, property == failing_battery);
+    } else if (opcode == SHENG_BATTMGR_OP_BOARD_GET) {
+        CHECK(property < 256);
+        put32(out + 16, (uint32_t)board[property]); put32(out + 20, !board_answers);
     } else {
         CHECK(opcode == SHENG_BATTMGR_OP_USB_GET && property < 8);
         asked_usb[property]++;
@@ -56,10 +60,10 @@ int main(void)
     ShengBatterySnapshot s;
     uint8_t enable[SHENG_BATTMGR_ENABLE_BYTES], reply[24], request[24];
     CHECK(sheng_battmgr_enable_request(enable) == 28);
-    CHECK(le32(enable) == 32768 && le32(enable + 4) == 1 && le32(enable + 8) == 4 && le32(enable + 20) == 1 && le32(enable + 24) == 100);
+    CHECK(le32(enable) == 32778 && le32(enable + 4) == 1 && le32(enable + 8) == 4 && le32(enable + 20) == 1 && le32(enable + 24) == 100);
 
     /* On battery: 87.5 %, 3.95 V, -812 mA, 29.5 C, 3200 of 8600 mAh, design 8800, 37 cycles, 6 h left. */
-    battery[0] = 2; battery[2] = 1; battery[4] = 8750; battery[7] = 3950000; battery[9] = -812000; battery[12] = 2950;
+    battery[0] = 2; battery[2] = 1; battery[4] = 8750; battery[7] = 3950000; battery[9] = 812000; battery[12] = 2950;
     battery[14] = 3200000; battery[17] = 8600000; battery[16] = 8800000; battery[15] = 37; battery[20] = 6 * 3600; battery[19] = -1;
     usb[0] = 0;
     sheng_battmgr_init(&b);
@@ -68,7 +72,7 @@ int main(void)
     CHECK(run_cycle(&b) == BmFields && b.cycles_done == 1);
     sheng_battmgr_snapshot(&b, &s);
     CHECK(s.present && !s.external && !s.charging && !s.fully_charged && !s.critical);
-    CHECK(s.percent == 88 && s.voltage_mv == 3950 && s.current_ma == -812 && s.temperature == 2950);
+    CHECK(s.percent == 88 && s.charge_known && s.voltage_mv == 3950 && s.current_ma == -812 && s.temperature == 2950 && s.temperature_valid);
     CHECK(s.raw_mah == 3200 && s.full_mah == 8600 && s.design_mah == 8800 && s.cycles == 37);
     CHECK(s.time_to_empty_min == 360 && s.time_to_full_min == -1 && s.adapter_family == 0 && s.adapter_watts == 0);
 
@@ -80,7 +84,7 @@ int main(void)
     CHECK(run_cycle(&b) == BmFields);
 
     /* On a PD charger, charging: 9 V at 2.6 A in, 23 W; then full. */
-    battery[0] = 1; usb[0] = 1; usb[6] = 6; usb[1] = 9000000; usb[3] = -2600000; battery[9] = 2400000; battery[19] = 1800;
+    battery[0] = 1; usb[0] = 1; usb[6] = 6; usb[1] = 9000000; usb[3] = -2600000; battery[9] = -2400000; battery[19] = 1800;
     sheng_battmgr_refresh(&b, 0);
     run_cycle(&b);
     sheng_battmgr_snapshot(&b, &s);
@@ -106,11 +110,51 @@ int main(void)
 
     /* A failing property is an error and stays invalid; the cycle goes on. */
     failing_battery = 12;
+    const uint32_t errors_before = b.errors;  /* the board properties this firmware refuses count too */
     sheng_battmgr_refresh(&b, 0);
     run_cycle(&b);
     sheng_battmgr_snapshot(&b, &s);
-    CHECK(b.errors == 1 && s.temperature == 0 && !((b.valid >> BmTemperature) & 1));
+    CHECK(b.errors == errors_before + 5 && s.temperature == 0 && !((b.valid >> BmTemperature) & 1));
     failing_battery = 0xffffffffu;
+
+    /* The fixed out-of-range temperature the firmware answers without a reading is no temperature. */
+    battery[12] = 2000000;
+    sheng_battmgr_refresh(&b, 0);
+    run_cycle(&b);
+    sheng_battmgr_snapshot(&b, &s);
+    CHECK(!s.temperature_valid && s.temperature == 0);
+    battery[12] = -4500;
+    sheng_battmgr_refresh(&b, 0);
+    run_cycle(&b);
+    sheng_battmgr_snapshot(&b, &s);
+    CHECK(!s.temperature_valid);
+    battery[12] = 2950;
+
+    /* With the fuel gauges answering, the charge is their remaining over full: (1000 + 1000) / (5000 + 4800) = 20 %, whatever the
+     * capacity property says; a gauge that stops answering falls back to the property. */
+    board_answers = 1;
+    board[0x8a] = 1000; board[0x8b] = 5000; board[0xa6] = 1000; board[0xa7] = 4800;
+    battery[4] = 100;
+    sheng_battmgr_refresh(&b, 0);
+    run_cycle(&b);
+    sheng_battmgr_snapshot(&b, &s);
+    CHECK(s.percent == 20 && s.charge_known && !s.critical);
+    board[0xa6] = 4800;  /* rounds: 5800 * 100 / 9800 = 59.18 */
+    sheng_battmgr_refresh(&b, 0);
+    run_cycle(&b);
+    sheng_battmgr_snapshot(&b, &s);
+    CHECK(s.percent == 59);
+    board[0x8a] = 5000; board[0xa6] = 4900;  /* more than full reads 100 */
+    sheng_battmgr_refresh(&b, 0);
+    run_cycle(&b);
+    sheng_battmgr_snapshot(&b, &s);
+    CHECK(s.percent == 100);
+    board_answers = 0;
+    sheng_battmgr_refresh(&b, 0);
+    run_cycle(&b);
+    sheng_battmgr_snapshot(&b, &s);
+    CHECK(s.percent == 1 && s.charge_known && s.critical);
+    battery[4] = 180;
 
     /* A timeout skips the field in flight. */
     sheng_battmgr_refresh(&b, 0);
