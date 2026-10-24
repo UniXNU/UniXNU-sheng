@@ -29,7 +29,7 @@ extern char boot_progress_banner_text[49][120] __attribute__((weak_import));
 extern volatile unsigned boot_progress_banner_rows __attribute__((weak_import));
 extern char boot_progress_ext[8][48] __attribute__((weak_import));
 extern char boot_progress_ext_wide[2][112] __attribute__((weak_import));
-extern char boot_progress_panic_text[256] __attribute__((weak_import));
+extern char boot_progress_panic_text[2048] __attribute__((weak_import));
 extern volatile uint32_t native_data_persist_state __attribute__((weak_import));
 extern volatile uint32_t native_data_persist_header __attribute__((weak_import));
 extern volatile uint32_t native_data_persist_gpt __attribute__((weak_import));
@@ -51,6 +51,10 @@ extern volatile int native_gpu_addon2_stage __attribute__((weak_import));
 extern volatile int native_gpu_addon2_status __attribute__((weak_import));
 extern volatile int native_gpu_addon3_stage __attribute__((weak_import));
 extern volatile int native_gpu_addon3_status __attribute__((weak_import));
+extern volatile int native_cryptex_os_stage __attribute__((weak_import));
+extern volatile int native_cryptex_os_status __attribute__((weak_import));
+extern volatile int native_gestalt_cache_status __attribute__((weak_import));
+extern volatile int native_ls_store_status __attribute__((weak_import));
 extern volatile uint64_t native_data_persist_present __attribute__((weak_import));
 extern volatile int native_staged_apps_stage __attribute__((weak_import));
 extern volatile int32_t native_buttons_stats[10] __attribute__((weak_import));
@@ -95,7 +99,7 @@ extern volatile uint64_t nw_wifi_where[4] __attribute__((weak_import));
 extern volatile uint32_t native_dpu_stats[20] __attribute__((weak_import));
 extern volatile uint32_t native_touch_jitter[3] __attribute__((weak_import));
 extern volatile uint32_t native_touch_hold[14] __attribute__((weak_import));
-extern char native_lookup_log[96][112] __attribute__((weak_import));
+extern char native_lookup_log[160][112] __attribute__((weak_import));
 extern volatile unsigned native_lookup_count __attribute__((weak_import));
 extern volatile uint32_t native_dpu_pipes[54] __attribute__((weak_import));
 extern volatile int32_t native_adsp_stats[16] __attribute__((weak_import));
@@ -109,6 +113,7 @@ extern volatile uint64_t native_adreno_vm_phase_us[2][8] __attribute__((weak_imp
 extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wc_audit[6] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_submit_ibs[4] __attribute__((weak_import));
 extern volatile uint32_t native_touch_edge_stats[4] __attribute__((weak_import));
 extern volatile uint32_t native_touch_hid_multi[3] __attribute__((weak_import));
 extern volatile int32_t native_backlight_request[6] __attribute__((weak_import));
@@ -333,6 +338,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_gpu_addon_written, native_gpu_addon_same, native_gpu_addon_failed, native_gpu_addon_error, native_gpu_addon_stage,
              native_gpu_addon_status, native_gpu_addon2_stage, native_gpu_addon2_status, &native_gpu_addon3_stage ? native_gpu_addon3_stage : 0,
              &native_gpu_addon3_status ? native_gpu_addon3_status : 0);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // The OS cryptex path (kern_exec.c native_cryptex_os_view; stage 5 = a WebKit extension found through /System/Cryptexes/OS) and the
+  // removed MobileGestalt cache (0 removed, 2 none there).
+  if (&native_cryptex_os_stage && &native_gestalt_cache_status) {
+    char row[80];
+    snprintf(row, sizeof row, "[cryptex os] stage=%d status=%d gestalt-cache=%d ls-store=%d", native_cryptex_os_stage, native_cryptex_os_status,
+             native_gestalt_cache_status, &native_ls_store_status ? native_ls_store_status : -9);
     at = put(out, at, cap, row, sizeof row);
   }
   // The one-time copy of the OS volume's staged system apps into Data (kern_exec.c native_staged_apps_prepare): stage (2 copied, 3 copied
@@ -585,6 +598,13 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_touch_hid_multi[2]);
     at = put(out, at, cap, row, sizeof row);
   }
+  // IBs per GPU submission: submissions, IBs, the most in one, and those with more than 16 (a frame used to be split at 16).
+  if (&native_adreno_submit_ibs) {
+    char row[120];
+    snprintf(row, sizeof row, "[gpu ibs] submissions=%u ibs=%u max=%u over16=%u", native_adreno_submit_ibs[0], native_adreno_submit_ibs[1],
+             native_adreno_submit_ibs[2], native_adreno_submit_ibs[3]);
+    at = put(out, at, cap, row, sizeof row);
+  }
   // The submissions' write-combine work: audits, IB lines compared and found dirty, pages set back to write-combined, the re-assertion's
   // total time, and the CPU cache maintenance passes (count, total ms, MiB).
   if (&native_adreno_wc_audit && &native_adreno_reassert_ticks && &native_adreno_cache_stats) {
@@ -785,10 +805,10 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_touch_hold ? native_touch_hold[9] : 0);
     at = put(out, at, cap, row, sizeof row);
   }
-  // Distinct path lookups that failed for MobileSafari (errno and path as given), in the order they first failed.
+  // Distinct path lookups that failed for MobileSafari (S) and lsd (L): errno and path, in the order they first failed.
   if (&native_lookup_count && native_lookup_count) {
     char row[128];
-    const unsigned n = native_lookup_count < 96 ? native_lookup_count : 96;
+    const unsigned n = native_lookup_count < 160 ? native_lookup_count : 160;
     snprintf(row, sizeof row, "[safari lookups] failed=%u", native_lookup_count);
     at = put(out, at, cap, row, sizeof row);
     for (unsigned i = 0; i < n; ++i) {
@@ -1014,7 +1034,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   if (&boot_progress_panic_text && boot_progress_panic_text[0]) {
     at = put(out, at, cap, "[panic]", 8);
-    at = put(out, at, cap, boot_progress_panic_text, 256);
+    at = put(out, at, cap, boot_progress_panic_text, 2048);
   }
   return at;
 }

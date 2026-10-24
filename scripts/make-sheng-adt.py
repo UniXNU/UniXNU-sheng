@@ -190,7 +190,9 @@ def main():
                              ('artwork-device-idiom', b'pad\0'),
                              ('artwork-device-subtype', struct.pack('<I', 2732)),
                              ('artwork-scale-factor', struct.pack('<I', 2)),
-                             ('artwork-display-gamut', b'P3\0'),
+                             # sRGB: the panel is scanned out as 8-bit BGRX; with P3, apps and WebKit drew layers into wide-color surfaces
+                             # that CoreGraphics fills only on the GPU, and WebKit's processes have no GPU device here
+                             ('artwork-display-gamut', b'sRGB\0'),
                              ('compatible-device-fallback', b'iPad6,7\0'),
                              ('thin-bezel', struct.pack('<I', 1))] if args.ipad_identity else [] )]),
         node('arm-io', [('device_type', b'arm-io\0'),
