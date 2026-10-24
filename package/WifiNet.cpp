@@ -14,6 +14,7 @@
 #include <libkern/OSAtomic.h>
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSNumber.h>
+#include <libkern/c++/OSSerialize.h>
 #include <sys/kern_event.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
@@ -309,6 +310,38 @@ class IO80211Interface : public IONetworkInterface {
 };
 OSDefineMetaClassAndStructors(IO80211Interface, IONetworkInterface);
 
+// The network configuration's interface namer waits for a service of this class, opens it and only then publishes that IOKit is quiet;
+// everything that lists interfaces (the wireless daemon among them) waits for that. Interfaces here are named when they are made, so the
+// commands it sends (as properties of its connection) are only logged.
+class IONetworkStackUserClient : public IOUserClient {
+  OSDeclareDefaultStructors(IONetworkStackUserClient);
+ public:
+  IOReturn setProperties(OSObject *properties) APPLE_KEXT_OVERRIDE {
+    static unsigned said;
+    if (said++ < 16) {
+      char text[200] = "?";
+      if (OSSerialize *s = OSSerialize::withCapacity(512)) { if (properties && properties->serialize(s)) strlcpy(text, s->text(), sizeof text); s->release(); }
+      log(6, "wifi-net: network stack command %s", text);
+    }
+    return kIOReturnSuccess;
+  }
+  IOReturn clientClose() APPLE_KEXT_OVERRIDE { terminate(); return kIOReturnSuccess; }
+};
+OSDefineMetaClassAndStructors(IONetworkStackUserClient, IOUserClient);
+class IONetworkStack : public IOService {
+  OSDeclareDefaultStructors(IONetworkStack);
+ public:
+  IOReturn newUserClient(task_t task, void *security, UInt32 type, OSDictionary *, IOUserClient **handler) APPLE_KEXT_OVERRIDE {
+    IONetworkStackUserClient *client = OSTypeAlloc(IONetworkStackUserClient);
+    if (!client || !client->initWithTask(task, security, type)) { OSSafeReleaseNULL(client); return kIOReturnNoMemory; }
+    if (!client->attach(this)) { client->release(); return kIOReturnError; }
+    if (!client->start(this)) { client->detach(this); client->release(); return kIOReturnError; }
+    log(6, "wifi-net: the network stack was opened (type %u)", static_cast<unsigned>(type));
+    *handler = client; return kIOReturnSuccess;
+  }
+};
+OSDefineMetaClassAndStructors(IONetworkStack, IOService);
+
 namespace {
 
 IOService *publish(IOService *service, IOService *provider, const char *name) {
@@ -320,6 +353,8 @@ IOService *publish(IOService *service, IOService *provider, const char *name) {
 }
 void publish_registry(const char *ifname) {
   IOService *platform = IOService::getPlatform();
+  if (IONetworkStack *stack = OSTypeAlloc(IONetworkStack)) {
+    if (!stack->init() || !publish(stack, platform, "IONetworkStack")) log(3, "wifi-net: the network stack service did not start"); else stack->release(); }
   IO80211Controller *controller = OSTypeAlloc(IO80211Controller);
   IO80211Interface *wlan = OSTypeAlloc(IO80211Interface);
   if (!platform || !controller || !wlan || !controller->init() || !wlan->init()) { OSSafeReleaseNULL(controller); OSSafeReleaseNULL(wlan); log(3, "wifi-net: registry objects not made"); return; }
