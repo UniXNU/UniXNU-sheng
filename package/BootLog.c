@@ -50,6 +50,8 @@ extern volatile int native_gpu_addon_status __attribute__((weak_import));
 extern volatile int native_gpu_addon2_stage __attribute__((weak_import));
 extern volatile int native_gpu_addon2_status __attribute__((weak_import));
 extern volatile int native_gpu_addon3_stage __attribute__((weak_import));
+extern volatile int native_gpu_addon4_stage __attribute__((weak_import));
+extern volatile int native_gpu_addon4_status __attribute__((weak_import));
 extern volatile int native_gpu_addon3_status __attribute__((weak_import));
 extern volatile int native_cryptex_os_stage __attribute__((weak_import));
 extern volatile int native_cryptex_os_status __attribute__((weak_import));
@@ -104,6 +106,8 @@ extern volatile unsigned native_lookup_count __attribute__((weak_import));
 extern volatile uint32_t native_dpu_pipes[54] __attribute__((weak_import));
 extern volatile int32_t native_adsp_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_audio_stats[16] __attribute__((weak_import));
+extern volatile uint32_t native_audio_amps[6][4] __attribute__((weak_import));
+extern volatile int32_t native_adsp_audio[8] __attribute__((weak_import));
 extern char native_adsp_text[96] __attribute__((weak_import));
 extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_qrtr_stats[16] __attribute__((weak_import));
@@ -335,13 +339,15 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     at = put(out, at, cap, row, sizeof row);
   }
   // The payload's GPU addon (kern_exec.c native_gpu_addon_install): files in it (-1 none), written, already equal, failed, last error; then
-  // the stage/status of the boot-time addon mounts (stage 5 = mounted and both entries visible): plugin, launchd job, wallpaper.
+  // the stage/status of the boot-time addon mounts (stage 5 = mounted and both entries visible): plugin, launchd job, wallpaper, audio
+  // server plug-in.
   if (&native_gpu_addon_files && &native_gpu_addon_stage) {
-    char row[120];
-    snprintf(row, sizeof row, "A files=%d wr=%d same=%d fail=%d err=%d mount=%d/%d mount2=%d/%d mount3=%d/%d", native_gpu_addon_files,
+    char row[140];
+    snprintf(row, sizeof row, "A files=%d wr=%d same=%d fail=%d err=%d mount=%d/%d mount2=%d/%d mount3=%d/%d mount4=%d/%d", native_gpu_addon_files,
              native_gpu_addon_written, native_gpu_addon_same, native_gpu_addon_failed, native_gpu_addon_error, native_gpu_addon_stage,
              native_gpu_addon_status, native_gpu_addon2_stage, native_gpu_addon2_status, &native_gpu_addon3_stage ? native_gpu_addon3_stage : 0,
-             &native_gpu_addon3_status ? native_gpu_addon3_status : 0);
+             &native_gpu_addon3_status ? native_gpu_addon3_status : 0, &native_gpu_addon4_stage ? native_gpu_addon4_stage : 0,
+             &native_gpu_addon4_status ? native_gpu_addon4_status : 0);
     at = put(out, at, cap, row, sizeof row);
   }
   // The OS cryptex path (kern_exec.c native_cryptex_os_view; stage 5 = a WebKit extension found through /System/Cryptexes/OS) and the
@@ -880,15 +886,34 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       at = put(out, at, cap, row, sizeof row);
     }
   }
-  // Audio framework readiness over the packet router channel (AudioProbe.cpp): stage (5 ready), queries, answers, last status, refusals,
-  // timeouts, ignored packets, ms from channel up to ready, channel ups/downs, last opcode, ring drops, send refusals, mode.
+  // Speaker playback (AudioProbe.cpp): stage (70 done; negative: the failing step), last DSP status, DSP answers, buffer map handle,
+  // buffers sent and returned, amplifiers identified / PLL locked / reporting errors (bit per amplifier), SMMU result, the two I2C engines,
+  // last opcode, I2C failures, DFS level 0 kHz, ms to playing; then per amplifier: device id, revision, EINT1, EINT2.
   if (&native_audio_stats && native_audio_stats[0]) {
-    char row[200];
-    snprintf(row, sizeof row, "[audio] st=%d q=%d ans=%d status=%d refused=%d to=%d ign=%d rdy=%dms up=%d down=%d op=%x drop=%d sendfail=%d mode=%d",
+    char row[240];
+    snprintf(row, sizeof row, "[audio] st=%d status=%d ans=%d map=%x sent=%d done=%d amps=%x lock=%x err=%x smmu=%x bus=%x/%x op=%x i2cfail=%d dfs=%d play=%dms",
              native_audio_stats[0], native_audio_stats[1], native_audio_stats[2], native_audio_stats[3], native_audio_stats[4], native_audio_stats[5],
              native_audio_stats[6], native_audio_stats[7], native_audio_stats[8], native_audio_stats[9], native_audio_stats[10], native_audio_stats[11],
-             native_audio_stats[12], native_audio_stats[13]);
+             native_audio_stats[12], native_audio_stats[13], native_audio_stats[14], native_audio_stats[15]);
     at = put(out, at, cap, row, sizeof row);
+    if (&native_audio_amps) {
+      snprintf(row, sizeof row, "[amps] %x/%x/%x/%x %x/%x/%x/%x %x/%x/%x/%x %x/%x/%x/%x %x/%x/%x/%x %x/%x/%x/%x",
+               native_audio_amps[0][0], native_audio_amps[0][1], native_audio_amps[0][2], native_audio_amps[0][3],
+               native_audio_amps[1][0], native_audio_amps[1][1], native_audio_amps[1][2], native_audio_amps[1][3],
+               native_audio_amps[2][0], native_audio_amps[2][1], native_audio_amps[2][2], native_audio_amps[2][3],
+               native_audio_amps[3][0], native_audio_amps[3][1], native_audio_amps[3][2], native_audio_amps[3][3],
+               native_audio_amps[4][0], native_audio_amps[4][1], native_audio_amps[4][2], native_audio_amps[4][3],
+               native_audio_amps[5][0], native_audio_amps[5][1], native_audio_amps[5][2], native_audio_amps[5][3]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    // The audio channel's GLINK sends (AdspProbe.cpp noteChannel): sent, deferred, refused, queued, intent asked, remote intents, the
+    // largest remote intent, the last deferred length.
+    if (&native_adsp_audio) {
+      snprintf(row, sizeof row, "[audio-glink] sent=%d deferred=%d refused=%d queued=%d asked=%d intents=%d largest=%d lastlen=%d",
+               native_adsp_audio[0], native_adsp_audio[1], native_adsp_audio[2], native_adsp_audio[3], native_adsp_audio[4],
+               native_adsp_audio[5], native_adsp_audio[6], native_adsp_audio[7]);
+      at = put(out, at, cap, row, sizeof row);
+    }
   }
   // Touch strokes in panel pixels as the digitizer published them (y mirrored, 0 = the edge the UI calls top): where each finger came
   // down and lifted, how long and over how many frames, and the extent of every contact so far (edge gestures need the outer pixels).
