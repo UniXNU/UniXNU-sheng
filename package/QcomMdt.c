@@ -82,7 +82,8 @@ int qcom_mdt_metadata(const QcomMdtImage *image, QcomMdtRead read, void *context
     return QcomMdtOk;
 }
 
-uint64_t qcom_mdt_span(const QcomMdtImage *image) {return image->max_address - image->min_address;}
+/* The secure world takes the span with its end rounded up to a 4 KiB page and refuses an unaligned one. */
+uint64_t qcom_mdt_span(const QcomMdtImage *image) {return ((image->max_address + 0xfff) & ~0xfffull) - image->min_address;}
 
 int qcom_mdt_place(const QcomMdtImage *image, unsigned index, uint64_t region_base, uint64_t region_size, uint64_t *offset)
 {
@@ -95,5 +96,62 @@ int qcom_mdt_place(const QcomMdtImage *image, unsigned index, uint64_t region_ba
     if (!fits(at, s->memory_size, region_size)) return QcomMdtOutside;
     if (s->file_size && !fits(s->file_offset, s->file_size, image->file_size)) return QcomMdtOutside;
     *offset = at;
+    return QcomMdtOk;
+}
+
+int qcom_mdt_split(QcomMdtSplit *split, const uint8_t *headers, size_t length)
+{
+    if (!split || !headers) return QcomMdtReadError;
+    *split = (QcomMdtSplit){0};
+    if (length < 52) return QcomMdtTooSmall;
+    const uint8_t *e = headers;
+    if (e[0] != 0x7f || e[1] != 'E' || e[2] != 'L' || e[3] != 'F' || e[5] != 1 || (e[4] != 1 && e[4] != 2)) return QcomMdtNotElf;
+    const int elf64 = e[4] == 2;
+    if (elf64 && length < 64) return QcomMdtTooSmall;
+    const uint64_t phoff = elf64 ? le64(e + 32) : le32(e + 28);
+    const unsigned phentsize = elf64 ? le16(e + 54) : le16(e + 42), phnum = elf64 ? le16(e + 56) : le16(e + 44);
+    if (phentsize != (elf64 ? 56u : 32u) || !phnum) return QcomMdtBadHeaders;
+    if (phnum > QCOM_MDT_MAX_SEGMENTS) return QcomMdtTooMany;
+    if (!fits(phoff, (uint64_t)phentsize * phnum, length)) return QcomMdtBadHeaders;
+    split->count = phnum;
+    for (unsigned i = 0; i < phnum; ++i) {
+        const uint8_t *p = e + phoff + (uint64_t)i * phentsize;
+        const uint64_t offset = elf64 ? le64(p + 8) : le32(p + 4), size = elf64 ? le64(p + 32) : le32(p + 16);
+        if (offset + size < offset) return QcomMdtBadHeaders;
+        split->piece[i].offset = offset;
+        split->piece[i].size = size;
+        if (size && offset + size > split->size) split->size = offset + size;
+    }
+    /* piece 0 must be the headers themselves */
+    if (split->piece[0].offset || split->piece[0].size < phoff + (uint64_t)phentsize * phnum) return QcomMdtBadHeaders;
+    return QcomMdtOk;
+}
+
+int qcom_mdt_split_read(const QcomMdtSplit *split, QcomMdtPieceRead read, void *context, uint64_t offset, void *to, size_t length)
+{
+    uint8_t *out = to;
+    if (!split || !read || !to || !fits(offset, length, split->size)) return QcomMdtOutside;
+    while (length) {
+        /* the piece holding offset, or else the distance to the next piece */
+        uint64_t take = length, gap_end = split->size;
+        int hit = -1;
+        for (unsigned i = 0; i < split->count; ++i) {
+            const uint64_t at = split->piece[i].offset, size = split->piece[i].size;
+            if (!size) continue;
+            if (offset >= at && offset - at < size) {hit = (int)i; break;}
+            if (at > offset && at < gap_end) gap_end = at;
+        }
+        if (hit >= 0) {
+            const uint64_t left = split->piece[hit].offset + split->piece[hit].size - offset;
+            if (take > left) take = left;
+            if (read(context, (unsigned)hit, offset - split->piece[hit].offset, out, (size_t)take)) return QcomMdtReadError;
+        } else {
+            if (take > gap_end - offset) take = gap_end - offset;
+            for (uint64_t i = 0; i < take; ++i) out[i] = 0;
+        }
+        out += take;
+        offset += take;
+        length -= (size_t)take;
+    }
     return QcomMdtOk;
 }

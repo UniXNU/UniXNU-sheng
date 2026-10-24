@@ -73,6 +73,7 @@ typedef struct {
     /* Counters for the log. */
     uint32_t rx_messages, tx_messages, rx_data, unknown_opens, dropped;
     char last_unknown[QCOM_GLINK_NAME];
+    char unknown_names[96];  /* the distinct names of those opens, space separated, as many as fit */
 } QcomGlink;
 
 /* Sets up the link on its FIFOs (rx may have no data yet: the remote makes its FIFO later) and resets the indices we own. */

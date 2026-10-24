@@ -235,6 +235,28 @@ static int handle_data(QcomGlink *g, uint16_t cmd, uint32_t rcid, uint32_t liid,
 }
 
 /* One message at the FIFO tail: 1 handled, 0 incomplete (wait for more), negative on a broken stream. */
+
+/* Adds name to the list of opens nobody serves unless it is there already or does not fit. */
+static void note_unknown(QcomGlink *g, const char *name)
+{
+    char *list = g->unknown_names;
+    const unsigned cap = sizeof g->unknown_names;
+    unsigned n = 0, used = 0;
+    while (n < QCOM_GLINK_NAME && name[n]) ++n;
+    while (used < cap && list[used]) ++used;
+    for (unsigned at = 0; at < used;) {
+        unsigned end = at;
+        while (end < used && list[end] != ' ') ++end;
+        unsigned same = end - at == n;
+        for (unsigned b = 0; same && b < n; ++b) same = list[at + b] == name[b];
+        if (same) return;
+        at = end + 1;
+    }
+    if (!n || used + (used ? 1 : 0) + n + 1 > cap) return;
+    if (used) list[used++] = ' ';
+    for (unsigned b = 0; b < n; ++b) list[used++] = name[b];
+    list[used] = 0;
+}
 static int receive_one(QcomGlink *g)
 {
     const uint32_t avail = qcom_glink_rx_avail(&g->rx);
@@ -277,6 +299,7 @@ static int receive_one(QcomGlink *g)
         if (!c) {
             g->unknown_opens++;
             for (unsigned b = 0; b < QCOM_GLINK_NAME; ++b) g->last_unknown[b] = name[b];
+            note_unknown(g, name);
         } else {
             if (c->remote_open && c->up && c->client.state) c->client.state(c->context, c, 0);
             if (c->remote_open) reset_channel(c);
