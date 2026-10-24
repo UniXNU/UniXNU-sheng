@@ -108,6 +108,7 @@ extern char native_adsp_text[96] __attribute__((weak_import));
 extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_qrtr_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_battery_raw[10] __attribute__((weak_import));
+extern volatile int32_t native_charger_stats[16] __attribute__((weak_import));
 extern char native_qrtr_text[96] __attribute__((weak_import));
 extern volatile uint32_t native_swipe_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
@@ -865,6 +866,17 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       snprintf(row, sizeof row, "[battery-raw] cap=%d g1=%d/%d g2=%d/%d temp=%d cur=%d valid=%x lastto=%d",
                native_battery_raw[0], native_battery_raw[1], native_battery_raw[2], native_battery_raw[3], native_battery_raw[4],
                native_battery_raw[5], native_battery_raw[6], native_battery_raw[7], native_battery_raw[8]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    // the charger (ShengBattery.cpp native_charger_stats): USB online, type, adapter type, the board's adapter type, input limit and port
+    // maximum (mA), USB mV and mA, battery status, charge type, thermal level, charge current (mA), adapter watts, authentication and
+    // suspend bits, limit sets|tries<<8|port<<16, last limit result
+    if (&native_charger_stats) {
+      snprintf(row, sizeof row, "[charger] on=%d type=%d adap=%d real=%d icl=%d max=%d mv=%d ma=%d st=%d ct=%d lvl=%d fcc=%d w=%d auth=%x lim=%x res=%d",
+               native_charger_stats[0], native_charger_stats[1], native_charger_stats[2], native_charger_stats[3], native_charger_stats[4],
+               native_charger_stats[5], native_charger_stats[6], native_charger_stats[7], native_charger_stats[8], native_charger_stats[9],
+               native_charger_stats[10], native_charger_stats[11], native_charger_stats[12], native_charger_stats[13], native_charger_stats[14],
+               native_charger_stats[15]);
       at = put(out, at, cap, row, sizeof row);
     }
   }
