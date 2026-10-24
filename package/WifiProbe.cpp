@@ -579,7 +579,7 @@ void endpointLinkSetup(uint64_t sinkAddress) {
 }
 
 
-// ---- Stage 6: the WiFi module (NativeWifi) on this board. It does its own chip power-up, MHI boot, QRTR/QMI and driver start; the board provides
+// ---- Stage 6: the WiFi module (Ath12kWifi) on this board. It does its own chip power-up, MHI boot, QRTR/QMI and driver start; the board provides
 // register access, configuration space, DMA memory from the endpoint's SMMU window, firmware files from the container, a clock and a log.
 struct Arena {uint8_t *va; uint64_t iova; size_t bytes; struct Block {uint32_t off, size; bool used;} blocks[16384]; unsigned count;} gArena;
 bool arenaInit() {

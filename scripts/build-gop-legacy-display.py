@@ -236,7 +236,7 @@ reset_obj=OUT/'BootReset.o'
 run([str(reset_source) if arg==str(process_source) else str(reset_obj) if arg==str(process_obj) else arg for arg in process_cmd]+['-I',str(ROOT/'kits/sheng')],cwd=pr['directory'])
 # Default-off touch bring-up: C++ board probe plus the generic GENI SPI and Novatek protocol/touch libraries, compiled with the
 # kernel C flags, and the firmware object generated from the copy kept outside Git.
-cmd+=['-I',str(ROOT/'kits/sheng'),'-I',str(ROOT/'drivers/QcomGeniSpi'),'-I',str(ROOT/'drivers/ShengNovatekTouch'),'-I',str(ROOT/'drivers/ShengUfs')]
+cmd+=['-I',str(ROOT/'kits/sheng'),'-I',str(ROOT/'kits/Sm8550Platform'),'-I',str(ROOT/'drivers/QcomGeniSpi'),'-I',str(ROOT/'drivers/ShengNovatekTouch'),'-I',str(ROOT/'drivers/ShengUfs')]
 touch_dir=OUT/'touch';touch_dir.mkdir(exist_ok=True)
 touch_cpp=ROOT/'kits/sheng/TouchProbe.cpp';touch_cpp_obj=touch_dir/'TouchProbe.o'
 cpufreq_cpp=ROOT/'kits/sheng/CpuFreqProbe.cpp';cpufreq_obj=touch_dir/'CpuFreqProbe.o'
@@ -246,8 +246,8 @@ wifi_cpp=ROOT/'kits/sheng/WifiProbe.cpp';wifi_obj=touch_dir/'WifiProbe.o'
 wifinet_cpp=ROOT/'kits/sheng/WifiNet.cpp';wifinet_obj=touch_dir/'WifiNet.o';wifinet_late=touch_dir/'WifiNet.late.o'
 # The WiFi module (Ath12kWifi): the board code includes its interface header, and its objects join the archive.
 import os
-nativewifi=Path(os.environ.get('NATIVE_WIFI_DIR') or ROOT/'drivers/Ath12kWifi')
-require((nativewifi/'include/nw_abi.h').exists(),'Ath12kWifi module directory (set NATIVE_WIFI_DIR)')
+nativewifi=Path(os.environ.get('ATH12K_WIFI_DIR') or os.environ.get('NATIVE_WIFI_DIR') or ROOT/'drivers/Ath12kWifi')
+require((nativewifi/'include/nw_abi.h').exists(),'Ath12kWifi module directory (set ATH12K_WIFI_DIR)')
 # The audio DSP bring-up (sheng-adsp): the driver and its protocol cores (firmware images, SMEM, SMP2P, GLINK, AOSS QMP, RPMh). The
 # firmware file reader is BSD code and is built with the boot progress archive.
 adsp_cpp=ROOT/'kits/sheng/AdspProbe.cpp';adsp_obj=touch_dir/'AdspProbe.o'

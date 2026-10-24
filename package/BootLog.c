@@ -591,7 +591,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_touch_edge_stats[1], native_touch_edge_stats[2], native_touch_edge_stats[3]);
     at = put(out, at, cap, row, sizeof row);
   }
-  // Multi-finger reports (drivers/NativeHidInput): reports with two or more fingers down, the most at once, lifts of vanished fingers.
+  // Multi-finger reports (drivers/ShengHidInput): reports with two or more fingers down, the most at once, lifts of vanished fingers.
   if (&native_touch_hid_multi) {
     char row[80];
     snprintf(row, sizeof row, "[touch multi] reports=%u max=%u lifts=%u", native_touch_hid_multi[0], native_touch_hid_multi[1],

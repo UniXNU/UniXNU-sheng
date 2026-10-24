@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the WiFi module (NativeWifi) to kernel objects for the board build. Usage: build-native-wifi.py <module dir> <output dir>
+"""Compile the WiFi module (Ath12kWifi) to kernel objects for the board build. Usage: build-ath12k-wifi.py <module dir> <output dir>
 Prints one line "OBJ <path>" per object. The module lays out its generated include trees with tools/prepare.sh first."""
 import subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
