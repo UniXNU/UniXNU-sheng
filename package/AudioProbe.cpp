@@ -1,123 +1,161 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// The first step of audio on the sheng board (boot argument sheng-audio=1 or 2; needs sheng-adsp=2): registers the audio packet router
-// channel "adsp_apps" with the audio DSP and asks the DSP's audio framework manager whether the framework is ready (ShengGpr.c). With 1
-// the DSP opens the channel and this side answers; with 2 this side opens it. Playback itself (the graph of the codec and the six
-// speaker amplifiers, and the iOS audio driver above it) builds on this channel and is not here yet.
-//
-// Design: everything runs on one work loop. The DSP thread's callbacks only copy a message into a small ring and signal an
-// IOInterruptEventSource (no provider: a software event), so the DSP thread never waits. One query is in flight; a 1 s timer gives up on
-// it, and a "not ready" answer is asked again after 100 ms, up to 100 queries.
+// Speaker playback on the sheng board (boot argument sheng-audio=1, or 2 to play a test tone first; needs sheng-adsp=2). One kernel thread brings the path up in order:
+//   1  pass-through stream mapping in the apps SMMU for the DSP's audio streams, and the DSP's period buffers
+//   2  pins: secondary MI2S to the LPASS function, the two amplifier I2C buses, the shared amplifier reset (low 2 ms, then high)
+//   3  QUP clocks and the two GENI I2C engines (QUP1 SE5, QUP2 SE0) at 400 kHz from the 19.2 MHz DFS level
+//   4  the six CS35L43 amplifiers: identity and configuration (ShengCs35l43.c)
+//   5  the audio DSP: "adsp_apps" packet router channel, framework readiness, speaker device and playback stream graphs
+//      (ShengAudioReach.c), buffer mapping
+//   6  the audio service (ShengAudioService.cpp) that iOS's audio server plug-in opens; with sheng-audio=2 a 750 Hz test tone plays first
+//      for sheng-audio-tone-ms (default 1500), attenuated by sheng-audio-atten dB (default 30)
+// Then the thread serves the plug-in: on start it powers the amplifiers up, prepares and starts both graphs and keeps four 10 ms
+// periods queued at the DSP, each copied from the shared playback ring (ShengAudioAbi.h) as the previous one returns; on stop it stops
+// the graphs and powers the amplifiers down. Waiting happens only on this thread: the DSP thread's callbacks copy each answer into a
+// ring and wake it.
 #include <IOKit/IOLib.h>
-#include <IOKit/IOWorkLoop.h>
-#include <IOKit/IOTimerEventSource.h>
-#include <IOKit/IOInterruptEventSource.h>
+#include <IOKit/IOMemoryDescriptor.h>
+#include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IODeviceMemory.h>
+#include <libkern/c++/OSSharedPtr.h>
+#include <kern/thread.h>
+#include <kern/clock.h>
 #include <pexpert/pexpert.h>
+#include <string.h>
 extern "C" {
 #include "ShengAdsp.h"
 #include "ShengGpr.h"
+#include "ShengAudioReach.h"
+#include "ShengCs35l43.h"
+#include "GeniI2c.h"
+#include "TouchBoard.h"
+#include "SmmuBypass.h"
+#include "ShengAudioAbi.h"
 }
+#include <IOKit/IOService.h>
+#include <libkern/OSKextLib.h>
+#include <mach/kmod.h>
+
+extern kmod_info_t g_kernel_kmod_info;
+extern "C" void native_audio_service_static_init(void) __asm__("__GLOBAL__sub_I_ShengAudioService.cpp");
+extern "C" void sheng_audio_service_start(void);
 
 extern "C" ShengAdspChannel *sheng_adsp_channel(const char *, uint32_t, uint32_t, int, const ShengAdspClient *, void *) __attribute__((weak_import));
 extern "C" int sheng_adsp_send(ShengAdspChannel *, const void *, uint32_t) __attribute__((weak_import));
-// [0] stage (1 started, 2 channel registered, 3 channel up, 4 query sent, 5 framework ready; negative: the step that failed, -6 gave
-// up), [1] queries, [2] answers, [3] last status, [4] refusals, [5] timeouts, [6] ignored packets, [7] ms from channel up to ready,
-// [8] channel ups, [9] channel downs, [10] last opcode received, [11] messages dropped (ring full), [12] send refusals, [13] mode
+// [0] stage (see the list above, x10 for sub-steps, 60 serving; negative: the step that failed), [1] last DSP status, [2] DSP
+// answers, [3] buffer map handle, [4] periods sent, [5] periods returned, [6] amplifiers identified (bit per amplifier),
+// [7] amplifiers with the PLL locked, [8] amplifiers reporting errors, [9] SMMU result (bit per stream, or an error code << 8),
+// [10] bus 0 engine (proto << 24 | clock config), [11] bus 1 engine, [12] last opcode received, [13] I2C failures,
+// [14] output starts | stops << 16, [15] ms from start to serving
 extern "C" {volatile int32_t native_audio_stats[16];}
+// Per amplifier: device id, revision, EINT1, EINT2 while playing.
+extern "C" {volatile uint32_t native_audio_amps[CS35_AMPS][4];}
 
 namespace {
-constexpr uint32_t kAnswerMs = 1000, kRetryMs = 100, kMaxQueries = 100, kRing = 4, kMessage = 64;
-constexpr uint32_t kIntentSize = 512, kIntentCount = 20;
+constexpr uint32_t kIntentSize = 512, kIntentCount = 20, kRing = 16, kMessage = 128;
+constexpr uint32_t kPort = 0x2001;                   // our GPR port; every answer comes back to it
+constexpr uint32_t kRate = SHENG_AUDIO_RATE, kChannels = SHENG_AUDIO_OUT_CHANNELS, kPeriodFrames = SHENG_AUDIO_PERIOD_FRAMES;
+constexpr uint32_t kPeriodBytes = kPeriodFrames * kChannels * 2, kSlots = 8, kBufferBytes = 64 * 1024, kRingFrames = SHENG_AUDIO_RING_FRAMES;
+constexpr uint32_t kInFlight = 4, kLeadFrames = (kInFlight + 1) * kPeriodFrames;
+constexpr uint64_t kGcc = 0x00100000ULL, kTlmm = 0x0f100000ULL, kSmmu = 0x15000000ULL;
+constexpr uint64_t kSe[2] = {0x00a94000ULL, 0x00880000ULL};
+// GCC (gcc-sm8550.c): vote registers and bits, branch halt registers, the engines' DFS clock sources.
+constexpr uint32_t kVote1 = 0x52008, kVote1Bits = (1u << 18) | (1u << 19) | (1u << 20) | (1u << 21) | (1u << 27);
+constexpr uint32_t kVote2 = 0x52010, kVote2Bits = 0x1fu;
+constexpr uint32_t kHalts[] = {0x2327c, 0x23280, 0x23284, 0x23294, 0x1861c, 0x233cc, 0x233d0, 0x233d4, 0x23004, 0x1e004};
+constexpr uint32_t kRcg[2] = {0x18628, 0x1e010};
+// TLMM pins: secondary MI2S (function 1, 8 mA), I2C (function 2, pull-up), amplifier reset.
+constexpr unsigned kI2sPins[] = {121, 122, 123, 124}, kI2cPins[] = {52, 53, 0, 1}, kResetPin = 90;
+constexpr uint16_t kStreams[] = {0x1001, 0x1081, 0x1061};
+// GENI I2C at 400 kHz from 19.2 MHz (i2c-qcom-geni.c): divider 2, high 5, low 11, cycle 22.
+constexpr uint32_t kSclCounters = 5u << 20 | 11u << 10 | 22u, kClkCfg = 2u << 4 | 1u;
+const int16_t kSine[64] = {0, 3212, 6393, 9512, 12539, 15446, 18204, 20787, 23170, 25329, 27245, 28898, 30273, 31356, 32137, 32609,
+    32767, 32609, 32137, 31356, 30273, 28898, 27245, 25329, 23170, 20787, 18204, 15446, 12539, 9512, 6393, 3212, 0, -3212, -6393, -9512,
+    -12539, -15446, -18204, -20787, -23170, -25329, -27245, -28898, -30273, -31356, -32137, -32609, -32767, -32609, -32137, -31356, -30273,
+    -28898, -27245, -25329, -23170, -20787, -18204, -15446, -12539, -9512, -6393, -3212};
+
+struct Region {OSSharedPtr<IOMemoryMap> keep; uintptr_t va = 0;};
+bool mapRegion(uint64_t phys, uint64_t length, Region &region) {
+    IODeviceMemory *memory = IODeviceMemory::withRange(phys, length);
+    if (!memory) return false;
+    region.keep = OSSharedPtr<IOMemoryMap>(memory->map(kIOMapAnywhere | kIOMapInhibitCache), OSNoRetain);
+    memory->release();
+    region.va = region.keep ? static_cast<uintptr_t>(region.keep->getVirtualAddress()) : 0;
+    return region.va != 0;
+}
+uint32_t rd32(uintptr_t base, uint32_t reg) {return *reinterpret_cast<volatile uint32_t *>(base + reg);}
+void wr32(uintptr_t base, uint32_t reg, uint32_t value) {
+    *reinterpret_cast<volatile uint32_t *>(base + reg) = value;
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+void cacheClean(const void *p, size_t len) {
+    uint64_t ctr;
+    __asm__ volatile("mrs %0, ctr_el0" : "=r"(ctr));
+    const size_t line = 4u << ((ctr >> 16) & 15);
+    for (uintptr_t a = reinterpret_cast<uintptr_t>(p) & ~(line - 1), end = reinterpret_cast<uintptr_t>(p) + len; a < end; a += line)
+        __asm__ volatile("dc cvac, %0" :: "r"(a) : "memory");
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+uint32_t ioRd(void *ctx, uint32_t reg) {return rd32(reinterpret_cast<uintptr_t>(ctx), reg);}
+void ioWr(void *ctx, uint32_t reg, uint32_t value) {wr32(reinterpret_cast<uintptr_t>(ctx), reg, value);}
+uint32_t smmuRd(void *ctx, unsigned o) {return rd32(reinterpret_cast<uintptr_t>(ctx), o);}
+void smmuWr(void *ctx, unsigned o, uint32_t v) {wr32(reinterpret_cast<uintptr_t>(ctx), o, v);}
+int32_t smmuErrorCode(const char *e) {
+    static const char *const names[] = {"SMMU AArch64 stage 1 unsupported", "DMA exceeds SMMU address width", "unsupported SMMU geometry",
+        "conflicting stream mapping", "reserved context bank is not a bypass bank", "no free stream-match group",
+        "SMMU bypass bank readback", "SMMU stream context readback", "SMMU stream mapping readback"};
+    for (unsigned i = 0; i < sizeof names / sizeof *names; ++i) if (strcmp(e, names[i]) == 0) return static_cast<int32_t>(i) + 1;
+    return 99;
+}
+uint64_t nowMs() {uint64_t ns; absolutetime_to_nanoseconds(mach_absolute_time(), &ns); return ns / 1000000;}
+void fail(int step) {native_audio_stats[0] = -step;}
+void stage(int step) {native_audio_stats[0] = step;}
 
 struct Audio {
-    IOWorkLoop *loop;
-    IOTimerEventSource *answer, *retry;
-    IOInterruptEventSource *inbox;
+    Region gccLow, gcc18, gcc1e, gcc23, gccVote, smmu, se[2];
+    Region pins[16];
+    unsigned pinCount;
+    GeniI2c bus[2];
+    OSSharedPtr<IOBufferMemoryDescriptor> buffer;
+    uint8_t *bufferVa;
+    uint64_t bufferPa;
+    ShengAdspChannel *channel;
+    IOLock *lock;
     IOSimpleLock *ringLock;
     struct {uint32_t length; uint8_t data[kMessage];} ring[kRing];
-    uint32_t ringHead, ringCount;
-    volatile uint32_t up, changed;
-    bool wasUp;
-    uint64_t upAt;
-    GprSpfProbe spf;
-    ShengAdspChannel *channel;
+    uint32_t ringHead, ringCount, token, handle;
+    volatile uint32_t up;
+    uint32_t toneMs, atten;
+    // The shared memory of the service (ShengAudioAbi.h).
+    OSSharedPtr<IOBufferMemoryDescriptor> control, outRing, inRing;
+    ShengAudioControl *ctl;
+    int16_t *out;
+    volatile uint32_t want;            // ShengAudioOutputRunning / ShengAudioInputRunning as the plug-in asks
+    volatile uint32_t serving;         // the service accepts requests
+    bool running, statusRead;
+    uint64_t next, done;
+    uint32_t inFlight;
 };
 Audio gAudio;
 
-void bump(int index) {native_audio_stats[index] = native_audio_stats[index] + 1;}
-void fail(int step) {native_audio_stats[0] = -step;}
-
-// DSP thread: copy and signal, nothing else.
+// DSP thread: copy and wake, nothing else.
 void dspState(void *, int up) {
     __atomic_store_n(&gAudio.up, up ? 1u : 0u, __ATOMIC_RELEASE);
-    __atomic_store_n(&gAudio.changed, 1u, __ATOMIC_RELEASE);
-    gAudio.inbox->interruptOccurred(nullptr, nullptr, 0);
+    IOLockWakeup(gAudio.lock, &gAudio.ringCount, false);
 }
 void dspReceive(void *, const uint8_t *data, uint32_t length) {
     IOSimpleLockLock(gAudio.ringLock);
     if (gAudio.ringCount < kRing) {
         auto &slot = gAudio.ring[(gAudio.ringHead + gAudio.ringCount) % kRing];
-        slot.length = length < kMessage ? length : kMessage;  // the readiness answers are short; longer packets are only counted
+        slot.length = length < kMessage ? length : kMessage;
         memcpy(slot.data, data, slot.length);
         gAudio.ringCount++;
-    } else {
-        bump(11);
     }
     IOSimpleLockUnlock(gAudio.ringLock);
-    gAudio.inbox->interruptOccurred(nullptr, nullptr, 0);
+    IOLockWakeup(gAudio.lock, &gAudio.ringCount, false);
 }
-
-void record() {
-    native_audio_stats[1] = (int32_t)gAudio.spf.queries;
-    native_audio_stats[2] = (int32_t)gAudio.spf.answers;
-    native_audio_stats[3] = (int32_t)gAudio.spf.last_status;
-    native_audio_stats[4] = (int32_t)gAudio.spf.errors;
-    native_audio_stats[5] = (int32_t)gAudio.spf.timeouts;
-    native_audio_stats[6] = (int32_t)gAudio.spf.ignored;
-    native_audio_stats[10] = (int32_t)gAudio.spf.last_opcode;
-}
-void ask() {
-    uint8_t out[GPR_HEADER_BYTES];
-    const uint32_t n = gpr_spf_next(&gAudio.spf, out);
-    if (!n) return;
-    if (sheng_adsp_send(gAudio.channel, out, n)) bump(12);  // the answer timer counts it as unanswered
-    if (native_audio_stats[0] == 3) native_audio_stats[0] = 4;
-    gAudio.answer->setTimeoutMS(kAnswerMs);
-    record();
-}
-void outcome(int result) {
-    if (result == SpfIsReady) {
-        gAudio.answer->cancelTimeout();
-        uint64_t ns = 0;
-        absolutetime_to_nanoseconds(mach_absolute_time() - gAudio.upAt, &ns);
-        native_audio_stats[7] = (int32_t)(ns / 1000000);
-        native_audio_stats[0] = 5;
-    } else if (result == SpfDone) {
-        gAudio.answer->cancelTimeout();
-        fail(6);
-    } else if (result == SpfNotReady || result == SpfError) {
-        gAudio.answer->cancelTimeout();
-        gAudio.retry->setTimeoutMS(kRetryMs);
-    }
-    record();
-}
-
-void inboxFired(OSObject *, IOInterruptEventSource *, int) {
-    if (__atomic_exchange_n(&gAudio.changed, 0u, __ATOMIC_ACQUIRE)) {
-        const bool up = __atomic_load_n(&gAudio.up, __ATOMIC_ACQUIRE) != 0;
-        if (up && !gAudio.wasUp) {
-            bump(8);
-            gAudio.upAt = mach_absolute_time();
-            gpr_spf_init(&gAudio.spf, GPR_PORT_APM, kMaxQueries);
-            native_audio_stats[0] = 3;
-            ask();
-        } else if (!up && gAudio.wasUp) {
-            bump(9);
-            gAudio.answer->cancelTimeout();
-            gAudio.retry->cancelTimeout();
-            native_audio_stats[0] = 2;
-        }
-        gAudio.wasUp = up;
-    }
+// The next answer, waiting up to ms; false on timeout.
+bool nextAnswer(ArAnswer &a, uint32_t ms) {
+    const uint64_t end = nowMs() + ms;
     for (;;) {
         uint8_t data[kMessage];
         uint32_t length = 0;
@@ -130,37 +168,449 @@ void inboxFired(OSObject *, IOInterruptEventSource *, int) {
             gAudio.ringCount--;
         }
         IOSimpleLockUnlock(gAudio.ringLock);
-        if (!length) break;
-        if (gAudio.wasUp) outcome(gpr_spf_receive(&gAudio.spf, data, length));
+        if (length) {
+            if (ar_parse(data, length, &a) == ArBad) continue;
+            native_audio_stats[2] = native_audio_stats[2] + 1;
+            native_audio_stats[12] = (int32_t)a.opcode;
+            return true;
+        }
+        const uint64_t now = nowMs();
+        if (now >= end) return false;
+        uint64_t deadline;
+        clock_interval_to_deadline((uint32_t)(end - now), kMillisecondScale, &deadline);
+        IOLockLock(gAudio.lock);
+        if (!gAudio.ringCount) IOLockSleepDeadline(gAudio.lock, &gAudio.ringCount, deadline, THREAD_UNINT);
+        IOLockUnlock(gAudio.lock);
     }
 }
-void answerFired(OSObject *, IOTimerEventSource *) {
-    const int result = gpr_spf_timeout(&gAudio.spf);
-    if (result == SpfDone) {fail(6); record(); return;}
-    record();
-    if (gAudio.wasUp) ask();
+bool send(const uint8_t *packet, uint32_t length) {return length && sheng_adsp_send(gAudio.channel, packet, length) == 0;}
+// Sends an APM command and waits for its basic result (or, for the map, the handle).
+bool command(uint32_t length, const uint8_t *packet, uint32_t opcode) {
+    if (!send(packet, length)) return false;
+    ArAnswer a;
+    const uint64_t end = nowMs() + 2000;
+    while (nowMs() < end) {
+        if (!nextAnswer(a, 2000)) break;
+        if (a.opcode == AR_OP_MEM_MAP_DONE && opcode == AR_OP_MEM_MAP) {gAudio.handle = a.handle; native_audio_stats[3] = (int32_t)a.handle; return true;}
+        if (a.opcode == GPR_OP_BASIC_RESULT && a.result_opcode == opcode) {native_audio_stats[1] = (int32_t)a.status; return a.status == 0;}
+    }
+    native_audio_stats[1] = -60;
+    return false;
 }
-void retryFired(OSObject *, IOTimerEventSource *) {
-    if (gAudio.wasUp) ask();
+
+// One I2C transfer on bus b, waiting by polling (20 us steps, 20 ms per stage of the timeout ladder).
+bool transfer(unsigned b, uint8_t address, const Cs35Action &act, uint32_t *value) {
+    GeniI2c &g = gAudio.bus[b];
+    g.address = address;
+    const int started = act.read_length ? geni_i2c_start_read_bytes(&g, act.bytes, act.length, act.read_length)
+                                        : geni_i2c_start_write_bytes(&g, act.bytes, act.length);
+    if (started) return false;
+    for (int stageLeft = 3; stageLeft > 0; ) {
+        for (unsigned i = 0; i < 1000; ++i) {
+            const int r = geni_i2c_poll(&g);
+            if (r == GeniDone) {if (value) *value = cs35_wire_value(g.rx); return true;}
+            if (r == GeniFailed) {native_audio_stats[13] = native_audio_stats[13] + 1; return false;}
+            IODelay(20);
+        }
+        const int r = geni_i2c_timeout(&g);
+        if (r != GeniPending) break;
+        --stageLeft;
+    }
+    native_audio_stats[13] = native_audio_stats[13] + 1;
+    return false;
+}
+// Runs a program on one amplifier; false on the first failed transfer.
+bool runProgram(unsigned amp, const Cs35Step *steps, unsigned count, Cs35Run &run) {
+    const unsigned b = amp / 3;
+    const uint8_t address = (uint8_t)(0x40 + amp % 3);
+    cs35_run_start(&run, steps, count);
+    for (;;) {
+        Cs35Action act;
+        const int k = cs35_run_next(&run, &act);
+        if (k == Cs35Finished) return true;
+        if (k == Cs35Wait) {IOSleep(act.delay_ms); continue;}
+        uint32_t value = 0;
+        if (!transfer(b, address, act, &value)) return false;
+        cs35_run_result(&run, value);
+    }
+}
+
+bool setupSmmu() {
+    if (!mapRegion(kSmmu, TB_APPS_SMMU_SIZE, gAudio.smmu)) return false;
+    struct smmu_io io = {reinterpret_cast<void *>(gAudio.smmu.va), smmuRd, smmuWr};
+    int32_t result = 0;
+    for (unsigned i = 0; i < sizeof kStreams / sizeof *kStreams; ++i) {
+        struct smmu_plan plan = smmu_plan_bypass(&io, kStreams[i], gAudio.bufferPa, kBufferBytes);
+        const char *e = plan.error ? plan.error : smmu_configure_bypass(&io, &plan, kStreams[i]);
+        if (!e) result |= 1 << i;
+        else if (!(result >> 8)) result |= smmuErrorCode(e) << 8;
+    }
+    native_audio_stats[9] = result;
+    return (result & 1) != 0;
+}
+
+bool setupBuffer() {
+    gAudio.buffer = OSSharedPtr<IOBufferMemoryDescriptor>(IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
+        static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous), kBufferBytes, 0xffffff000ULL), OSNoRetain);
+    if (!gAudio.buffer || gAudio.buffer->prepare() != kIOReturnSuccess) return false;
+    addr64_t length = 0;
+    gAudio.bufferPa = gAudio.buffer->getPhysicalSegment(0, &length);
+    gAudio.bufferVa = static_cast<uint8_t *>(gAudio.buffer->getBytesNoCopy());
+    if (!gAudio.bufferVa || !gAudio.bufferPa || length < kBufferBytes) return false;
+    memset(gAudio.bufferVa, 0, kBufferBytes);
+    cacheClean(gAudio.bufferVa, kBufferBytes);
+    return true;
+}
+
+bool setupPins() {
+    auto pin = [](unsigned gpio) -> uintptr_t {
+        if (gAudio.pinCount >= 16 || !mapRegion(kTlmm + tb_tlmm_ctl(gpio), 0x1000, gAudio.pins[gAudio.pinCount])) return 0;
+        return gAudio.pins[gAudio.pinCount++].va;
+    };
+    for (unsigned g : kI2sPins) {uintptr_t p = pin(g); if (!p) return false; wr32(p, 0, 1u << 2 | 3u << 6);}
+    for (unsigned g : kI2cPins) {uintptr_t p = pin(g); if (!p) return false; wr32(p, 0, 2u << 2 | 0u << 6 | 3u);}
+    uintptr_t reset = pin(kResetPin);
+    if (!reset) return false;
+    wr32(reset, 4, 0);                       // output low
+    wr32(reset, 0, 1u << 9);                 // GPIO, output enabled, 2 mA, no pull
+    IOSleep(2);
+    wr32(reset, 4, 1u << 1);                 // release
+    IOSleep(3);
+    return true;
+}
+
+bool setupClocks() {
+    if (!mapRegion(kGcc, 0x1000, gAudio.gccLow) || !mapRegion(kGcc + 0x18000, 0x1000, gAudio.gcc18) ||
+        !mapRegion(kGcc + 0x1e000, 0x1000, gAudio.gcc1e) || !mapRegion(kGcc + 0x23000, 0x1000, gAudio.gcc23) ||
+        !mapRegion(kGcc + 0x52000, 0x1000, gAudio.gccVote)) return false;
+    wr32(gAudio.gccVote.va, TB_GCC_GPLL0_ENABLE & 0xfff, rd32(gAudio.gccVote.va, TB_GCC_GPLL0_ENABLE & 0xfff) | 1u);
+    for (unsigned i = 0; i < 10000 && !(rd32(gAudio.gccLow.va, TB_GCC_GPLL0_MODE) & (1u << 31)); ++i) IODelay(10);
+    wr32(gAudio.gccVote.va, kVote1 & 0xfff, rd32(gAudio.gccVote.va, kVote1 & 0xfff) | kVote1Bits);
+    wr32(gAudio.gccVote.va, kVote2 & 0xfff, rd32(gAudio.gccVote.va, kVote2 & 0xfff) | kVote2Bits);
+    auto halt = [](uint32_t reg) -> uint32_t {
+        const uintptr_t page = (reg >> 12) == 0x18 ? gAudio.gcc18.va : (reg >> 12) == 0x1e ? gAudio.gcc1e.va : gAudio.gcc23.va;
+        return rd32(page, reg & 0xfff);
+    };
+    bool ok = false;
+    for (unsigned i = 0; i < 2000 && !ok; ++i) {
+        ok = true;
+        for (uint32_t reg : kHalts) {const uint32_t v = halt(reg); if ((v & TB_CBCR_CLK_OFF) && !(v & 2u)) ok = false;}
+        if (!ok) IODelay(10);
+    }
+    return ok;   // never touch an engine without running clocks
+}
+
+// Brings one engine to I2C at 400 kHz if the boot loader left it unconfigured, then hands it to the transfer core.
+bool setupBus(unsigned b) {
+    if (!mapRegion(kSe[b], TB_SE_SIZE, gAudio.se[b])) return false;
+    const uintptr_t se = gAudio.se[b].va;
+    const uintptr_t rcg = (b == 0 ? gAudio.gcc18.va : gAudio.gcc1e.va) + (kRcg[b] & 0xfff);
+    unsigned level = 0xff;
+    for (unsigned l = 0; l < TB_DFS_LEVELS && level == 0xff; ++l) {
+        const uint64_t hz = tb_dfs_level_hz(rd32(rcg, TB_RCG_PERF_CFG(l)), rd32(rcg, TB_RCG_PERF_M(l)), rd32(rcg, TB_RCG_PERF_N(l)));
+        if (hz == 19200000ULL) level = l;
+        if (b == 0 && l == 0) native_audio_stats[14] = (int32_t)(hz / 1000);
+    }
+    const uint32_t proto = (rd32(se, GENI_FW_REVISION) >> 8) & 0xff;
+    native_audio_stats[10 + b] = (int32_t)(proto << 24 | (rd32(se, GENI_CLK_CFG) & 0xffffff));
+    if (proto != GENI_PROTO_I2C) return false;
+    if (!(rd32(se, GENI_CLK_CFG) & 1u) || !rd32(se, GENI_SCL_COUNTERS)) {
+        if (level == 0xff) return false;
+        wr32(se, 0x28, rd32(se, 0x28) | 0x7fu);             // clock gating controls on
+        wr32(se, 0xe30, rd32(se, 0xe30) | 0xfu);            // DMA clock gating controls on
+        wr32(se, 0x24, 0x7fu);                              // default output control
+        wr32(se, 0x20, 1u);                                 // force default
+        wr32(se, 0xe18, 0);                                 // no GSI events
+        wr32(se, 0x7c, level);
+        wr32(se, GENI_CLK_CFG, kClkCfg);
+        wr32(se, GENI_SCL_COUNTERS, kSclCounters);
+    }
+    const GeniIo io = {ioRd, ioWr, reinterpret_cast<void *>(se)};
+    uint32_t config = 0;
+    if (geni_i2c_prepare(&gAudio.bus[b], &io, 0x40, &config)) return false;
+    native_audio_stats[10 + b] = (int32_t)config;
+    return true;
+}
+
+bool setupAmps() {
+    Cs35Step steps[CS35_MAX_STEPS];
+    Cs35Run run;
+    int32_t found = 0;
+    for (unsigned amp = 0; amp < CS35_AMPS; ++amp) {
+        const unsigned n = cs35_init_program(steps, cs35_slot(amp));
+        if (!runProgram(amp, steps, n, run)) continue;
+        native_audio_amps[amp][0] = run.reads[0];
+        native_audio_amps[amp][1] = run.reads[1];
+        found |= 1 << amp;
+    }
+    native_audio_stats[6] = found;
+    return found != 0;
+}
+
+void readAmpStatus() {
+    Cs35Step steps[CS35_MAX_STEPS];
+    Cs35Run run;
+    int32_t locked = 0, errors = 0;
+    for (unsigned amp = 0; amp < CS35_AMPS; ++amp) {
+        if (!(native_audio_stats[6] & (1 << amp))) continue;
+        const unsigned n = cs35_status_program(steps);
+        if (!runProgram(amp, steps, n, run)) continue;
+        native_audio_amps[amp][2] = run.reads[0];
+        native_audio_amps[amp][3] = run.reads[1];
+        if (run.reads[1] & CS35_EINT2_PLL_LOCK) locked |= 1 << amp;
+        if (run.reads[0] & CS35_EINT1_ERRORS) errors |= 1 << amp;
+    }
+    native_audio_stats[7] = locked;
+    native_audio_stats[8] = errors;
+}
+
+void powerDownAmps() {
+    Cs35Step steps[CS35_MAX_STEPS];
+    Cs35Run run;
+    for (unsigned amp = 0; amp < CS35_AMPS; ++amp) {
+        if (!(native_audio_stats[6] & (1 << amp))) continue;
+        runProgram(amp, steps, cs35_power_down_program(steps), run);
+    }
+}
+
+bool waitUp(uint32_t ms) {
+    const uint64_t end = nowMs() + ms;
+    while (!__atomic_load_n(&gAudio.up, __ATOMIC_ACQUIRE)) {
+        if (nowMs() >= end) return false;
+        IOSleep(10);
+    }
+    return true;
+}
+
+// Asks until the framework manager says ready (status 1), 100 ms apart, at most 100 times.
+bool dspReady() {
+    uint8_t b[GPR_MAX_PACKET];
+    for (unsigned query = 0; query < 100; ++query) {
+        const GprPacket q = {.dst_domain = GPR_DOMAIN_ADSP, .src_domain = GPR_DOMAIN_APPS, .src_port = kPort, .dst_port = GPR_PORT_APM,
+                             .token = ++gAudio.token, .opcode = GPR_OP_APM_GET_SPF_STATE};
+        if (send(b, gpr_encode(b, sizeof b, &q, nullptr, 0))) {
+            const uint64_t end = nowMs() + 1000;
+            ArAnswer a;
+            while (nowMs() < end && nextAnswer(a, 1000)) {
+                if (a.opcode == GPR_OP_APM_SPF_STATE) {native_audio_stats[1] = (int32_t)a.status; if (a.status == 1) return true; break;}
+                if (a.opcode == GPR_OP_BASIC_RESULT && a.result_opcode == GPR_OP_APM_GET_SPF_STATE) {native_audio_stats[1] = (int32_t)a.status; break;}
+            }
+        }
+        IOSleep(100);
+    }
+    fail(51);
+    return false;
+}
+
+bool setupShared() {
+    const IOOptionBits shared = static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryKernelUserShared);
+    gAudio.control = OSSharedPtr<IOBufferMemoryDescriptor>(IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, shared, 4096, 4096), OSNoRetain);
+    gAudio.outRing = OSSharedPtr<IOBufferMemoryDescriptor>(IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, shared,
+        kRingFrames * SHENG_AUDIO_OUT_CHANNELS * 2, 4096), OSNoRetain);
+    gAudio.inRing = OSSharedPtr<IOBufferMemoryDescriptor>(IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, shared,
+        kRingFrames * SHENG_AUDIO_IN_CHANNELS * 2, 4096), OSNoRetain);
+    if (!gAudio.control || !gAudio.outRing || !gAudio.inRing) return false;
+    gAudio.ctl = static_cast<ShengAudioControl *>(gAudio.control->getBytesNoCopy());
+    gAudio.out = static_cast<int16_t *>(gAudio.outRing->getBytesNoCopy());
+    memset(gAudio.ctl, 0, 4096);
+    memset(gAudio.out, 0, kRingFrames * SHENG_AUDIO_OUT_CHANNELS * 2);
+    memset(gAudio.inRing->getBytesNoCopy(), 0, kRingFrames * SHENG_AUDIO_IN_CHANNELS * 2);
+    mach_timebase_info_data_t tb;
+    clock_timebase_info(&tb);
+    ShengAudioControl *c = gAudio.ctl;
+    c->rate = kRate; c->out_channels = SHENG_AUDIO_OUT_CHANNELS; c->in_channels = SHENG_AUDIO_IN_CHANNELS;
+    c->period_frames = kPeriodFrames; c->ring_frames = kRingFrames; c->lead_frames = kLeadFrames;
+    c->ticks_per_frame_q32 = ((uint64_t)1000000000ULL * tb.denom << 32) / ((uint64_t)kRate * tb.numer);
+    c->version = SHENG_AUDIO_VERSION;
+    __atomic_store_n(&c->magic, SHENG_AUDIO_MAGIC, __ATOMIC_RELEASE);
+    return true;
+}
+
+// Sends period n from the playback ring through DSP slot n % kSlots.
+bool submit(uint64_t n) {
+    uint8_t b[GPR_MAX_PACKET];
+    const uint32_t slot = (uint32_t)(n % kSlots);
+    int16_t *dst = reinterpret_cast<int16_t *>(gAudio.bufferVa + slot * kPeriodBytes);
+    const uint32_t at = (uint32_t)((n * kPeriodFrames) % kRingFrames);
+    memcpy(dst, gAudio.out + at * kChannels, kPeriodBytes);   // kRingFrames is a multiple of kPeriodFrames' alignment step
+    cacheClean(dst, kPeriodBytes);
+    if (!send(b, ar_write(b, sizeof b, kPort, (uint32_t)n, gAudio.bufferPa + slot * kPeriodBytes, gAudio.handle, kPeriodBytes))) return false;
+    native_audio_stats[4] = native_audio_stats[4] + 1;
+    gAudio.inFlight++;
+    return true;
+}
+
+bool graphs(uint32_t opcode) {
+    uint8_t b[GPR_MAX_PACKET];
+    const uint32_t first = opcode == AR_OP_GRAPH_STOP ? AR_SG_PLAY : AR_SG_SPEAKER, second = first == AR_SG_PLAY ? AR_SG_SPEAKER : AR_SG_PLAY;
+    const bool a = command(ar_graph_command(b, sizeof b, kPort, ++gAudio.token, opcode, first), b, opcode);
+    const bool c = command(ar_graph_command(b, sizeof b, kPort, ++gAudio.token, opcode, second), b, opcode);
+    return a && c;
+}
+
+void powerUpAmps() {
+    Cs35Step steps[CS35_MAX_STEPS];
+    Cs35Run run;
+    for (unsigned amp = 0; amp < CS35_AMPS; ++amp)
+        if (native_audio_stats[6] & (1 << amp)) runProgram(amp, steps, cs35_power_up_program(steps), run);
+}
+
+void startOutput() {
+    if (gAudio.running) return;
+    powerUpAmps();
+    if (!graphs(AR_OP_GRAPH_PREPARE) || !graphs(AR_OP_GRAPH_START)) {powerDownAmps(); return;}
+    ShengAudioControl *c = gAudio.ctl;
+    uint64_t lead;
+    nanoseconds_to_absolutetime((uint64_t)kLeadFrames * 1000000000ULL / kRate, &lead);
+    __atomic_add_fetch(&c->out_seq, 1, __ATOMIC_ACQ_REL);
+    c->out_anchor_host = mach_absolute_time() + lead;
+    c->out_frames = 0;
+    __atomic_add_fetch(&c->out_seq, 1, __ATOMIC_ACQ_REL);
+    gAudio.next = gAudio.done = 0;
+    gAudio.inFlight = 0;
+    gAudio.statusRead = false;
+    gAudio.running = true;
+    while (gAudio.inFlight < kInFlight && submit(gAudio.next)) gAudio.next++;
+    __atomic_or_fetch(&c->state, ShengAudioOutputRunning, __ATOMIC_ACQ_REL);
+    native_audio_stats[14] = native_audio_stats[14] + 1;
+}
+
+void stopOutput() {
+    if (!gAudio.running) return;
+    gAudio.running = false;
+    graphs(AR_OP_GRAPH_STOP);
+    powerDownAmps();
+    __atomic_and_fetch(&gAudio.ctl->state, ~ShengAudioOutputRunning, __ATOMIC_ACQ_REL);
+    native_audio_stats[14] = native_audio_stats[14] + (1 << 16);
+}
+
+void handle(const ArAnswer &a) {
+    if (a.opcode == AR_OP_WRITE_DONE) {
+        native_audio_stats[5] = native_audio_stats[5] + 1;
+        if (a.status) native_audio_stats[1] = (int32_t)a.status;
+        if (gAudio.inFlight) gAudio.inFlight--;
+        gAudio.done++;
+        gAudio.ctl->out_frames = gAudio.done * kPeriodFrames;
+        if (gAudio.running) while (gAudio.inFlight < kInFlight && submit(gAudio.next)) gAudio.next++;
+        if (gAudio.running && !gAudio.statusRead && gAudio.done == 10) {readAmpStatus(); gAudio.statusRead = true;}
+    } else if (a.opcode == GPR_OP_BASIC_RESULT && a.status) {
+        native_audio_stats[1] = (int32_t)a.status;
+    }
+}
+
+// Serves requests and answers until the end of time; with ms > 0 it returns after ms (the test tone).
+void serve(uint32_t ms) {
+    const uint64_t end = ms ? nowMs() + ms : 0;
+    for (;;) {
+        const uint32_t want = __atomic_load_n(&gAudio.want, __ATOMIC_ACQUIRE);
+        if (!ms) {
+            if ((want & ShengAudioOutputRunning) && !gAudio.running) startOutput();
+            if (!(want & ShengAudioOutputRunning) && gAudio.running) stopOutput();
+        }
+        ArAnswer a;
+        if (nextAnswer(a, gAudio.running ? 100 : 1000)) handle(a);
+        if (end && nowMs() >= end) return;
+    }
+}
+
+void playTone() {
+    const unsigned shift = gAudio.atten / 6 > 15 ? 15 : gAudio.atten / 6;
+    for (uint32_t i = 0; i < kRingFrames; ++i) gAudio.out[2 * i] = gAudio.out[2 * i + 1] = (int16_t)(kSine[i % 64] >> shift);
+    startOutput();
+    serve(gAudio.toneMs);
+    stopOutput();
+    memset(gAudio.out, 0, kRingFrames * kChannels * 2);
+    stage(57);
+}
+
+bool openGraphs() {
+    uint8_t b[GPR_MAX_PACKET];
+    const ArFormat f = {kRate, 16, kChannels};
+    if (!command(ar_open_speaker_device(b, sizeof b, kPort, ++gAudio.token), b, AR_OP_GRAPH_OPEN)) {fail(54); return false;}
+    if (!command(ar_config_speaker_device(b, sizeof b, kPort, ++gAudio.token, &f), b, AR_OP_SET_CFG)) {fail(55); return false;}
+    if (!command(ar_open_playback_stream(b, sizeof b, kPort, ++gAudio.token), b, AR_OP_GRAPH_OPEN)) {fail(56); return false;}
+    if (!command(ar_config_playback_stream(b, sizeof b, kPort, ++gAudio.token, &f), b, AR_OP_SET_CFG)) {fail(57); return false;}
+    if (!command(ar_config_playback_shmem(b, sizeof b, kPort, ++gAudio.token, &f), b, AR_OP_SET_CFG)) {fail(58); return false;}
+    if (!command(ar_map(b, sizeof b, kPort, ++gAudio.token, gAudio.bufferPa, kBufferBytes), b, AR_OP_MEM_MAP)) {fail(53); return false;}
+    return true;
+}
+
+bool publishService() {
+    void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
+    if (!handle) return false;
+    native_audio_service_static_init();
+    if (OSMetaClass::postModLoad(handle)) return false;
+    sheng_audio_service_start();
+    return true;
+}
+
+void audioThread(void *, wait_result_t) {
+    thread_set_thread_name(current_thread(), "sheng-audio");
+    const uint64_t start = nowMs();
+    stage(10);
+    if (!setupBuffer() || !setupShared()) {fail(10); return;}
+    if (!setupSmmu()) {fail(11); return;}
+    stage(20);
+    if (!setupPins()) {fail(20); return;}
+    stage(30);
+    if (!setupClocks()) {fail(30); return;}
+    if (!setupBus(0) || !setupBus(1)) {fail(31); return;}
+    stage(40);
+    if (!setupAmps()) {fail(40); return;}
+    stage(50);
+    static const ShengAdspClient client = {dspState, dspReceive};
+    gAudio.channel = sheng_adsp_channel("adsp_apps", kIntentSize, kIntentCount, 0, &client, nullptr);
+    if (!gAudio.channel) {fail(50); return;}
+    if (!waitUp(60000)) {fail(51); return;}
+    stage(51);
+    if (!dspReady()) return;
+    stage(52);
+    if (!openGraphs()) return;
+    stage(56);
+    if (gAudio.toneMs) playTone();
+    if (!publishService()) {fail(58); return;}
+    __atomic_store_n(&gAudio.ctl->state, gAudio.ctl->state | ShengAudioOutputReady, __ATOMIC_RELEASE);
+    __atomic_store_n(&gAudio.serving, 1u, __ATOMIC_RELEASE);
+    native_audio_stats[15] = (int32_t)(nowMs() - start);
+    stage(60);
+    serve(0);
 }
 }  // namespace
+
+extern "C" IOBufferMemoryDescriptor *sheng_audio_memory(uint32_t type) {
+    if (!__atomic_load_n(&gAudio.serving, __ATOMIC_ACQUIRE)) return nullptr;
+    IOBufferMemoryDescriptor *m = type == ShengAudioMemoryControl ? gAudio.control.get() : type == ShengAudioMemoryOutput ? gAudio.outRing.get() :
+                                  type == ShengAudioMemoryInput ? gAudio.inRing.get() : nullptr;
+    if (m) m->retain();
+    return m;
+}
+
+extern "C" int sheng_audio_request(uint32_t selector) {
+    if (!__atomic_load_n(&gAudio.serving, __ATOMIC_ACQUIRE)) return -1;
+    switch (selector) {
+    case ShengAudioStartOutput: __atomic_or_fetch(&gAudio.want, ShengAudioOutputRunning, __ATOMIC_ACQ_REL); break;
+    case ShengAudioStopOutput: __atomic_and_fetch(&gAudio.want, ~ShengAudioOutputRunning, __ATOMIC_ACQ_REL); break;
+    case ShengAudioStartInput: __atomic_or_fetch(&gAudio.want, ShengAudioInputRunning, __ATOMIC_ACQ_REL); break;
+    case ShengAudioStopInput: __atomic_and_fetch(&gAudio.want, ~ShengAudioInputRunning, __ATOMIC_ACQ_REL); break;
+    default: return -1;
+    }
+    IOLockWakeup(gAudio.lock, &gAudio.ringCount, false);
+    return 0;
+}
 
 extern "C" void sheng_audio_probe(void) {
     unsigned mode = 0;
     if (!PE_parse_boot_argn("sheng-audio", &mode, sizeof mode) || (mode != 1 && mode != 2) || native_audio_stats[0]) return;
-    native_audio_stats[13] = (int32_t)mode;
+    gAudio.toneMs = mode == 2 ? 1500 : 0;
+    gAudio.atten = 30;
+    PE_parse_boot_argn("sheng-audio-tone-ms", &gAudio.toneMs, sizeof gAudio.toneMs);
+    PE_parse_boot_argn("sheng-audio-atten", &gAudio.atten, sizeof gAudio.atten);
     native_audio_stats[0] = 1;
     if (!sheng_adsp_channel || !sheng_adsp_send) {fail(1); return;}
-    gAudio.loop = IOWorkLoop::workLoop();
+    gAudio.lock = IOLockAlloc();
     gAudio.ringLock = IOSimpleLockAlloc();
-    if (!gAudio.loop || !gAudio.ringLock) {fail(2); return;}
-    gAudio.answer = IOTimerEventSource::timerEventSource(gAudio.loop, answerFired);
-    gAudio.retry = IOTimerEventSource::timerEventSource(gAudio.loop, retryFired);
-    gAudio.inbox = IOInterruptEventSource::interruptEventSource(gAudio.loop, inboxFired);
-    if (!gAudio.answer || !gAudio.retry || !gAudio.inbox || gAudio.loop->addEventSource(gAudio.answer) ||
-        gAudio.loop->addEventSource(gAudio.retry) || gAudio.loop->addEventSource(gAudio.inbox)) {fail(2); return;}
-    static const ShengAdspClient client = {dspState, dspReceive};
-    gAudio.channel = sheng_adsp_channel("adsp_apps", kIntentSize, kIntentCount, mode == 2, &client, nullptr);
-    if (!gAudio.channel) {fail(3); return;}
-    native_audio_stats[0] = 2;
+    if (!gAudio.lock || !gAudio.ringLock) {fail(2); return;}
+    thread_t thread;
+    if (kernel_thread_start(audioThread, nullptr, &thread) != KERN_SUCCESS) {fail(3); return;}
+    thread_deallocate(thread);
 }

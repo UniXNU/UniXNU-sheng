@@ -70,7 +70,9 @@ typedef struct {
     GeniIo io;
     uint8_t address, phase, reading, hold;
     uint8_t reg, value, error, data;
-    uint32_t word, length;
+    uint8_t tx_words, rx_length;
+    uint32_t tx[2], length;
+    uint32_t rx;                     /* the bytes read, first byte in bits 7:0 */
     uint32_t error_status;           /* the M_IRQ status of the last failure */
     uint32_t done, failed, timeouts, stray;
 } GeniI2c;
@@ -80,6 +82,10 @@ typedef struct {
 int geni_i2c_prepare(GeniI2c *g, const GeniIo *io, uint8_t address, uint32_t *config);
 int geni_i2c_start_write(GeniI2c *g, uint8_t reg, uint8_t value);
 int geni_i2c_start_read(GeniI2c *g, uint8_t reg);
+/* Multi-byte forms for devices with wider registers: write 1..8 bytes; or write 1..4 bytes (holding the stop condition), then read 1..4
+ * bytes into g->rx. */
+int geni_i2c_start_write_bytes(GeniI2c *g, const uint8_t *bytes, uint32_t length);
+int geni_i2c_start_read_bytes(GeniI2c *g, const uint8_t *bytes, uint32_t length, uint32_t read_length);
 /* Feeds M_IRQ status bits (already cleared by whoever read them). Returns GeniPending, GeniDone (read value in g->data) or GeniFailed. */
 int geni_i2c_event(GeniI2c *g, uint32_t status);
 /* Reads and clears the status itself, then as geni_i2c_event (for a timer poll; the interrupt handler does the same in its context). */

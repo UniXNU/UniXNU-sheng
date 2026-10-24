@@ -94,6 +94,7 @@ volatile uint32_t gPending, gRscDone;
 // ---- clients ----
 struct Message {uint32_t length; uint8_t data[SHENG_ADSP_MAX_MESSAGE];};
 }  // namespace
+extern "C" {volatile int32_t native_adsp_audio[8];}
 struct ShengAdspChannel {
     char name[QCOM_GLINK_NAME];
     uint32_t intent_size, intent_count;
@@ -430,6 +431,21 @@ void applyClients() {
     }
     IOLockUnlock(gClientLock);
 }
+// The audio channel's send state, for the log: [0] sent, [1] deferred (no intent or FIFO room), [2] refused otherwise, [3] queued now,
+// [4] intent asked (0/1), [5] valid remote intents, [6] the largest remote intent, [7] the last deferred length
+void noteChannel(const ShengAdspChannel &c, int rc, uint32_t length) {
+    if (strcmp(c.name, "adsp_apps")) return;
+    if (rc == QcomGlinkOk) native_adsp_audio[0] = native_adsp_audio[0] + 1;
+    else if (rc == QcomGlinkAgain) {native_adsp_audio[1] = native_adsp_audio[1] + 1; native_adsp_audio[7] = (int32_t)length;}
+    else native_adsp_audio[2] = native_adsp_audio[2] + 1;
+    native_adsp_audio[3] = (int32_t)c.count;
+    native_adsp_audio[4] = c.glink->intent_asked;
+    int32_t valid = 0, largest = 0;
+    for (unsigned k = 0; k < QCOM_GLINK_MAX_REMOTE_INTENTS; ++k)
+        if (c.glink->remote[k].valid) {++valid; if ((int32_t)c.glink->remote[k].size > largest) largest = (int32_t)c.glink->remote[k].size;}
+    native_adsp_audio[5] = valid;
+    native_adsp_audio[6] = largest;
+}
 void pumpSends() {
     for (unsigned i = 0; i < gClientCount; ++i) {
         ShengAdspChannel &c = gClients[i];
@@ -440,7 +456,9 @@ void pumpSends() {
             Message *m = &c.queue[c.head];
             IOLockUnlock(gClientLock);
             // Only this thread takes messages off the queue, so m stays valid while the lock is dropped for the send.
-            if (qcom_glink_send(&gGlink, c.glink, m->data, m->length) != QcomGlinkOk) break;
+            const int rc = qcom_glink_send(&gGlink, c.glink, m->data, m->length);
+            noteChannel(c, rc, m->length);
+            if (rc != QcomGlinkOk) break;
             IOLockLock(gClientLock);
             c.head = (c.head + 1) % kQueue;
             c.count--;
