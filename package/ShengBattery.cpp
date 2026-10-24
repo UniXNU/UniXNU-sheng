@@ -7,7 +7,8 @@
 // Design: everything runs on the service's work loop. The DSP thread's callbacks only copy a message into a small ring and signal an
 // IOInterruptEventSource (no provider: a software event), so the DSP thread never waits for this driver. One request is in flight at a
 // time; a 2 s timer gives up on an unanswered one. Battery notifications start a refresh at once, and a 60 s timer refreshes in any case
-// (the fields that hardly change, every tenth time). Charging itself is the DSP firmware's: nothing here changes a charger setting.
+// (the fields that hardly change, every tenth time). Charging itself is the DSP firmware's; the one setting written is the input current
+// limit on a computer's USB port (ShengBattmgr.c; boot argument sheng-usb-sdp-ma, 0 leaves the firmware's limit).
 #include <IOKit/IOLib.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOTimerEventSource.h>
@@ -19,6 +20,7 @@
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSSymbol.h>
+#include <pexpert/pexpert.h>
 extern "C" {
 #include "ShengAdsp.h"
 #include "ShengBattmgr.h"
@@ -35,6 +37,11 @@ extern "C" {extern volatile int32_t native_battery_stats[16];}
 // remaining, [4] gauge 2 full, [5] temperature property, [6] current property (uA, discharge positive), [7] valid field bits, [8] the field
 // the last timeout skipped (-1 none)
 extern "C" {volatile int32_t native_battery_raw[10];}
+// The charger as the firmware reports it (-1 no reading): [0] USB online, [1] USB type, [2] adapter type, [3] the board's adapter type,
+// [4] input current limit mA, [5] the most the port offers mA, [6] USB mV, [7] USB mA, [8] battery status, [9] charge type, [10] thermal
+// level, [11] charge current mA, [12] adapter watts, [13] bits: 0 cell 1 authenticated, 1 cell 2, 2 PD adapter authenticated, 3 input
+// suspended (each with bit +8 set when read), [14] limit sets | tries << 8 | port type << 16, [15] last limit result
+extern "C" {volatile int32_t native_charger_stats[16];}
 
 namespace {
 constexpr uint32_t kRequestMs = 2000, kRefreshMs = 60000, kSlowEvery = 10, kRing = 16, kMessage = 64;
@@ -52,6 +59,7 @@ class ShengBattery : public IOPMPowerSource {
     bool wasUp = false, published = false;
     uint32_t refreshes = 0;
     ShengBattmgr bm;
+    uint32_t sdpLimit = 0;
     ShengAdspChannel *channel = nullptr;
 
     static void dspState(void *context, int up) {
@@ -98,6 +106,18 @@ class ShengBattery : public IOPMPowerSource {
         for (unsigned i = 0; i < 7; ++i) native_battery_raw[i] = (bm.valid >> fields[i]) & 1 ? bm.value[fields[i]] : -999999;
         native_battery_raw[7] = (int32_t)bm.valid;
         native_battery_raw[8] = bm.last_timeout;
+        static const int charger[13] = {BmUsbOnline, BmUsbType, BmUsbAdapter, BmRealType, BmUsbLimit, BmUsbMax, BmUsbVoltage, BmUsbCurrent,
+                                        BmStatus, BmChargeType, BmThermalLevel, BmChargeCurrent, BmPowerMax};
+        static const int milli[13] = {0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0};
+        for (unsigned i = 0; i < 13; ++i)
+            native_charger_stats[i] = (bm.valid >> charger[i]) & 1 ? (milli[i] ? bm.value[charger[i]] / 1000 : bm.value[charger[i]]) : -1;
+        static const int bits[4] = {BmAuthentic, BmSlaveAuthentic, BmPdVerified, BmInputSuspend};
+        int32_t flags = 0;
+        for (unsigned i = 0; i < 4; ++i)
+            if ((bm.valid >> bits[i]) & 1) flags |= (bm.value[bits[i]] != 0) << i | 1 << (i + 8);
+        native_charger_stats[13] = flags;
+        native_charger_stats[14] = (int32_t)(bm.limit_sets | bm.limit_tries << 8 | (uint32_t)(bm.limit_port & 0xff) << 16);
+        native_charger_stats[15] = bm.limit_result;
     }
     void publish() {
         ShengBatterySnapshot s;
@@ -177,7 +197,7 @@ class ShengBattery : public IOPMPowerSource {
                 self->pump();
                 self->refresh->setTimeoutMS(kRefreshMs);
             }
-            if (!up && self->wasUp) {self->request->cancelTimeout(); sheng_battmgr_init(&self->bm);}
+            if (!up && self->wasUp) {self->request->cancelTimeout(); sheng_battmgr_init(&self->bm); self->bm.sdp_limit_ua = self->sdpLimit;}
             self->wasUp = up;
         }
         for (;;) {
@@ -216,6 +236,9 @@ class ShengBattery : public IOPMPowerSource {
 public:
     bool startBattery() {
         sheng_battmgr_init(&bm);
+        uint32_t ma = 0;
+        if (PE_parse_boot_argn("sheng-usb-sdp-ma", &ma, sizeof ma)) bm.sdp_limit_ua = ma > 3000 ? 3000000u : ma * 1000u;
+        sdpLimit = bm.sdp_limit_ua;
         loop = IOWorkLoop::workLoop();
         ringLock = IOSimpleLockAlloc();
         inbox = IOInterruptEventSource::interruptEventSource(this, &ShengBattery::inboxAction);
