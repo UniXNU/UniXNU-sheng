@@ -90,3 +90,12 @@ The documentation site is maintained in UniXNU:
 
 Report build results and device boot, storage, display, input, and GPU
 observations separately, with source revisions and commands.
+
+## Local build inputs
+
+Save device paths and boot arguments in `unixnu.local.toml` in the UniXNU
+checkout. See the [configuration reference](https://unixnu.com/reference/configuration#local-build-inputs).
+Then use `./unixnu kernel`, `./unixnu firmware`, `./unixnu payload`, and
+`./unixnu bootimg`. Argument changes require rebuilding the payload and boot
+image. See [boot arguments](https://unixnu.com/xnu/boot-arguments#apply-arguments)
+and [green-bar diagnosis](https://unixnu.com/guide/debugging#green-bar).
