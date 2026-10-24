@@ -58,12 +58,28 @@ uint64_t qcom_mdt_metadata_size(const QcomMdtImage *image);
  * files are joined into one .mbn on the host before they are installed. */
 int qcom_mdt_metadata(const QcomMdtImage *image, QcomMdtRead read, void *context, uint8_t *to, uint64_t capacity);
 
-/* Bytes the loadable segments span (max - min address): the size to hand to the memory setup call of a relocatable image. */
+/* Bytes the loadable segments span (the end rounded up to 4 KiB, minus the lowest address): the size to hand to the memory setup call
+ * of a relocatable image. */
 uint64_t qcom_mdt_span(const QcomMdtImage *image);
 
 /* Offset of a loadable segment inside a carveout of region_size bytes at region_base: relocatable images are placed by their offset from
  * the lowest segment, fixed ones by their address. Returns QcomMdtOutside if the segment does not fit. */
 int qcom_mdt_place(const QcomMdtImage *image, unsigned index, uint64_t region_base, uint64_t region_size, uint64_t *offset);
+
+/* A split image (NAME.b00, NAME.b01, ... as found on the device's firmware partition) read as the joined image: the bytes of program
+ * header i's segment come from piece i (NAME.bNN) at the segment's file offset, piece 0 being the ELF and program headers; whatever
+ * lies between the pieces reads as zero. The pieces are the caller's files. */
+typedef int (*QcomMdtPieceRead)(void *context, unsigned piece, uint64_t offset, void *to, size_t length);
+typedef struct {
+    uint32_t count;
+    struct {uint64_t offset, size;} piece[QCOM_MDT_MAX_SEGMENTS];  /* size 0: no piece file for this header */
+    uint64_t size;                                                  /* bytes of the joined image */
+} QcomMdtSplit;
+
+/* Lays out the pieces from the headers (the bytes of NAME.b00, or the start of NAME.mdt). */
+int qcom_mdt_split(QcomMdtSplit *split, const uint8_t *headers, size_t length);
+/* Reads a range of the joined image. */
+int qcom_mdt_split_read(const QcomMdtSplit *split, QcomMdtPieceRead read, void *context, uint64_t offset, void *to, size_t length);
 
 #ifdef __cplusplus
 }

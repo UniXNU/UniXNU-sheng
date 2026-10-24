@@ -106,6 +106,8 @@ extern volatile int32_t native_adsp_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_audio_stats[16] __attribute__((weak_import));
 extern char native_adsp_text[96] __attribute__((weak_import));
 extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
+extern volatile int32_t native_qrtr_stats[16] __attribute__((weak_import));
+extern char native_qrtr_text[96] __attribute__((weak_import));
 extern volatile uint32_t native_swipe_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
@@ -827,6 +829,21 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     at = put(out, at, cap, row, sizeof row);
     if (&native_adsp_text && native_adsp_text[0]) {
       snprintf(row, sizeof row, "[adsp] %.95s", native_adsp_text);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // IPC router link to the audio DSP and the service locator (ShengQrtr.c): stage (3 the DSP said hello), packets in, data in, bad, out,
+  // refused, locator requests and answers, the DSP's node, its services, link ups/downs, unrouted data, last request name; then the
+  // DSP's services as service:instance.
+  if (&native_qrtr_stats && native_qrtr_stats[0]) {
+    char row[200];
+    snprintf(row, sizeof row, "[qrtr] st=%d in=%d data=%d bad=%d out=%d refused=%d loc=%d/%d node=%d svcs=%d up=%d down=%d unrouted=%d req=%x",
+             native_qrtr_stats[0], native_qrtr_stats[1], native_qrtr_stats[2], native_qrtr_stats[3], native_qrtr_stats[4], native_qrtr_stats[5],
+             native_qrtr_stats[6], native_qrtr_stats[7], native_qrtr_stats[8], native_qrtr_stats[9], native_qrtr_stats[10], native_qrtr_stats[11],
+             native_qrtr_stats[12], native_qrtr_stats[13]);
+    at = put(out, at, cap, row, sizeof row);
+    if (&native_qrtr_text && native_qrtr_text[0]) {
+      snprintf(row, sizeof row, "[qrtr] %.95s", native_qrtr_text);
       at = put(out, at, cap, row, sizeof row);
     }
   }
