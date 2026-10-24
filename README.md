@@ -13,7 +13,7 @@ SM8550. The device profile selects
 | `feeds.toml` | Pinned SoC source |
 | `configs/sheng_defconfig` | Device kernel settings |
 | `dts/sheng.dts` | Memory, CPU selection, and peripheral configuration |
-| `patches/xnu/series` | Ordered common and SoC patches |
+| `patches/xnu/series` | Board patches |
 | `proprietary-files.txt` | Firmware input paths |
 | `package/` | Device policy, display, input, and diagnostics |
 | `scripts/` | Device build and inspection tools |
@@ -28,6 +28,9 @@ exports nodes with `unixnu,adt-name`.
 `ShengUfs` includes the device's storage and persistence policy.
 `ShengHidInput` and `ShengNovatekTouch` provide the input integration.
 `QcomGeniSpi` provides the shared SPI controller interface.
+`Ath12kWifi` supplies the Wi-Fi stack through board PCIe, MSI, DMA,
+and network interfaces. The payload volume is 208 MiB. The device selects
+sRGB display properties and a 120 Hz display timing request.
 
 ## Build
 
