@@ -76,6 +76,7 @@ extern volatile uint32_t native_adreno_fence_wait[8] __attribute__((weak_import)
 extern volatile uint32_t native_adreno_stall[24] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_stall_mem[59] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_unstick[15] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_wptr_fence[4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_wait_outer[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_export_stats[4] __attribute__((weak_import));
 extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import));
@@ -108,6 +109,8 @@ extern volatile int32_t native_adsp_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_audio_stats[16] __attribute__((weak_import));
 extern volatile uint32_t native_audio_amps[6][4] __attribute__((weak_import));
 extern volatile int32_t native_adsp_audio[8] __attribute__((weak_import));
+extern volatile int32_t native_mic_stats[16] __attribute__((weak_import));
+extern volatile uint64_t native_audio_pa __attribute__((weak_import));
 extern char native_adsp_text[96] __attribute__((weak_import));
 extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_qrtr_stats[16] __attribute__((weak_import));
@@ -914,6 +917,20 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                native_adsp_audio[5], native_adsp_audio[6], native_adsp_audio[7]);
       at = put(out, at, cap, row, sizeof row);
     }
+    if (&native_audio_pa) {
+      snprintf(row, sizeof row, "[audio-buffer] pa=%llx", (unsigned long long)native_audio_pa);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // The microphone path (AudioProbe.cpp micBringUp): stage, PRM status, rail, TX SoundWire version, link, device status, device id,
+  // codec efuse, codec SCP id, TX/VA MCLK control, interrupt status, component parameters, read timeouts, ms.
+  if (&native_mic_stats && native_mic_stats[0]) {
+    char row[220];
+    snprintf(row, sizeof row, "[mic] st=%d prm=%d rail=%d swr=%x link=%x slaves=%x id=%x/%x efuse=%x scp=%x txclk=%x vaclk=%x irq=%x params=%x rdto=%d ms=%d",
+             native_mic_stats[0], native_mic_stats[1], native_mic_stats[2], native_mic_stats[3], native_mic_stats[4], native_mic_stats[5],
+             native_mic_stats[6], native_mic_stats[7], native_mic_stats[8], native_mic_stats[9], native_mic_stats[10], native_mic_stats[11],
+             native_mic_stats[12], native_mic_stats[13], native_mic_stats[14], native_mic_stats[15]);
+    at = put(out, at, cap, row, sizeof row);
   }
   // Touch strokes in panel pixels as the digitizer published them (y mirrored, 0 = the edge the UI calls top): where each finger came
   // down and lifted, how long and over how many frames, and the extent of every contact so far (edge gestures need the outer pixels).
@@ -976,6 +993,13 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // The CP's registers once a fence stopped advancing: RBBM status 0-3, interrupt, CP fault, status 1, protect, ring rptr/wptr,
   // IB1 base/rem, IB2 base/rem, BV rptr, BV IB1 base/rem, BV IB2 rem, BV IB2 base.
+  // Fenced WPTR writes (NativeAdrenoRing.cpp writeWptr): writes, writes dropped at least once, repeated writes, writes still dropped.
+  if (&native_adreno_wptr_fence && native_adreno_wptr_fence[0]) {
+    char row[120];
+    snprintf(row, sizeof row, "[gpu wptr] writes=%u dropped=%u repeats=%u lost=%u", native_adreno_wptr_fence[0], native_adreno_wptr_fence[1],
+             native_adreno_wptr_fence[2], native_adreno_wptr_fence[3]);
+    at = put(out, at, cap, row, sizeof row);
+  }
   if (&native_adreno_unstick && native_adreno_unstick[0]) {
     char row[200];
     // [0] write-pointer retries, [1] fence of the last, [2] translation drops, [4] bus drains with ack [5]/[6], [9..11] stalls that ended after

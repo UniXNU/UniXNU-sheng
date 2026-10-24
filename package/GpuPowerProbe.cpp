@@ -1510,7 +1510,7 @@ void gpuStart() {
     gpuWr64(A740_CP_SQE_INSTR_BASE, gGpuBuffers[0].iova);
     // 4. Ring 0 (MSM_GPU_RB_CNTL_DEFAULT: 32 KiB, block 32; hw_apriv uses the hardware rptr shadow at memptrs+0).
     c[0] = 4;
-    const NativeAdrenoRingIo rio{nullptr, ringWrite, ringRead, ringBarrier};
+    const NativeAdrenoRingIo rio{nullptr, ringWrite, ringRead, ringBarrier, nullptr, nullptr};
     const NativeAdrenoRingCache cache{nullptr, ringPublish, ringAcquire};
     native_adreno_fence_phys = gGpuBuffers[2].physical;   // the page the CP writes its timestamps to, for the UFS log
     const IOReturn attached = gRing.attach(&rio, &cache, const_cast<uint8_t *>(gGpuCpu[1]), gGpuBuffers[1].bytes,

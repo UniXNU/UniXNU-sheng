@@ -29,6 +29,7 @@ extern "C" {
 #include "GeniI2c.h"
 #include "TouchBoard.h"
 #include "SmmuBypass.h"
+#include "QcomRpmh.h"
 #include "ShengAudioAbi.h"
 }
 #include <IOKit/IOService.h>
@@ -49,6 +50,13 @@ extern "C" int sheng_adsp_send(ShengAdspChannel *, const void *, uint32_t) __att
 extern "C" {volatile int32_t native_audio_stats[16];}
 // Per amplifier: device id, revision, EINT1, EINT2 while playing.
 extern "C" {volatile uint32_t native_audio_amps[CS35_AMPS][4];}
+// The microphone path (sheng-mic=1, after the speaker graphs): [0] stage (positive progress, negative the step that failed), [1] last PRM
+// status, [2] codec rail (bit 0 found, bit 1 voted), [3] TX SoundWire master version, [4] its link status, [5] device status register
+// (2 bits per device number), [6] device 1 id bytes 5..4 | 3..0 low word, [7] high word, [8] the codec's efuse register, [9] its chip
+// id registers, [10] TX macro MCLK control, [11] VA macro MCLK control, [12] master interrupt status, [13] component parameters,
+// [14] reads that timed out, [15] ms the stage took
+extern "C" {volatile int32_t native_mic_stats[16];}
+extern "C" {volatile uint64_t native_audio_pa;}   // the DSP period buffer
 
 namespace {
 constexpr uint32_t kIntentSize = 512, kIntentCount = 20, kRing = 16, kMessage = 128;
@@ -193,6 +201,10 @@ bool command(uint32_t length, const uint8_t *packet, uint32_t opcode) {
         if (!nextAnswer(a, 2000)) break;
         if (a.opcode == AR_OP_MEM_MAP_DONE && opcode == AR_OP_MEM_MAP) {gAudio.handle = a.handle; native_audio_stats[3] = (int32_t)a.handle; return true;}
         if (a.opcode == GPR_OP_BASIC_RESULT && a.result_opcode == opcode) {native_audio_stats[1] = (int32_t)a.status; return a.status == 0;}
+        if ((a.opcode == AR_OP_PRM_REQUEST_DONE && opcode == AR_OP_PRM_REQUEST) || (a.opcode == AR_OP_PRM_RELEASE_DONE && opcode == AR_OP_PRM_RELEASE)) {
+            native_mic_stats[1] = (int32_t)a.status;
+            return a.status == 0;
+        }
     }
     native_audio_stats[1] = -60;
     return false;
@@ -251,11 +263,12 @@ bool setupSmmu() {
 
 bool setupBuffer() {
     gAudio.buffer = OSSharedPtr<IOBufferMemoryDescriptor>(IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
-        static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous), kBufferBytes, 0xffffff000ULL), OSNoRetain);
+        static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous), kBufferBytes, 0xfffff000ULL), OSNoRetain);   // below 4 GiB: the DSP takes 32-bit buffer addresses (its client hands it 32-bit IOVAs)
     if (!gAudio.buffer || gAudio.buffer->prepare() != kIOReturnSuccess) return false;
     addr64_t length = 0;
     gAudio.bufferPa = gAudio.buffer->getPhysicalSegment(0, &length);
     gAudio.bufferVa = static_cast<uint8_t *>(gAudio.buffer->getBytesNoCopy());
+    native_audio_pa = gAudio.bufferPa;
     if (!gAudio.bufferVa || !gAudio.bufferPa || length < kBufferBytes) return false;
     memset(gAudio.bufferVa, 0, kBufferBytes);
     cacheClean(gAudio.bufferVa, kBufferBytes);
@@ -535,6 +548,156 @@ bool openGraphs() {
     return true;
 }
 
+// ---- the microphones (sheng-mic=1) ----
+// The codec (WCD938x) sits on the TX SoundWire master of the low power audio subsystem. Every LPASS register below (pins, VA and TX
+// macros, SoundWire) is unclocked until the DSP's PRM grants the macro and digital codec votes: they are touched only after those succeed.
+constexpr uint64_t kLpassTlmm = 0x06e80000ULL, kLpassSlew = 0x07250000ULL + 0xa000, kTxMacro = 0x06ae0000ULL, kVaMacro = 0x06d44000ULL,
+    kSwrTx = 0x06d30000ULL;
+constexpr unsigned kWcdResetPin = 108;
+void micStage(int s) {native_mic_stats[0] = s;}
+void micFail(int s) {native_mic_stats[0] = -s;}
+
+// The codec's 1.8 V rail (vreg_l15b_1p8) through active TCS 2 of the apps RSC (0: the WiFi bring-up, 1: the DSP's proxy votes).
+bool micRail() {
+    static uint8_t db[0x20000];
+    Region dbw, rsc;
+    if (!mapRegion(0x81c60000ULL, sizeof db, dbw)) return false;
+    for (size_t i = 0; i < sizeof db; i += 4) {const uint32_t w = rd32(dbw.va, (uint32_t)i); memcpy(db + i, &w, 4);}
+    QcomRpmhResource res;
+    if (qcom_cmd_db_find(db, sizeof db, "ldob15", &res)) return false;
+    native_mic_stats[2] = 1;
+    if (!mapRegion(0x17a20000ULL, 0x10000, rsc)) return false;
+    const QcomRscLayout layout = qcom_rsc_layout(rd32(rsc.va, 0));
+    auto send = [&](uint32_t address, uint32_t value) {
+        QcomRpmhWrite writes[16];
+        const unsigned n = qcom_rpmh_active_request(&layout, 2, &address, &value, 1, writes, 16);
+        for (unsigned i = 0; i < n; ++i) wr32(rsc.va, 0xd00 + writes[i].offset, writes[i].value);
+        IOSleep(2);
+        const unsigned m = qcom_rpmh_finish(&layout, 2, writes, 16);
+        for (unsigned i = 0; i < m; ++i) wr32(rsc.va, 0xd00 + writes[i].offset, writes[i].value);
+    };
+    send(res.address + 8, 7);       // high power mode
+    send(res.address, 1800);
+    send(res.address + 4, 1);
+    native_mic_stats[2] = 3;
+    return true;
+}
+
+bool micPrm() {
+    uint8_t b[GPR_MAX_PACKET];
+    if (!command(ar_prm_vote(b, sizeof b, kPort, ++gAudio.token, AR_HW_MACRO, 1), b, AR_OP_PRM_REQUEST)) return false;
+    if (!command(ar_prm_vote(b, sizeof b, kPort, ++gAudio.token, AR_HW_DCODEC, 1), b, AR_OP_PRM_REQUEST)) return false;
+    return command(ar_prm_clock(b, sizeof b, kPort, ++gAudio.token, AR_CLK_TX_CORE_MCLK, 19200000), b, AR_OP_PRM_REQUEST);
+}
+
+// SoundWire command FIFO of the TX master (v2.0 layout).
+struct Swr {Region r; uint8_t id;};
+Swr gSwr;
+uint32_t swrPack(uint8_t data, uint8_t dev, uint8_t id, uint16_t reg) {return reg | (uint32_t)id << 16 | (uint32_t)dev << 20 | (uint32_t)data << 24;}
+uint8_t nextId() {gSwr.id = gSwr.id < 14 ? gSwr.id + 1 : 0; return gSwr.id;}
+__attribute__((unused)) bool swrWrite(uint8_t dev, uint16_t reg, uint8_t value) {
+    for (unsigned i = 0; i < 100 && ((rd32(gSwr.r.va, 0x5050) >> 8) & 0x1f) >= 8; ++i) IODelay(50);
+    wr32(gSwr.r.va, 0x5020, swrPack(value, dev, nextId(), reg));
+    return true;
+}
+bool swrRead(uint8_t dev, uint16_t reg, uint8_t *value) {
+    const uint8_t id = nextId();
+    wr32(gSwr.r.va, 0x5024, swrPack(1, dev, id, reg));
+    for (unsigned i = 0; i < 200; ++i) {
+        if ((rd32(gSwr.r.va, 0x5050) >> 16) & 0x1f) {
+            const uint32_t v = rd32(gSwr.r.va, 0x5040);
+            if (((v >> 8) & 0xf) == id) {*value = (uint8_t)v; return true;}
+            wr32(gSwr.r.va, 0x308, 1);   // flush and give up on a stale answer
+            break;
+        }
+        IODelay(50);
+    }
+    native_mic_stats[14] = native_mic_stats[14] + 1;
+    return false;
+}
+
+bool micBringUp() {
+    const uint64_t t0 = nowMs();
+    micStage(1);
+    if (!micRail()) {micFail(1); return false;}
+    // The codec out of reset (active low).
+    Region reset;
+    if (!mapRegion(kTlmm + tb_tlmm_ctl(kWcdResetPin), 0x1000, reset)) {micFail(2); return false;}
+    wr32(reset.va, 4, 0);
+    wr32(reset.va, 0, 1u << 9 | 7u << 6);   // GPIO, output, 16 mA
+    IOSleep(20);
+    wr32(reset.va, 4, 1u << 1);
+    IOSleep(20);
+    micStage(3);
+    if (!micPrm()) {micFail(3); return false;}
+    micStage(4);
+    // TX SoundWire pins: clock gpio0, data gpio1/2/14 (function 1, 2 mA, data with bus hold), slew rate 1.
+    Region lpi, slew;
+    if (!mapRegion(kLpassTlmm, 0xf000, lpi) || !mapRegion(kLpassSlew & ~0xfffULL, 0x1000, slew)) {micFail(4); return false;}
+    static const struct {unsigned pin, slew; uint32_t pull;} pins[] = {{0, 0, 0}, {1, 2, 2}, {2, 4, 2}, {14, 6, 2}};
+    uint32_t sv = rd32(slew.va, (uint32_t)(kLpassSlew & 0xfff));
+    for (auto &p : pins) {
+        wr32(lpi.va, p.pin * 0x1000, 1u << 2 | p.pull);
+        sv = (sv & ~(3u << p.slew)) | 1u << p.slew;
+    }
+    wr32(slew.va, (uint32_t)(kLpassSlew & 0xfff), sv);
+    micStage(5);
+    // VA macro frame sync generator (the TX macro's fsgen), then the TX macro MCLK and its SoundWire clock with a reset pulse.
+    Region va, tx;
+    if (!mapRegion(kVaMacro, 0x1000, va) || !mapRegion(kTxMacro, 0x1000, tx)) {micFail(5); return false;}
+    wr32(va.va, 0x0, rd32(va.va, 0x0) | 1);
+    wr32(va.va, 0x4, rd32(va.va, 0x4) | 3);
+    wr32(va.va, 0x4, (rd32(va.va, 0x4) & ~2u) | 1);
+    wr32(va.va, 0x80, rd32(va.va, 0x80) | 2);
+    wr32(tx.va, 0x90, rd32(tx.va, 0x90) | 1);
+    wr32(tx.va, 0x0, rd32(tx.va, 0x0) | 1);
+    wr32(tx.va, 0x4, rd32(tx.va, 0x4) | 1);
+    wr32(tx.va, 0x8, rd32(tx.va, 0x8) | 2);
+    wr32(tx.va, 0x8, rd32(tx.va, 0x8) | 1);
+    wr32(tx.va, 0x8, rd32(tx.va, 0x8) & ~2u);
+    native_mic_stats[10] = (int32_t)rd32(tx.va, 0x0);
+    native_mic_stats[11] = (int32_t)rd32(va.va, 0x0);
+    micStage(6);
+    // The TX SoundWire master as the bus driver starts it: 50 rows x 16 columns, auto enumeration, no-ping limit, CPU execution
+    // environment, clock start, 7 command retries, enable, pulse interrupts.
+    if (!mapRegion(kSwrTx, 0x10000, gSwr.r)) {micFail(6); return false;}
+    const uintptr_t m = gSwr.r.va;
+    native_mic_stats[3] = (int32_t)rd32(m, 0x00);
+    if ((rd32(m, 0x00) >> 24) != 2) {micFail(7); return false;}
+    wr32(m, 0x101c, 1u << 3 | 7u);
+    wr32(m, 0x500, 1);
+    wr32(m, 0x1048, (rd32(m, 0x1048) & ~(0x1fu << 17)) | 0x1fu << 17);
+    wr32(m, 0x018, 1);
+    wr32(m, 0x5060, 1);
+    wr32(m, 0x314, 7u | 1u << 31);
+    wr32(m, 0x004, 1);
+    wr32(m, 0x004, 2);
+    wr32(m, 0x5008, 0xffffffffu);
+    wr32(m, 0x5004, 0x1ffff);
+    wr32(m, 0x004, 3);
+    for (unsigned i = 0; i < 100 && !(rd32(m, 0x5064) & 1); ++i) IOSleep(1);
+    native_mic_stats[4] = (int32_t)rd32(m, 0x5064);
+    native_mic_stats[13] = (int32_t)rd32(m, 0x100);
+    micStage(7);
+    // The codec attaches and is enumerated (device number 1).
+    uint32_t slaves = 0;
+    for (unsigned i = 0; i < 200 && !((slaves = rd32(m, 0x1090)) & 0x3fffcu); ++i) IOSleep(5);
+    native_mic_stats[5] = (int32_t)slaves;
+    native_mic_stats[12] = (int32_t)rd32(m, 0x5000);
+    native_mic_stats[6] = (int32_t)rd32(m, 0x530 + 8);
+    native_mic_stats[7] = (int32_t)rd32(m, 0x534 + 8);
+    if (!(slaves & 0x3fffcu)) {micFail(8); return false;}
+    unsigned dev = 1;
+    while (dev < 11 && ((slaves >> (2 * dev)) & 3) == 0) ++dev;
+    micStage(8);
+    uint8_t efuse = 0, id0 = 0, id1 = 0;
+    if (swrRead((uint8_t)dev, 0x34b0, &efuse)) native_mic_stats[8] = efuse;
+    if (swrRead((uint8_t)dev, 0x50, &id0) && swrRead((uint8_t)dev, 0x51, &id1)) native_mic_stats[9] = id0 | id1 << 8;   // SCP_DevId_0/1
+    native_mic_stats[15] = (int32_t)(nowMs() - t0);
+    micStage(9);
+    return true;
+}
+
 bool publishService() {
     void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
     if (!handle) return false;
@@ -568,6 +731,10 @@ void audioThread(void *, wait_result_t) {
     if (!openGraphs()) return;
     stage(56);
     if (gAudio.toneMs) playTone();
+    {
+        unsigned mic = 0;
+        if (PE_parse_boot_argn("sheng-mic", &mic, sizeof mic) && mic) micBringUp();
+    }
     if (!publishService()) {fail(58); return;}
     __atomic_store_n(&gAudio.ctl->state, gAudio.ctl->state | ShengAudioOutputReady, __ATOMIC_RELEASE);
     __atomic_store_n(&gAudio.serving, 1u, __ATOMIC_RELEASE);
