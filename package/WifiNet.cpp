@@ -23,6 +23,9 @@
 #include <net/if_media.h>
 #include <net/if_ether.h>
 #include <net/kpi_interface.h>
+extern "C" {
+#include <net/bpf.h>
+}
 #include <net/if_types.h>
 #include <netinet/in.h>
 #include <sys/mbuf.h>
@@ -483,10 +486,14 @@ extern "C" void sheng_wifi_net_start(const uint8_t mac[6]) {
   e = ifnet_attach(ifp, nullptr);
   if (e) { log(3, "wifi-net: ifnet attach failed: %d", e); ifnet_release(ifp); return; }
   ifnet_set_lladdr(ifp, mac, 6);
+  // A driver of its own interface attaches the packet filter itself: the DHCP client sends through it while the interface has no address.
+  e = bpf_attach(ifp, DLT_EN10MB, 14, nullptr, nullptr); if (e) log(3, "wifi-net: packet filter attach failed: %d", e);
   gIf = ifp; ifnet_set_flags(ifp, IFF_UP, IFF_UP);
   nw_wifi_set_events(&gEvents);
   publish_registry("en0");
-  { thread_t t = nullptr; if (kernel_thread_start(autoJoin, nullptr, &t) == KERN_SUCCESS) thread_deallocate(t); }
+  // sheng-wifi-aj=0 leaves joining to Settings even when the container holds join.txt.
+  { uint32_t aj = 1; PE_parse_boot_argn("sheng-wifi-aj", &aj, sizeof aj);
+    thread_t t = nullptr; if (aj && kernel_thread_start(autoJoin, nullptr, &t) == KERN_SUCCESS) thread_deallocate(t); }
   log(6, "wifi-net: en0 is up, hardware address %02x:%02x:%02x:%02x:%02x:%02x, capabilities 0x%x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
       ifnet_capabilities_enabled(ifp));
 }
