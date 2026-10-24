@@ -31,9 +31,13 @@ extern "C" int sheng_adsp_send(ShengAdspChannel *, const void *, uint32_t) __att
 // cycles, [7] answers, [8] timeouts | errors << 16, [9] notifications, [10] USB type (raw), [11] full mAh, [12] design mAh,
 // [13] cycles, [14] messages dropped (ring full) | ignored << 16, [15] send refusals
 extern "C" {extern volatile int32_t native_battery_stats[16];}
+// The raw readings behind the values: [0] capacity property (hundredths of a percent), [1] gauge 1 remaining, [2] gauge 1 full, [3] gauge 2
+// remaining, [4] gauge 2 full, [5] temperature property, [6] current property (uA, discharge positive), [7] valid field bits, [8] the field
+// the last timeout skipped (-1 none)
+extern "C" {volatile int32_t native_battery_raw[10];}
 
 namespace {
-constexpr uint32_t kRequestMs = 2000, kRefreshMs = 60000, kSlowEvery = 10, kRing = 8, kMessage = 64;
+constexpr uint32_t kRequestMs = 2000, kRefreshMs = 60000, kSlowEvery = 10, kRing = 16, kMessage = 64;
 }
 
 class ShengBattery : public IOPMPowerSource {
@@ -89,6 +93,12 @@ class ShengBattery : public IOPMPowerSource {
         if (symbol) setPSProperty(symbol, value ? kOSBooleanTrue : kOSBooleanFalse);
         OSSafeReleaseNULL(symbol);
     }
+    void recordRaw() {
+        static const int fields[8] = {BmCapacity, BmGauge1Remaining, BmGauge1Full, BmGauge2Remaining, BmGauge2Full, BmTemperature, BmCurrent, -1};
+        for (unsigned i = 0; i < 7; ++i) native_battery_raw[i] = (bm.valid >> fields[i]) & 1 ? bm.value[fields[i]] : -999999;
+        native_battery_raw[7] = (int32_t)bm.valid;
+        native_battery_raw[8] = bm.last_timeout;
+    }
     void publish() {
         ShengBatterySnapshot s;
         sheng_battmgr_snapshot(&bm, &s);
@@ -106,7 +116,7 @@ class ShengBattery : public IOPMPowerSource {
                                     : (s.time_to_empty_min >= 0 ? s.time_to_empty_min : 0xffff));
         flag("FullyCharged", s.fully_charged);
         number("InstantAmperage", s.current_ma);
-        number("Temperature", s.temperature);
+        if (s.temperature_valid) number("Temperature", s.temperature);
         if (s.raw_mah > 0) number("AppleRawCurrentCapacity", s.raw_mah);
         if (s.full_mah > 0) {number("AppleRawMaxCapacity", s.full_mah); number("NominalChargeCapacity", s.full_mah);}
         if (s.design_mah > 0) number("DesignCapacity", s.design_mah);
@@ -131,6 +141,8 @@ class ShengBattery : public IOPMPowerSource {
         native_battery_stats[5] = s.present | s.external << 1 | s.charging << 2 | s.fully_charged << 3 | bm.enabled << 4;
         native_battery_stats[10] = (bm.valid >> BmUsbType) & 1 ? bm.value[BmUsbType] : -1;
         native_battery_stats[11] = s.full_mah; native_battery_stats[12] = s.design_mah; native_battery_stats[13] = s.cycles;
+        recordRaw();
+        if (!published && !s.charge_known) return;  // no charge reading yet: 0 % would read as an empty battery
         if (!published) {
             // The properties are in place before anyone finds the service.
             published = true;

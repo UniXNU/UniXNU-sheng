@@ -19,6 +19,11 @@ static const struct {uint8_t opcode, property, slow;} kFields[BmFields] = {
     [BmUsbCurrent] = {SHENG_BATTMGR_OP_USB_GET, 3, 0},
     [BmTimeToEmpty] = {SHENG_BATTMGR_OP_BATTERY_GET, 20, 0},
     [BmTimeToFull] = {SHENG_BATTMGR_OP_BATTERY_GET, 19, 0},
+    /* the fuel gauges: remaining and full charge of each (mAh) */
+    [BmGauge1Remaining] = {SHENG_BATTMGR_OP_BOARD_GET, 0x8a, 0},
+    [BmGauge1Full] = {SHENG_BATTMGR_OP_BOARD_GET, 0x8b, 0},
+    [BmGauge2Remaining] = {SHENG_BATTMGR_OP_BOARD_GET, 0xa6, 0},
+    [BmGauge2Full] = {SHENG_BATTMGR_OP_BOARD_GET, 0xa7, 0},
     [BmFull] = {SHENG_BATTMGR_OP_BATTERY_GET, 17, 1},
     [BmDesign] = {SHENG_BATTMGR_OP_BATTERY_GET, 16, 1},
     [BmCycles] = {SHENG_BATTMGR_OP_BATTERY_GET, 15, 1},
@@ -38,6 +43,7 @@ void sheng_battmgr_init(ShengBattmgr *b)
 {
     for (unsigned i = 0; i < sizeof *b; ++i) ((uint8_t *)b)[i] = 0;
     b->cursor = NO_CYCLE;
+    b->last_timeout = -1;
 }
 
 uint32_t sheng_battmgr_enable_request(uint8_t out[SHENG_BATTMGR_ENABLE_BYTES])
@@ -100,6 +106,7 @@ void sheng_battmgr_timeout(ShengBattmgr *b)
 {
     if (b->cursor == NO_CYCLE || !b->in_flight) return;
     b->timeouts++;
+    b->last_timeout = b->cursor;
     b->valid &= ~(1u << b->cursor);
     advance(b);
     finish(b);
@@ -152,14 +159,20 @@ void sheng_battmgr_snapshot(const ShengBattmgr *b, ShengBatterySnapshot *s)
     const int status = HAS(BmStatus) ? V(BmStatus) : 0;  /* POWER_SUPPLY_STATUS: 1 charging, 2 discharging, 3 not charging, 4 full */
     s->present = HAS(BmPresent) ? V(BmPresent) != 0 : HAS(BmCapacity);
     s->external = HAS(BmUsbOnline) && V(BmUsbOnline) != 0;
-    int percent = HAS(BmCapacity) ? (V(BmCapacity) + 50) / 100 : 0;
+    const int gauges = HAS(BmGauge1Remaining) && HAS(BmGauge1Full) && HAS(BmGauge2Remaining) && HAS(BmGauge2Full);
+    const int64_t remaining = gauges ? (int64_t)(uint32_t)V(BmGauge1Remaining) + (uint32_t)V(BmGauge2Remaining) : 0;
+    const int64_t full = gauges ? (int64_t)(uint32_t)V(BmGauge1Full) + (uint32_t)V(BmGauge2Full) : 0;
+    int percent = full > 0 ? (int)((remaining * 100 + full / 2) / full) : HAS(BmCapacity) ? (V(BmCapacity) + 50) / 100 : 0;
     s->percent = percent < 0 ? 0 : percent > 100 ? 100 : percent;
+    s->charge_known = full > 0 || HAS(BmCapacity);
     s->charging = s->external && status == 1;
     s->fully_charged = s->external && (status == 4 || s->percent == 100);
     s->critical = s->present && !s->external && s->percent <= 2;
     s->voltage_mv = HAS(BmVoltage) ? V(BmVoltage) / 1000 : 0;
-    s->current_ma = HAS(BmCurrent) ? V(BmCurrent) / 1000 : 0;
-    s->temperature = HAS(BmTemperature) ? V(BmTemperature) : 0;
+    s->current_ma = HAS(BmCurrent) ? -V(BmCurrent) / 1000 : 0;
+    /* -40 to 90 C; the firmware answers a fixed out-of-range value when it has no reading */
+    s->temperature_valid = HAS(BmTemperature) && V(BmTemperature) >= -4000 && V(BmTemperature) <= 9000;
+    s->temperature = s->temperature_valid ? V(BmTemperature) : 0;
     s->raw_mah = HAS(BmCharge) ? V(BmCharge) / 1000 : 0;
     s->full_mah = HAS(BmFull) ? V(BmFull) / 1000 : 0;
     s->design_mah = HAS(BmDesign) ? V(BmDesign) / 1000 : 0;

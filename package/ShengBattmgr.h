@@ -11,20 +11,22 @@
 extern "C" {
 #endif
 
-#define SHENG_BATTMGR_OWNER 32768u
+#define SHENG_BATTMGR_OWNER 32778u  /* the battery manager; 32779 is the USB-C port manager on the same channel */
 #define SHENG_BATTMGR_TYPE_REQUEST 1u
 #define SHENG_BATTMGR_TYPE_NOTIFY 2u
 #define SHENG_BATTMGR_OP_REQUEST_NOTIFICATION 0x04u
 #define SHENG_BATTMGR_OP_NOTIFICATION 0x07u
 #define SHENG_BATTMGR_OP_BATTERY_GET 0x30u
 #define SHENG_BATTMGR_OP_USB_GET 0x32u
+#define SHENG_BATTMGR_OP_BOARD_GET 0x50u  /* the board's own properties, same request and answer shape: the two fuel gauges */
 #define SHENG_BATTMGR_REQUEST_BYTES 24u
 #define SHENG_BATTMGR_ENABLE_BYTES 28u
 
 /* The fields one refresh reads, in order. */
 enum {
     BmStatus, BmPresent, BmCapacity, BmVoltage, BmCurrent, BmTemperature, BmCharge, BmUsbOnline, BmUsbType, BmUsbVoltage,
-    BmUsbCurrent, BmTimeToEmpty, BmTimeToFull, BmFull, BmDesign, BmCycles, BmFields
+    BmUsbCurrent, BmTimeToEmpty, BmTimeToFull, BmGauge1Remaining, BmGauge1Full, BmGauge2Remaining, BmGauge2Full, BmFull, BmDesign,
+    BmCycles, BmFields
 };
 
 typedef struct {
@@ -33,14 +35,18 @@ typedef struct {
     uint8_t cursor, in_flight, enabled, slow_due;
     uint32_t cycles_done, responses, notifications, errors, timeouts, ignored;
     uint32_t refresh_wanted;      /* a notification asked for a new cycle while one ran */
+    int last_timeout;             /* the field the last timeout skipped, -1 none */
 } ShengBattmgr;
 
-/* What a power source shows. Temperatures are hundredths of a degree Celsius, as the firmware reports them. */
+/* What a power source shows. Temperatures are hundredths of a degree Celsius, as the firmware reports them. The charge comes from the
+ * board's two fuel gauges (remaining over full, both summed) when they answer, else from the battery's capacity property; the board
+ * reports the current with discharge positive, the power source with charge positive. */
 typedef struct {
     int present, external, charging, fully_charged, critical;
     int percent;                  /* 0..100 */
+    int charge_known;             /* percent comes from a reading, not a default */
     int voltage_mv, current_ma;   /* current: positive while the battery takes charge */
-    int temperature;
+    int temperature, temperature_valid;  /* valid: a reading in the range a battery can have */
     int raw_mah, full_mah, design_mah, cycles;
     int time_to_empty_min, time_to_full_min;  /* -1 unknown */
     uint32_t adapter_family;      /* kIOPSFamilyCode value, 0 when no adapter */
