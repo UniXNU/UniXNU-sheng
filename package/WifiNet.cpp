@@ -9,6 +9,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IOService.h>
+#include <IOKit/IORegistryEntry.h>
 #include <IOKit/IOUserClient.h>
 #include <libkern/OSAtomic.h>
 #include <libkern/c++/OSData.h>
@@ -346,6 +347,28 @@ void log_traffic() {
   log(6, "wifi-net: en0 address %s, packets in %llu out %llu", text, static_cast<unsigned long long>(stats.packets_in), static_cast<unsigned long long>(stats.packets_out));
 }
 
+// IOKit's busy services: the network configuration waits for IOKit to be quiet before it names interfaces, and the wireless daemon waits
+// for that. Logged each round until the registry is quiet once; leaves first (a busy service whose children are all quiet).
+void log_busy() {
+  static bool quietSeen; if (quietSeen) return;
+  IOService *root = IOService::getServiceRoot(); if (!root) return;
+  const UInt32 busy = root->getBusyState();
+  if (!busy) { quietSeen = true; log(6, "wifi-net: IOKit is quiet"); return; }
+  char line[110]; int at = snprintf(line, sizeof line, "wifi-net: IOKit busy %u:", static_cast<unsigned>(busy)); unsigned shown = 0;
+  if (IORegistryIterator *it = IORegistryIterator::iterateOver(gIOServicePlane, kIORegistryIterateRecursively)) {
+    while (OSObject *o = it->getNextObject()) {
+      IOService *svc = OSDynamicCast(IOService, o); if (!svc || !svc->getBusyState()) continue;
+      bool busyChild = false;
+      if (OSIterator *ch = svc->getChildIterator(gIOServicePlane)) { while (OSObject *c = ch->getNextObject()) { IOService *cs = OSDynamicCast(IOService, c); if (cs && cs->getBusyState()) { busyChild = true; break; } } ch->release(); }
+      if (busyChild) continue;
+      if (at < static_cast<int>(sizeof line) - 2) at += snprintf(line + at, sizeof line - at, " %s(%s)", svc->getName(), svc->getMetaClass()->getClassName());
+      if (++shown >= 6) break;
+    }
+    it->release();
+  }
+  log(6, "%s", line);
+}
+
 // Unattended testing: when the firmware container holds a file named join.txt (the network name on the first line, the key on the second) the
 // board joins that network by itself once a scan has found it, with the call the wireless daemon's join makes. Without the file nothing happens.
 void autoJoin(void *, wait_result_t) {
@@ -359,6 +382,7 @@ void autoJoin(void *, wait_result_t) {
   log(6, "wifi-net: auto join of a network with a %zu byte name and a %zu byte key", sl, pl);
   for (unsigned round = 0; round < 40; ++round) {
     IOSleep(3000);
+    log_busy();
     nw_wifi_status st; nw_wifi_status_get(&st);
     if (st.state == NW_STA_UP) { log_traffic(); continue; }   // the address the network configuration got, and the packets since
     if (st.state >= NW_STA_AUTH) continue;
