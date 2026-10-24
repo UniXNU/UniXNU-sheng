@@ -107,6 +107,7 @@ extern volatile int32_t native_audio_stats[16] __attribute__((weak_import));
 extern char native_adsp_text[96] __attribute__((weak_import));
 extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_qrtr_stats[16] __attribute__((weak_import));
+extern volatile int32_t native_battery_raw[10] __attribute__((weak_import));
 extern char native_qrtr_text[96] __attribute__((weak_import));
 extern volatile uint32_t native_swipe_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
@@ -858,6 +859,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_battery_stats[10], native_battery_stats[11], native_battery_stats[12], native_battery_stats[13], native_battery_stats[14],
              native_battery_stats[15]);
     at = put(out, at, cap, row, sizeof row);
+    // the raw readings (ShengBattery.cpp native_battery_raw): capacity property, both fuel gauges, temperature, current, valid bits,
+    // the field the last timeout skipped
+    if (&native_battery_raw) {
+      snprintf(row, sizeof row, "[battery-raw] cap=%d g1=%d/%d g2=%d/%d temp=%d cur=%d valid=%x lastto=%d",
+               native_battery_raw[0], native_battery_raw[1], native_battery_raw[2], native_battery_raw[3], native_battery_raw[4],
+               native_battery_raw[5], native_battery_raw[6], native_battery_raw[7], native_battery_raw[8]);
+      at = put(out, at, cap, row, sizeof row);
+    }
   }
   // Audio framework readiness over the packet router channel (AudioProbe.cpp): stage (5 ready), queries, answers, last status, refusals,
   // timeouts, ignored packets, ms from channel up to ready, channel ups/downs, last opcode, ring drops, send refusals, mode.
