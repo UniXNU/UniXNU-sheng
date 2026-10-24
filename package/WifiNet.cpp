@@ -86,6 +86,8 @@ uint8_t gMac[6];
 lck_grp_t *gGrp;
 lck_mtx_t *gLock;
 bool gPower = true;
+bool gKeyed;   // the last join used a passphrase
+uint32_t gRxFrames, gRxErrors; int gRxLastError;   // frames handed to the stack, refused ones and the last refusal
 int gAssocResult = kAssocOk;
 unsigned gScanCursor, gScanning;
 uint32_t gLogged[256 / 32];
@@ -145,7 +147,8 @@ void on_rx(const uint8_t *eth, size_t length) {
   mbuf_pkthdr_setlen(m, length); mbuf_setlen(m, length); mbuf_pkthdr_setrcvif(m, gIf);
   mbuf_pkthdr_setheader(m, mbuf_data(m)); mbuf_adj(m, 14);   // the stack wants the Ethernet header apart from the payload
   struct ifnet_stat_increment_param inc; memset(&inc, 0, sizeof inc); inc.packets_in = 1; inc.bytes_in = static_cast<uint32_t>(length);
-  ifnet_input(gIf, m, &inc);
+  const errno_t e = ifnet_input(gIf, m, &inc);
+  if (e) { gRxErrors++; gRxLastError = e; } else gRxFrames++;
 }
 const struct nw_wifi_events gEvents = { on_scan_done, on_connect_done, on_link_lost, on_rx };
 
@@ -219,7 +222,7 @@ int apple80211(bool set, apple80211req &rq) {
       const bool hasKey = a.key_length != 0 && a.key_length <= 64; char pass[65]; memset(pass, 0, sizeof pass); if (hasKey) memcpy(pass, a.key, a.key_length);
       gAssocResult = kAssocFailed;
       log(6, "wifi-net: join: ssid length %u, bssid given %d, key length %u cipher %u", a.ssid_length, hasBssid, a.key_length, a.key_cipher);
-      int r = nw_wifi_connect(a.ssid, a.ssid_length, hasBssid ? a.bssid : nullptr, hasKey ? pass : nullptr, hasKey ? a.key_length : 0);
+      gKeyed = hasKey; int r = nw_wifi_connect(a.ssid, a.ssid_length, hasBssid ? a.bssid : nullptr, hasKey ? pass : nullptr, hasKey ? a.key_length : 0);
       memset(pass, 0, sizeof pass); memset(&a, 0, sizeof a);
       return r ? EINVAL : 0; }
     case kDisassociate: case kDeauth: log(6, "wifi-net: leave"); nw_wifi_disconnect(); post_link(false); return 0;
@@ -231,6 +234,7 @@ int apple80211(bool set, apple80211req &rq) {
   case kPower: w[0] = 1; w[1] = 1; w[2] = gPower ? 1 : 0; return copy_out(rq, w, 24);
   case kState: return answer_value(rq, static_cast<uint32_t>(gPower ? map_state(st.state) : 0));
   case kOpMode: return answer_value(rq, 1);   // station
+  case kAuthType: w[0] = 1; w[1] = 1; w[2] = gKeyed ? 0x8 : 0; return copy_out(rq, w, 12);   // {version, lower: open system, upper: WPA2 personal or none}
   case kPowerSave: return answer_value(rq, 0);
   case kCardCaps: {   // a bitmap, bit n in byte n / 8: AES, AES-CCM, power management, short slot and preamble, WPA2, WME, short guard interval at 20 MHz
     static const uint8_t has[] = { 2, 3, 6, 9, 10, 14, 17, 19 };
@@ -379,7 +383,9 @@ void log_traffic() {
       if (!ifaddr_address(list[0], reinterpret_cast<struct sockaddr *>(&a), sizeof a)) { const uint8_t *b = reinterpret_cast<const uint8_t *>(&a.sin_addr); snprintf(text, sizeof text, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]); } }
     ifnet_free_address_list(list); }
   struct ifnet_stats_param stats; memset(&stats, 0, sizeof stats); ifnet_stat(gIf, &stats);
-  log(6, "wifi-net: en0 address %s, packets in %llu out %llu", text, static_cast<unsigned long long>(stats.packets_in), static_cast<unsigned long long>(stats.packets_out));
+  char tx[160]; nw_wifi_tx_reasons(tx, sizeof tx);
+  log(6, "wifi-net: en0 address %s, packets in %llu out %llu; frames to the stack %u, refused %u (last %d); %s", text, static_cast<unsigned long long>(stats.packets_in),
+      static_cast<unsigned long long>(stats.packets_out), gRxFrames, gRxErrors, gRxLastError, tx);
 }
 
 // IOKit's busy services: the network configuration waits for IOKit to be quiet before it names interfaces, and the wireless daemon waits
@@ -425,7 +431,7 @@ void autoJoin(void *, wait_result_t) {
     for (int i = 0, n = nw_wifi_bss_count(); i < n; ++i)
       if (!nw_wifi_bss_get(i, &b) && b.ssid_len == sl && !memcmp(b.ssid, ssid, sl)) { found = true; break; }
     log(6, "wifi-net: auto join round %u: %d networks seen, wanted one %s", round, nw_wifi_bss_count(), found ? "found" : "not found");
-    if (found) { const int r = nw_wifi_connect(reinterpret_cast<const uint8_t *>(ssid), sl, nullptr, hasPsk ? psk : nullptr, hasPsk ? pl : 0); log(6, "wifi-net: auto join requested: %d", r); }
+    if (found) { gKeyed = hasPsk; const int r = nw_wifi_connect(reinterpret_cast<const uint8_t *>(ssid), sl, nullptr, hasPsk ? psk : nullptr, hasPsk ? pl : 0); log(6, "wifi-net: auto join requested: %d", r); }
     else nw_wifi_scan(nullptr, 0);
   }
   memset(psk, 0, sizeof psk);
