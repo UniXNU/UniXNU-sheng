@@ -132,7 +132,7 @@ BUILDID_STRING = "sheng-research"
 # the optional trust cache and Data seed. The loader (DarwinBoot) is part of the firmware volume.
 [payload]
 volume = "SHENGESP"
-size_mib = 192
+size_mib = 208
 loader = "firmware"
 title = "Boot"
 dram_size = "0x80000000"             # SMEM RAM table observed on the device

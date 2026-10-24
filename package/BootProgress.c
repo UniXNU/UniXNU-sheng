@@ -94,7 +94,7 @@ static struct bp_pulse pulse;
 struct bp_panic_info boot_progress_panic_vinfo;
 // The panic screen (scripts/xnu-panic-screen.c) also copies the formatted panic message here (first panic only, NUL-terminated):
 // a panic on a secondary core parks just that core, the next swap paints over the panic screen, and the live banner keeps the text.
-char boot_progress_panic_text[256];
+char boot_progress_panic_text[2048];
 _Static_assert(offsetof(struct bp_panic_info,height)==offsetof(struct vc_info,v_height),"panic height ABI");
 _Static_assert(offsetof(struct bp_panic_info,width)==offsetof(struct vc_info,v_width),"panic width ABI");
 _Static_assert(offsetof(struct bp_panic_info,depth)==offsetof(struct vc_info,v_depth),"panic depth ABI");

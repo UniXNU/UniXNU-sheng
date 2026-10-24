@@ -38,7 +38,7 @@ struct ctx {
 #ifndef PANIC_TEXT
 #define PANIC_TEXT 0UL
 #endif
-#define PANIC_TEXT_BYTES 256
+#define PANIC_TEXT_BYTES 2048   /* boot_progress_panic_text: a data abort's message with every register, then the frames */
 
 __attribute__((noreturn)) static void park (void)
 {
@@ -252,17 +252,24 @@ __attribute__((noreturn, used, section(".text.b_main"))) void panic_screen_main 
     g.log = (u8 *)PANIC_TEXT;
   }
   format (&g, fmt, args);
+  /* The return addresses up the frame pointer chain: the exception entry links the panic's frames to the code that faulted, so this
+   * names the callers the message leaves out. Stops at a pointer outside the kernel's range, a misaligned one or one that does not
+   * move up the stack. */
+  {
+    const u64 *fp = (const u64 *)__builtin_frame_address (0);
+    text (&g, "\nframes");
+    for (unsigned i = 0; i < 24; i++) {
+      const u64 at = (u64)fp;
+      if (at < 0xfffffff000000000UL || (at & 15)) break;
+      const u64 next = fp[0], lr = fp[1] & 0x0000007fffffffffUL;   /* the return address without its pointer authentication bits */
+      put (&g, ' ');
+      number (&g, lr | 0xffffff8000000000UL, 16, 16, 1);
+      if (next <= at) break;
+      fp = (const u64 *)next;
+    }
+  }
   g.log = 0;
   __asm__ volatile ("dsb sy");
-  /* Sample the active CPU translation regime, without changing it. This is
-   * panic-time evidence only; it does not establish early mappings or EL0 ABI. */
-  {
-    u64 tcr, sctlr;
-    __asm__ volatile ("mrs %0, tcr_el1" : "=r" (tcr));
-    __asm__ volatile ("mrs %0, sctlr_el1" : "=r" (sctlr));
-    hex (&g, "\nTCR=", tcr);
-    hex (&g, "\nSCTLR=", sctlr);
-  }
   /* Resolved from this candidate's symbols by the patcher, never fixed addresses.
    * Values are sampled at panic time and need not form an atomic VM snapshot. */
   (void)MAX_MEM;
