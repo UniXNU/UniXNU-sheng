@@ -91,6 +91,7 @@ bool gKeyed;   // the last join used a passphrase
 uint32_t gRxFrames, gRxErrors; int gRxLastError;   // frames handed to the stack, refused ones and the last refusal
 int gAssocResult = kAssocOk;
 unsigned gScanCursor, gScanning;
+bool gUserJoin;   // the wireless daemon joined, left or switched the radio itself: the unattended test join steps aside
 uint32_t gLogged[256 / 32];
 
 void log(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
@@ -196,6 +197,17 @@ int copy_in(const apple80211req &rq, void *dst, size_t size) {
   memset(dst, 0, size);
   return copyin(rq.req_data, dst, rq.req_len < size ? rq.req_len : size);
 }
+unsigned gResultsShown;
+// The regulatory country as the access points announce it (802.11d: the Country element, id 7, of the strongest network that has one), else "XX".
+void country(char cc[3]) {
+  cc[0] = 'X'; cc[1] = 'X'; cc[2] = 0; int best = -200; nw_bss_info b;
+  for (int i = 0, n = nw_wifi_bss_count(); i < n; ++i) {
+    if (nw_wifi_bss_get(i, &b) || b.signal_dbm <= best) continue;
+    for (unsigned o = 0; o + 2 <= b.ie_len && o + 2 + b.ie[o + 1] <= b.ie_len; o += 2 + b.ie[o + 1])
+      if (b.ie[o] == 7 && b.ie[o + 1] >= 2 && b.ie[o + 2] >= 'A' && b.ie[o + 2] <= 'Z' && b.ie[o + 3] >= 'A' && b.ie[o + 3] <= 'Z') {
+        cc[0] = static_cast<char>(b.ie[o + 2]); cc[1] = static_cast<char>(b.ie[o + 3]); best = b.signal_dbm; break; }
+  }
+}
 int map_state(unsigned s) { switch (s) { case NW_STA_SCANNING: return 1; case NW_STA_AUTH: return 2; case NW_STA_ASSOC: case NW_STA_KEYS: return 3; case NW_STA_UP: return 4; default: return 0; } }
 
 int apple80211(bool set, apple80211req &rq) {
@@ -211,22 +223,22 @@ int apple80211(bool set, apple80211req &rq) {
   uint32_t *w = reinterpret_cast<uint32_t *>(out.raw);
   if (set) {
     switch (type) {
-    case kPower: { uint32_t in[6]; if (copy_in(rq, in, sizeof in)) return EFAULT; gPower = in[2] != 0; log(6, "wifi-net: power set %u", in[2]); if (!gPower) nw_wifi_disconnect(); post_event(kEvPowerChanged, nullptr, 0); return 0; }
+    case kPower: { uint32_t in[6]; if (copy_in(rq, in, sizeof in)) return EFAULT; gUserJoin = true; gPower = in[2] != 0; log(6, "wifi-net: power set %u", in[2]); if (!gPower) nw_wifi_disconnect(); post_event(kEvPowerChanged, nullptr, 0); return 0; }
     case kScanReq: case kScanReqMultiple: {
       uint8_t buf[0x80]; if (copy_in(rq, buf, sizeof buf)) return EFAULT;
       uint32_t ssidLength; memcpy(&ssidLength, buf + 16, 4); const uint8_t *ssid = buf + 20;
-      gScanning = 1; gScanCursor = 0; nw_wifi_scan(ssidLength && ssidLength <= 32 ? ssid : nullptr, ssidLength <= 32 ? ssidLength : 0); return 0; }
+      gScanning = 1; gScanCursor = 0; gResultsShown = 0; nw_wifi_scan(ssidLength && ssidLength <= 32 ? ssid : nullptr, ssidLength <= 32 ? ssidLength : 0); return 0; }
     case kAssociate: {
       assoc_request a; if (copy_in(rq, &a, sizeof a)) return EFAULT;
       if (a.ssid_length > 32) return EINVAL;
       const bool hasBssid = (a.bssid[0] | a.bssid[1] | a.bssid[2] | a.bssid[3] | a.bssid[4] | a.bssid[5]) != 0;
       const bool hasKey = a.key_length != 0 && a.key_length <= 64; char pass[65]; memset(pass, 0, sizeof pass); if (hasKey) memcpy(pass, a.key, a.key_length);
-      gAssocResult = kAssocFailed;
+      gAssocResult = kAssocFailed; gUserJoin = true;
       log(6, "wifi-net: join: ssid length %u, bssid given %d, key length %u cipher %u", a.ssid_length, hasBssid, a.key_length, a.key_cipher);
       gKeyed = hasKey; int r = nw_wifi_connect(a.ssid, a.ssid_length, hasBssid ? a.bssid : nullptr, hasKey ? pass : nullptr, hasKey ? a.key_length : 0);
       memset(pass, 0, sizeof pass); memset(&a, 0, sizeof a);
       return r ? EINVAL : 0; }
-    case kDisassociate: case kDeauth: log(6, "wifi-net: leave"); nw_wifi_disconnect(); post_link(false); return 0;
+    case kDisassociate: case kDeauth: gUserJoin = true; log(6, "wifi-net: leave"); nw_wifi_disconnect(); post_link(false); return 0;
     case kScanCacheClear: case kLocale: case kCountryCode: case kPowerSave: case kAuthType: case kCipherKey: return 0;
     default: return EOPNOTSUPP;
     }
@@ -252,7 +264,7 @@ int apple80211(bool set, apple80211req &rq) {
   case kRate: return answer_value(rq, st.state == NW_STA_UP ? 54 : 0);
   case kTxPower: return answer_value(rq, 15);
   case kDriverVersion: case kHardwareVersion: { const char *v = type == kDriverVersion ? "nativewifi 1" : "WCN7850"; strlcpy(reinterpret_cast<char *>(out.raw), v, 256); return copy_out(rq, out.raw, 256); }
-  case kCountryCode: w[0] = 1; out.raw[4] = 'X'; out.raw[5] = 'X'; return copy_out(rq, w, 12);
+  case kCountryCode: { char cc[3]; country(cc); return answer_bytes(rq, cc, 3); }   // the two letters and a NUL (the daemon asks with a 3-byte buffer)
   case kAssociateResult: return answer_value(rq, static_cast<uint32_t>(gAssocResult));
   case kSupportedChannels: case kHwSupportedChannels: {
     out.chans.version = 1; unsigned n = 0;
@@ -262,7 +274,9 @@ int apple80211(bool set, apple80211req &rq) {
   case kScanResult: {
     nw_bss_info b; const int count = nw_wifi_bss_count();
     if (gScanCursor >= static_cast<unsigned>(count) || nw_wifi_bss_get(static_cast<int>(gScanCursor), &b)) { gScanCursor = 0; return EIO; }   // after the last record
-    gScanCursor++; fill_result(out.res, b); return copy_out(rq, &out.res, sizeof out.res); }
+    gScanCursor++; fill_result(out.res, b);
+    if (gResultsShown < 24) { ++gResultsShown; log(6, "wifi-net: scan result %u: %u MHz, %d dBm, %.*s", gScanCursor, b.freq_mhz, b.signal_dbm, b.ssid_len, reinterpret_cast<const char *>(b.ssid)); }
+    return copy_out(rq, &out.res, sizeof out.res); }
   case kCurrentNetwork: {
     if (st.state < NW_STA_ASSOC) return ENOENT;
     nw_bss_info b; const int count = nw_wifi_bss_count();
@@ -434,6 +448,7 @@ void autoJoin(void *, wait_result_t) {
   for (unsigned round = 0; round < 40; ++round) {
     IOSleep(3000);
     log_busy();
+    if (gUserJoin) { log(6, "wifi-net: auto join stops: the wireless daemon took over"); break; }
     nw_wifi_status st; nw_wifi_status_get(&st);
     if (st.state == NW_STA_UP) { log_traffic(); continue; }   // the address the network configuration got, and the packets since
     if (st.state >= NW_STA_AUTH) continue;
