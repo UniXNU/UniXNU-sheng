@@ -25,10 +25,12 @@ int geni_i2c_prepare(GeniI2c *g, const GeniIo *io, uint8_t address, uint32_t *co
     return 0;
 }
 
-/* Starts one write command of length bytes; the data goes in when the engine asks for it (TX watermark). */
-static void write_command(GeniI2c *g, uint32_t word, uint32_t length, int hold)
+/* Starts one write command of length bytes (at most 8); the data goes in when the engine asks for it (TX watermark). */
+static void write_command(GeniI2c *g, const uint8_t *bytes, uint32_t length, int hold)
 {
-    g->word = word;
+    g->tx[0] = g->tx[1] = 0;
+    for (uint32_t i = 0; i < length; ++i) g->tx[i / 4] |= (uint32_t)bytes[i] << (8 * (i % 4));
+    g->tx_words = (uint8_t)((length + 3) / 4);
     g->length = length;
     g->hold = (uint8_t)hold;
     wr(g, GENI_TX_LEN, length);
@@ -41,15 +43,32 @@ int geni_i2c_start_write(GeniI2c *g, uint8_t reg, uint8_t value)
 {
     if (g->phase != GeniIdle) return -1;
     g->reading = 0; g->reg = reg; g->value = value; g->error = GeniOk;
-    write_command(g, (uint32_t)reg | (uint32_t)value << 8, 2, 0);
+    const uint8_t bytes[2] = {reg, value};
+    write_command(g, bytes, 2, 0);
     return 0;
 }
 
 int geni_i2c_start_read(GeniI2c *g, uint8_t reg)
 {
     if (g->phase != GeniIdle) return -1;
-    g->reading = 1; g->reg = reg; g->error = GeniOk;
-    write_command(g, reg, 1, 1);
+    g->reading = 1; g->rx_length = 1; g->reg = reg; g->error = GeniOk;
+    write_command(g, &reg, 1, 1);
+    return 0;
+}
+
+int geni_i2c_start_write_bytes(GeniI2c *g, const uint8_t *bytes, uint32_t length)
+{
+    if (g->phase != GeniIdle || !length || length > 8) return -1;
+    g->reading = 0; g->error = GeniOk;
+    write_command(g, bytes, length, 0);
+    return 0;
+}
+
+int geni_i2c_start_read_bytes(GeniI2c *g, const uint8_t *bytes, uint32_t length, uint32_t read_length)
+{
+    if (g->phase != GeniIdle || !length || length > 4 || !read_length || read_length > 4) return -1;
+    g->reading = 1; g->rx_length = (uint8_t)read_length; g->error = GeniOk;
+    write_command(g, bytes, length, 1);
     return 0;
 }
 
@@ -84,7 +103,7 @@ int geni_i2c_event(GeniI2c *g, uint32_t status)
     if (status & GENI_M_ERRORS) return finish(g, GeniErrBus, status);
     if (g->phase == GeniTxWait) {
         if (status & GENI_M_TX_WATERMARK) {
-            wr(g, GENI_TX_FIFO, g->word);
+            for (unsigned i = 0; i < g->tx_words; ++i) wr(g, GENI_TX_FIFO, g->tx[i]);
             wr(g, GENI_TX_WATERMARK, 0);
             g->phase = GeniWriteDone;
         }
@@ -94,14 +113,15 @@ int geni_i2c_event(GeniI2c *g, uint32_t status)
     if (!(status & GENI_M_CMD_DONE)) return GeniPending;
     if (g->phase == GeniWriteDone) {
         if (!g->reading) return finish(g, GeniOk, 0);
-        wr(g, GENI_RX_LEN, 1);
+        wr(g, GENI_RX_LEN, g->rx_length);
         wr(g, GENI_M_CMD0, (GENI_OP_READ << 27) | ((uint32_t)g->address << 9));
         g->phase = GeniReadDone;
         return GeniPending;
     }
     /* GeniReadDone */
     if (!(rd(g, GENI_RX_FIFO_STATUS) & 0x1ffffffu)) return finish(g, GeniErrNoData, status);
-    g->data = (uint8_t)rd(g, GENI_RX_FIFO);
+    g->rx = rd(g, GENI_RX_FIFO);
+    g->data = (uint8_t)g->rx;
     return finish(g, GeniOk, 0);
 }
 

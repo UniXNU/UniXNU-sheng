@@ -16,6 +16,8 @@ typedef struct {
     uint32_t rx, rx_count;
     int present, mute, cancel_ack, abort_ack;
     uint8_t slave[256], pointer;
+    uint32_t wide[16], wide_pointer;   /* a device at 0x40 with 32-bit big-endian registers and values */
+    uint8_t tx[8]; int tx_bytes;
     unsigned accesses, commands, fifo_writes;
 } Engine;
 
@@ -43,10 +45,14 @@ static void eng_write(void *ctx, uint32_t r, uint32_t v)
             e->length = (int)e->reg[GENI_TX_LEN / 4];
             if (e->reg[GENI_TX_WATERMARK / 4] && !e->mute) e->status |= GENI_M_TX_WATERMARK;
         } else {
-            CHECK(e->op == GENI_OP_READ && e->reg[GENI_RX_LEN / 4] == 1);
+            const uint32_t n = e->reg[GENI_RX_LEN / 4];
+            CHECK(e->op == GENI_OP_READ && (n == 1 || (e->address == 0x40 && n == 4)));
             if (e->mute) return;
             if (!e->present) {e->status |= (1u << 10) | GENI_M_CMD_DONE; e->active = 0; return;}
-            e->rx = e->slave[e->pointer++]; e->rx_count = 1;
+            if (n == 4) {const uint32_t v = e->wide[e->wide_pointer % 16];
+                e->rx = (v >> 24) | ((v >> 8) & 0xff00) | ((v << 8) & 0xff0000) | (v << 24);}
+            else e->rx = e->slave[e->pointer++];
+            e->rx_count = 1;
             e->status |= GENI_M_CMD_DONE; e->active = 0;
         }
         return;
@@ -57,8 +63,18 @@ static void eng_write(void *ctx, uint32_t r, uint32_t v)
     case GENI_TX_FIFO:
         e->fifo_writes++;
         CHECK(e->active && e->op == GENI_OP_WRITE);
+        for (int i = 0; i < 4 && e->tx_bytes < e->length; ++i) e->tx[e->tx_bytes++] = (uint8_t)(v >> (8 * i));
+        if (e->tx_bytes < e->length) return;
+        e->tx_bytes = 0;
         e->active = 0;
         if (!e->present) {e->status |= (1u << 10) | GENI_M_CMD_DONE; return;}
+        if (e->address == 0x40) {
+            CHECK(e->length == 4 || e->length == 8);
+            e->wide_pointer = (uint32_t)e->tx[0] << 24 | (uint32_t)e->tx[1] << 16 | (uint32_t)e->tx[2] << 8 | e->tx[3];
+            if (e->length == 8) e->wide[e->wide_pointer % 16] = (uint32_t)e->tx[4] << 24 | (uint32_t)e->tx[5] << 16 | (uint32_t)e->tx[6] << 8 | e->tx[7];
+            e->status |= GENI_M_CMD_DONE;
+            return;
+        }
         e->pointer = (uint8_t)v;
         if (e->length == 2) e->slave[e->pointer] = (uint8_t)(v >> 8);
         e->status |= GENI_M_CMD_DONE;
@@ -115,7 +131,8 @@ int main(void)
     e.reg[GENI_M_IRQ_EN / 4] = 1u << 26; e.status = GENI_M_CMD_DONE;  /* left over from the boot loader */
     CHECK(geni_i2c_prepare(&g, &io, 0x11, &config) == 0 && config == (3u << 24 | 0x41));
     CHECK(e.reg[GENI_DMA_MODE / 4] == 0 && e.reg[GENI_TX_PACK0 / 4] == 0x7f8fe && e.reg[GENI_RX_PACK1 / 4] == 0xffefe && e.status == 0);
-    CHECK(e.reg[GENI_M_IRQ_EN / 4] == ((1u << 26) | GENI_M_IRQ_WANTED) && (e.reg[GENI_SE_IRQ_EN / 4] & GENI_SE_M_IRQ_EN));
+    /* Exactly the wanted bits: a stale RX watermark enable would hold the level interrupt up. */
+    CHECK(e.reg[GENI_M_IRQ_EN / 4] == GENI_M_IRQ_WANTED && (e.reg[GENI_SE_IRQ_EN / 4] & GENI_SE_M_IRQ_EN));
     CHECK(!geni_i2c_busy(&g) && geni_i2c_poll(&g) == GeniPending);
 
     /* A register write: command, then the data on the watermark, then done. */
@@ -188,6 +205,14 @@ int main(void)
         CHECK(geni_i2c_start_write(&g, (uint8_t)(v ^ 0x5a), (uint8_t)v) == 0 && run(&g, NULL) == GeniDone);
         CHECK(geni_i2c_start_read(&g, (uint8_t)(v ^ 0x5a)) == 0 && run(&g, NULL) == GeniDone && g.data == v);
     }
+    /* 32-bit registers: an 8-byte write in two FIFO words, then a 4-byte address write and a 4-byte read. */
+    GeniI2c w;
+    CHECK(geni_i2c_prepare(&w, &io, 0x40, NULL) == 0);
+    const uint8_t put[8] = {0, 0, 0, 0x0c, 0x12, 0x34, 0x56, 0x78}, at[4] = {0, 0, 0, 0x0c};
+    CHECK(geni_i2c_start_write_bytes(&w, put, 9) == -1 && geni_i2c_start_read_bytes(&w, at, 4, 5) == -1);
+    CHECK(geni_i2c_start_write_bytes(&w, put, 8) == 0 && e.length == 8 && run(&w, NULL) == GeniDone && e.wide[12] == 0x12345678);
+    CHECK(geni_i2c_start_read_bytes(&w, at, 4, 4) == 0 && e.hold && e.length == 4 && run(&w, NULL) == GeniDone);
+    CHECK(w.rx == 0x78563412u && w.data == 0x12);   /* first byte (the most significant) in bits 7:0 */
     printf("PASS GENI I2C: %u checks\n", checks);
     return 0;
 }

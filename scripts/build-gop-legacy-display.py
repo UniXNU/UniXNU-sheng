@@ -251,8 +251,8 @@ require((nativewifi/'include/nw_abi.h').exists(),'Ath12kWifi module directory (s
 # The audio DSP bring-up (sheng-adsp): the driver and its protocol cores (firmware images, SMEM, SMP2P, GLINK, AOSS QMP, RPMh). The
 # firmware file reader is BSD code and is built with the boot progress archive; the FAT reader it uses for the firmware partition is here.
 adsp_cpp=ROOT/'kits/sheng/AdspProbe.cpp';adsp_obj=touch_dir/'AdspProbe.o'
-adsp_c=[ROOT/'kits/sheng'/(n+'.c') for n in ('QcomMdt','FatVolume','QcomQrtr','ShengQrtr','QcomSmem','QcomSmp2p','QcomGlink','QcomQmp','QcomRpmh','ShengBattmgr','ShengGpr','MhiBoot')]
-# The audio packet router client (sheng-audio): registers "adsp_apps" and asks the audio framework whether it is ready.
+adsp_c=[ROOT/'kits/sheng'/(n+'.c') for n in ('QcomMdt','FatVolume','QcomQrtr','ShengQrtr','QcomSmem','QcomSmp2p','QcomGlink','QcomQmp','QcomRpmh','ShengBattmgr','ShengGpr','ShengAudioReach','ShengCs35l43','MhiBoot')]
+# Speaker playback (sheng-audio): amplifiers over I2C, then the speaker graphs on the audio DSP.
 audio_cpp=ROOT/'kits/sheng/AudioProbe.cpp';audio_obj=touch_dir/'AudioProbe.o'
 buttons_cpp=ROOT/'kits/sheng/ButtonProbe.cpp';buttons_obj=touch_dir/'ButtonProbe.o'
 backlight_cpp=ROOT/'kits/sheng/BacklightProbe.cpp';backlight_obj=touch_dir/'BacklightProbe.o'
@@ -265,6 +265,9 @@ backlight_class_late=touch_dir/'AppleARMBacklight.late.o'
 battery_cpp=ROOT/'kits/sheng/BatteryProbe.cpp';battery_obj=touch_dir/'BatteryProbe.o'
 battery_class_cpp=ROOT/'kits/sheng/ShengBattery.cpp';battery_class_obj=touch_dir/'ShengBattery.o'
 battery_class_late=touch_dir/'ShengBattery.late.o'
+# The audio service class the audio server plug-in opens (sheng-audio): staged the same way.
+audio_class_cpp=ROOT/'kits/sheng/ShengAudioService.cpp';audio_class_obj=touch_dir/'ShengAudioService.o'
+audio_class_late=touch_dir/'ShengAudioService.late.o'
 # The event-driven GENI I2C core the brightness service drives its two engines with.
 backlight_c=[ROOT/'kits/sheng/GeniI2c.c']
 run([str(touch_cpp) if str(arg)==str(source) else str(touch_cpp_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
@@ -280,6 +283,7 @@ run([str(dpu_cpp) if str(arg)==str(source) else str(dpu_obj) if str(arg)==str(OU
 run([str(backlight_class_cpp) if str(arg)==str(source) else str(backlight_class_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
 run([str(battery_cpp) if str(arg)==str(source) else str(battery_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
 run([str(battery_class_cpp) if str(arg)==str(source) else str(battery_class_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
+run([str(audio_class_cpp) if str(arg)==str(source) else str(audio_class_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
 print(run(['python3',ROOT/'scripts/gen-touch-firmware.py'],text=True),end='')
 touch_c=[ROOT/'drivers/QcomGeniSpi/GeniSpi.c',ROOT/'drivers/ShengNovatekTouch/NvtProtocol.c',
          ROOT/'drivers/ShengNovatekTouch/NvtTouchCore.c',ROOT/'build/native-touch/NvtFirmware.c']
@@ -292,6 +296,8 @@ run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-
 run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_WifiNet.cpp',wifinet_obj,wifinet_late])
 run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_ShengBattery.cpp',
      battery_class_obj,battery_class_late])
+run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_ShengAudioService.cpp',
+     audio_class_obj,audio_class_late])
 wifi_module_objs=[Path(l.split(' ',1)[1]) for l in subprocess.check_output(['python3',ROOT/'scripts/build-ath12k-wifi.py',nativewifi,touch_dir/'ath12k-wifi'],text=True,timeout=600).splitlines() if l.startswith('OBJ ')]
 archive=OUT/'libNativeLegacyDisplay.late.a';archive.unlink(missing_ok=True)
 print(run(['python3',ROOT/'scripts/build-sheng-hid-input.py'],text=True),end='')
@@ -305,11 +311,11 @@ run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func',
 require(code((keyevents/'NativeKeyStoreEvents.o').read_bytes(),macho((keyevents/'NativeKeyStoreEvents.o').read_bytes()))==
         code(keyevents_late.read_bytes(),macho(keyevents_late.read_bytes())),'Owned event-service instructions unchanged by late init staging')
 run(['xcrun','ar','rcs',archive,late,OUT/'original-bindings.o',OUT/'LegacyDisplayProbe.o',hid_obj,keystore_obj,process_obj,trace_obj,log_obj,reset_obj,
-     hid_dir/'NativeHidInput.late.o',hid_dir/'hid-original-bindings.o',keyevents_late,touch_cpp_obj,cpufreq_obj,gpupower_obj,wifi_obj,wifinet_late,adsp_obj,audio_obj,buttons_obj,backlight_obj,dpu_obj,backlight_class_late,battery_obj,battery_class_late,*touch_objs,*wifi_module_objs])
+     hid_dir/'NativeHidInput.late.o',hid_dir/'hid-original-bindings.o',keyevents_late,touch_cpp_obj,cpufreq_obj,gpupower_obj,wifi_obj,wifinet_late,adsp_obj,audio_obj,buttons_obj,backlight_obj,dpu_obj,backlight_class_late,battery_obj,battery_class_late,audio_class_late,*touch_objs,*wifi_module_objs])
 sources=[ROOT/'drivers/GopFramebuffer/NativeLegacyDisplay.cpp',
          ROOT/'drivers/GopFramebuffer/NativeLegacyRequest.h',source,hid_source,keystore_source,process_source,trace_source,log_source,reset_source,ROOT/'kits/sheng/BootResetCore.h',ROOT/'kits/sheng/BootUiTraceCore.h',ROOT/'kits/sheng/BootUiTraceDetails.h',
          ROOT/'drivers/ShengHidInput/NativeHidInput.cpp',ROOT/'scripts/build-sheng-hid-input.py',
-         ROOT/'drivers/AppleKeyStoreState/NativeKeyStoreEvents.cpp',touch_cpp,cpufreq_cpp,wifi_cpp,adsp_cpp,*adsp_c,audio_cpp,buttons_cpp,backlight_cpp,backlight_class_cpp,*backlight_c,ROOT/'kits/sheng/GeniI2c.h',battery_cpp,battery_class_cpp,ROOT/'kits/sheng/TouchBoard.h',
+         ROOT/'drivers/AppleKeyStoreState/NativeKeyStoreEvents.cpp',touch_cpp,cpufreq_cpp,wifi_cpp,adsp_cpp,*adsp_c,audio_cpp,buttons_cpp,backlight_cpp,backlight_class_cpp,*backlight_c,ROOT/'kits/sheng/GeniI2c.h',battery_cpp,battery_class_cpp,audio_class_cpp,ROOT/'kits/sheng/TouchBoard.h',
          ROOT/'drivers/QcomGeniSpi/GeniSpi.c',ROOT/'drivers/QcomGeniSpi/GeniSpi.h',ROOT/'drivers/ShengNovatekTouch/NvtProtocol.c',
          ROOT/'drivers/ShengNovatekTouch/NvtProtocol.h',ROOT/'drivers/ShengNovatekTouch/NvtTouchCore.c',ROOT/'drivers/ShengNovatekTouch/NvtTouchCore.h']
 print(run(['python3',ROOT/'scripts/build-arm-driver.py','NativeGOPPresenter'],text=True),end='')
