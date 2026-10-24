@@ -302,6 +302,20 @@ static void test_glink(void)
     uint8_t big[300] = {0};
     CHECK(qcom_glink_send(&b, cb, big, sizeof big) == QcomGlinkAgain);
     settle(&a, &b);
+    /* A full intent table (the audio DSP offers many small intents first): the larger intent a send asked for replaces the smallest
+     * idle one instead of being dropped. */
+    {
+        for (unsigned k = 0; k < QCOM_GLINK_MAX_REMOTE_INTENTS; ++k) {cb->remote[k].valid = 1; cb->remote[k].busy = 0; cb->remote[k].size = 128; cb->remote[k].id = 1000 + k;}
+        cb->remote[3].size = 64;
+        const uint32_t dropped = b.dropped;
+        uint8_t m[16] = {QCOM_GLINK_INTENT, 0, (uint8_t)ca->lcid, 0, 1, 0, 0, 0, 0x00, 0x02, 0, 0, 0x77, 0, 0, 0};
+        uint32_t head = desc[1];
+        for (unsigned i = 0; i < 16; ++i) {fifo_a[head] = m[i]; head = (head + 1) % FIFO;}
+        desc[1] = head;
+        qcom_glink_poll(&b);
+        CHECK(b.dropped == dropped && cb->remote[3].valid && cb->remote[3].size == 512 && cb->remote[3].id == 0x77);
+        for (unsigned k = 0; k < QCOM_GLINK_MAX_REMOTE_INTENTS; ++k) cb->remote[k].valid = 0;
+    }
     /* The remote closes: both sides go down, A answers with CLOSE_ACK and its own CLOSE, then waits for a new OPEN. */
     QcomGlinkChannel saved = *cb;
     (void)saved;

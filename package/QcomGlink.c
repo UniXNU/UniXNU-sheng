@@ -337,6 +337,11 @@ static int receive_one(QcomGlink *g)
             unsigned slot = QCOM_GLINK_MAX_REMOTE_INTENTS;
             for (unsigned k = 0; k < QCOM_GLINK_MAX_REMOTE_INTENTS; ++k)
                 if (!c->remote[k].valid) {slot = k; break;}
+            /* Full: a larger intent (the one a send asked for) replaces the smallest idle one, so it is never lost. */
+            if (slot == QCOM_GLINK_MAX_REMOTE_INTENTS)
+                for (unsigned k = 0; k < QCOM_GLINK_MAX_REMOTE_INTENTS; ++k)
+                    if (!c->remote[k].busy && c->remote[k].size < le32(pair) &&
+                        (slot == QCOM_GLINK_MAX_REMOTE_INTENTS || c->remote[k].size < c->remote[slot].size)) slot = k;
             if (slot == QCOM_GLINK_MAX_REMOTE_INTENTS) {g->dropped++; continue;}
             c->remote[slot].size = le32(pair);
             c->remote[slot].id = le32(pair + 4);

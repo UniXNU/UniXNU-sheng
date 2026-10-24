@@ -12,7 +12,7 @@ extern "C" {
 #endif
 
 #define QCOM_GLINK_MAX_CHANNELS 6u
-#define QCOM_GLINK_MAX_REMOTE_INTENTS 24u
+#define QCOM_GLINK_MAX_REMOTE_INTENTS 48u   /* the audio DSP offers 24 small intents on adsp_apps before granting a larger one */
 #define QCOM_GLINK_MAX_LOCAL_INTENTS 24u
 #define QCOM_GLINK_NAME 32u
 #define QCOM_GLINK_FEATURE_INTENT_REUSE 1u
