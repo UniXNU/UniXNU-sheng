@@ -384,8 +384,9 @@ void log_traffic() {
     ifnet_free_address_list(list); }
   struct ifnet_stats_param stats; memset(&stats, 0, sizeof stats); ifnet_stat(gIf, &stats);
   char tx[160]; nw_wifi_tx_reasons(tx, sizeof tx);
-  log(6, "wifi-net: en0 address %s, packets in %llu out %llu; frames to the stack %u, refused %u (last %d); %s", text, static_cast<unsigned long long>(stats.packets_in),
-      static_cast<unsigned long long>(stats.packets_out), gRxFrames, gRxErrors, gRxLastError, tx);
+  log(6, "wifi-net: en0 address %s, packets in %llu out %llu; frames to the stack %u, refused %u (last %d)", text, static_cast<unsigned long long>(stats.packets_in),
+      static_cast<unsigned long long>(stats.packets_out), gRxFrames, gRxErrors, gRxLastError);
+  log(6, "wifi-net: tx %s", tx);
 }
 
 // IOKit's busy services: the network configuration waits for IOKit to be quiet before it names interfaces, and the wireless daemon waits
@@ -446,9 +447,11 @@ extern "C" void sheng_wifi_net_start(const uint8_t mac[6]) {
   memcpy(gMac, mac, 6);
   gGrp = lck_grp_alloc_init("sheng-wifi-net", LCK_GRP_ATTR_NULL); gLock = lck_mtx_alloc_init(gGrp, LCK_ATTR_NULL);
   struct ifnet_init_eparams p; memset(&p, 0, sizeof p);
-  p.ver = IFNET_INIT_CURRENT_VERSION; p.len = sizeof p; p.flags = IFNET_INIT_LEGACY; p.name = "en"; p.unit = 0; p.family = IFNET_FAMILY_ETHERNET; p.subfamily = IFNET_SUBFAMILY_WIFI; p.type = IFT_ETHER;
+  p.ver = IFNET_INIT_CURRENT_VERSION; p.len = sizeof p; p.flags = IFNET_INIT_LEGACY | IFNET_INIT_NX_NOAUTO; p.name = "en"; p.unit = 0; p.family = IFNET_FAMILY_ETHERNET; p.subfamily = IFNET_SUBFAMILY_WIFI; p.type = IFT_ETHER;
   p.output = if_output; p.demux = ether_demux; p.add_proto = ether_add_proto; p.del_proto = ether_del_proto; p.check_multi = ether_check_multi; p.framer = ether_frameout;
   p.ioctl = if_ioctl; p.event = if_event_stub; static const uint8_t bcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }; p.broadcast_addr = bcast; p.broadcast_len = 6;
+  // Without NX_NOAUTO the stack puts a compatibility nexus in front of a Wi-Fi "en" interface, and its input no longer goes through the
+  // interface's own input thread.
   ifnet_t ifp = nullptr; errno_t e = ifnet_allocate_extended(&p, &ifp);
   if (e || !ifp) { log(3, "wifi-net: ifnet allocation failed: %d", e); return; }
   ifnet_set_mtu(ifp, 1500); ifnet_set_flags(ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST, 0xffff); ifnet_set_baudrate(ifp, 54000000ULL);
@@ -460,5 +463,6 @@ extern "C" void sheng_wifi_net_start(const uint8_t mac[6]) {
   nw_wifi_set_events(&gEvents);
   publish_registry("en0");
   { thread_t t = nullptr; if (kernel_thread_start(autoJoin, nullptr, &t) == KERN_SUCCESS) thread_deallocate(t); }
-  log(6, "wifi-net: en0 is up, hardware address %02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  log(6, "wifi-net: en0 is up, hardware address %02x:%02x:%02x:%02x:%02x:%02x, capabilities 0x%x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+      ifnet_capabilities_enabled(ifp));
 }
