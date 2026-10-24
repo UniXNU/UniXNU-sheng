@@ -4,3 +4,6 @@
 [submodule "drivers/ShengPreflight"]
 	path = drivers/ShengPreflight
 	url = https://github.com/UniXNU/ShengPreflight.git
+[submodule "drivers/NativeWifi"]
+	path = drivers/NativeWifi
+	url = https://github.com/UniXNU/NativeWifi.git
