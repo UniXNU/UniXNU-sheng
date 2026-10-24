@@ -7,3 +7,9 @@
 [submodule "drivers/Ath12kWifi"]
 	path = drivers/Ath12kWifi
 	url = https://github.com/UniXNU/Ath12kWifi.git
+[submodule "drivers/ShengUfs"]
+	path = drivers/ShengUfs
+	url = https://github.com/UniXNU/ShengUfs.git
+[submodule "drivers/ShengHidInput"]
+	path = drivers/ShengHidInput
+	url = https://github.com/UniXNU/ShengHidInput.git
