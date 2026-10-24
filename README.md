@@ -9,6 +9,7 @@ SM8550. The device profile selects
 
 | Path | Contents |
 | --- | --- |
+| `porting.toml` | Subsystem inputs, findings, evidence and completion criteria |
 | `board.toml` | Device configuration and component selection |
 | `feeds.toml` | Pinned SoC source |
 | `configs/sheng_defconfig` | Device kernel settings |
@@ -31,6 +32,20 @@ exports nodes with `unixnu,adt-name`.
 `Ath12kWifi` supplies the Wi-Fi stack through board PCIe, MSI, DMA,
 and network interfaces. The payload volume is 208 MiB. The device selects
 sRGB display properties and a 120 Hz display timing request.
+
+## Development record
+
+Maintain [porting.toml](porting.toml) with every subsystem change. It records
+hardware, configuration, procedures, findings, evidence and completion criteria.
+The [device page](https://unixnu.com/devices/sheng) renders this record.
+Maintainers and agents follow the [same guide](https://unixnu.com/porting/records).
+The required `Porting record` CI check validates structure, component coverage
+and updates to findings or evidence for changed code.
+
+This repository owns the ShengUfs, ShengHidInput, ShengNovatekTouch and
+ShengPreflight submodules. Shared components come from the selected profiles
+and UniXNU catalog. Read the [UFS guide](https://unixnu.com/porting/ufs) before
+changing storage resources or policy.
 
 ## Build
 

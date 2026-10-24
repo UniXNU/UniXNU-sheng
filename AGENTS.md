@@ -44,3 +44,12 @@ input, and GPU checkpoints.
 Update relevant English and Chinese site pages in UniXNU. Write concise
 English for this repository. Describe current behavior with direct
 statements and ordinary punctuation.
+
+## Porting record
+
+Read the device's `porting.toml` and the
+[record guide](https://unixnu.com/porting/records) before implementation.
+For storage, also read the [UFS guide](https://unixnu.com/porting/ufs).
+Update each affected area's findings or evidence with its code change.
+The documentation site renders this same record. Follow its schema and
+completion levels for both maintainer and agent work.
