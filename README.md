@@ -1,74 +1,69 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.svg">
-    <img alt="UniXNU" src="assets/logo-light.svg" width="200">
-  </picture>
-</p>
+# UniXNU sheng
 
-<p align="center">
-  <a href="https://unixnu.com"><img alt="Documentation" src="https://img.shields.io/badge/docs-unixnu.com-2A5BD7?logo=readthedocs&logoColor=white"></a>
-  <a href="https://t.me/unixnu"><img alt="Telegram" src="https://img.shields.io/badge/Telegram-@unixnu-26A5E4?logo=telegram&logoColor=white"></a>
-  <a href="https://qun.qq.com/universal-share/share?ac=1&authKey=Pubz23DOCY76nxjlGuSms2zesk4jRvas4zrXJRYk7omf7CprXbGQigLEI%2BCoYR8D&busi_data=eyJncm91cENvZGUiOiIxMTI2MTE2NzU5IiwidG9rZW4iOiJwSHJsUDN1UnN2Vi8yM210TjJRbzBIcERmcUpyOS9lb0hHVVpadWdvVFdScVpSYUFLT1YzTk5TWC9mN2xWYmtIIiwidWluIjoiMzE1MTEwOTc0MSJ9&data=_cJgr-jX9yJ2-GXwVjRN5FOhDyk5B-HAfIk5LSunbW_XkkmKqNXbpH33wzP93J0p9DI1fbjgBUrUfTVhwDcxjg&svctype=4&tempid=h5_group_info"><img alt="QQ Group" src="https://img.shields.io/badge/QQ%20Group-join-12B7F5?logo=qq&logoColor=white"></a>
-  <a href="https://x.com/unixnu"><img alt="X" src="https://img.shields.io/badge/X-@unixnu-000000?logo=x&logoColor=white"></a>
-</p>
+Device support for Xiaomi Pad 6S Pro 12.4, codename `sheng`, with Qualcomm
+SM8550. The device profile selects
+[UniXNU-sm8550-common](https://github.com/UniXNU/UniXNU-sm8550-common) and the
+`ipados-17.7.11-21H461` OS profile in UniXNU.
 
-# UniXNU-sheng
+## Structure
 
-Device repository for the Xiaomi Pad 6S Pro (sheng, SM8550). It holds the board file, kernel defconfig, device scripts, drivers and package.
+| Path | Contents |
+| --- | --- |
+| `board.toml` | Device configuration and component selection |
+| `feeds.toml` | Pinned SoC source |
+| `configs/sheng_defconfig` | Device kernel settings |
+| `dts/sheng.dts` | Memory, CPU selection, and peripheral configuration |
+| `patches/xnu/series` | Ordered common and SoC patches |
+| `proprietary-files.txt` | Firmware input paths |
+| `package/` | Device policy, display, input, and diagnostics |
+| `scripts/` | Device build and inspection tools |
 
-🎉 **News:** The native Metal GPU driver is fully working on sheng. The render server composites the system UI through the Adreno 740, and listed processes get their own Metal devices.
+`Adreno740` and `AdrenoMetal` provide the GPU implementation. Shared GMU,
+command database, and GPU SMMU operations are in the SoC repository's
+`Sm8550Platform` kit. sheng supplies GPU votes, signed ZAP firmware,
+reserved memory, and display integration. GPU initialization uses the
+staged platform build. The hardware DTS contains GPU resources; the ADT
+exports nodes with `unixnu,adt-name`.
 
-- [Documentation](https://unixnu.com)
-- [Device page](https://unixnu.com/devices/sheng)
-- [Porting guide](https://unixnu.com/porting/)
-- [Build](https://unixnu.com/building)
-
-Firmware: [uefi-sheng](https://github.com/UniXNU/uefi-sheng).
-
-Build with the `unixnu` driver of [UniXNU](https://github.com/UniXNU/UniXNU). Clone both repositories with `--recurse-submodules`; `unixnu fetch` also updates the module submodules.
+`ShengUfs` includes the device's storage and persistence policy.
+`ShengHidInput` and `ShengNovatekTouch` provide the input integration.
+`QcomGeniSpi` provides the shared SPI controller interface.
 
 ## Build
 
-Run these commands from the UniXNU checkout. The device repository is `../UniXNU-sheng`.
+Run these commands from the UniXNU checkout:
 
 ```sh
-./unixnu defconfig sheng_defconfig -D ../UniXNU-sheng
-./unixnu fetch
-./unixnu ipsw fetch
-./unixnu build kernel
-./unixnu build package
-./unixnu build firmware --uefi ../uefi-sheng
-./unixnu build payload --unique-chip-id <hex> --trust-cache <bundle> --data-ramdisk <seed>
-./unixnu bootimg --uefi ../uefi-sheng --dtb <sheng.dtb>
+./unixnu defconfig sheng_defconfig --device ../UniXNU-sheng
+./unixnu fetch --device ../UniXNU-sheng
+./unixnu status --device ../UniXNU-sheng --json
+./unixnu build kernel --device ../UniXNU-sheng --kernelcache /path/to/kernelcache
+./unixnu build firmware --device ../UniXNU-sheng --uefi ../uefi-sheng
+./unixnu build payload --device ../UniXNU-sheng --unique-chip-id "$UNIXNU_UNIQUE_CHIP_ID" \
+  --data-ramdisk /path/to/data.dbr --trust-cache /path/to/trustcache
+./unixnu bootimg --device ../UniXNU-sheng --uefi ../uefi-sheng --dtb /path/to/firmware.dtb
 ```
 
-The [device page](https://unixnu.com/devices/sheng#build) adds the userdata image and the Data seed growth commands. The platform seed, trust cache and Data seed are device inputs. Use `--owner-trust-cache <bundle>` for an owner-signed bundle.
+Outputs are under `out/sheng/ipados-17.7.11-21H461/sheng/`.
+The payload step compiles the hardware DTS and writes `kernel.macho.adt`.
+The boot image takes the firmware's FDT with `--dtb`.
 
-Without a Mac, run the kernel and userdata steps in the [macOS runner workflow](https://github.com/UniXNU/UniXNU/actions/workflows/macos.yml). The [build guide](https://unixnu.com/building#macos-runner) lists its inputs.
+Build inputs include the selected kernelcache, verified root policies,
+vendor firmware, generated GPU register and power headers, UEFI source,
+and the Data and trust-cache inputs used by the payload. Keep binary
+inputs in local caches. `scripts/data/adreno-inputs.json` in UniXNU records
+GPU firmware pins.
 
-## Device support
+## Documentation
 
-The original iPadOS userland runs from the IPSW; the home screen and Settings are reached. This table records user-facing device support.
+The documentation site is maintained in UniXNU:
 
-| Feature | State | Notes |
-| --- | --- | --- |
-| Touch | ✅ | Novatek NT36532E |
-| Display | ✅ | |
-| UFS | ✅ | Native UFS root |
-| Wi-Fi | ❌ | |
-| Bluetooth | ❌ | |
-| Camera | ❌ | |
-| GPU | ✅ | Native Metal, GPU compositing, per-process devices and exported pipeline caches |
-| USB | ❌ | |
-| Audio | ❌ | |
-| Sensors | ❌ | |
-| Battery driver | ❌ | |
-| MiPPS | ❌ | |
-| Suspend and resume | ❌ | |
+- [sheng device guide](https://unixnu.com/devices/sheng)
+- [Building](https://unixnu.com/building)
+- [Device repository specification](https://unixnu.com/porting/device-repository)
+- [Device-tree specification](https://unixnu.com/porting/device-tree)
+- [Component catalog](https://unixnu.com/reference/components)
+- [Migration](https://unixnu.com/porting/migration)
 
-✅ available, ⚠️ partial, ❌ not available. The GPU details are in the [Adreno 740 driver](https://unixnu.com/drivers/native-adreno) page.
-
-## License
-
-BSD-2-Clause-Patent. See [LICENSE](LICENSE).
+Report build results and device boot, storage, display, input, and GPU
+observations separately, with source revisions and commands.
