@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Speaker playback on the sheng board (boot argument sheng-audio=1, or 2 to play a test tone first; needs sheng-adsp=2). One kernel thread brings the path up in order:
+// Speaker playback on the sheng board (boot argument sheng-audio, bits: 1 serve, 2 play a test tone first, 4 bring up the microphone
+// path; needs sheng-adsp=2). One kernel thread brings the path up in order:
 //   1  pass-through stream mapping in the apps SMMU for the DSP's audio streams, and the DSP's period buffers
 //   2  pins: secondary MI2S to the LPASS function, the two amplifier I2C buses, the shared amplifier reset (low 2 ms, then high)
 //   3  QUP clocks and the two GENI I2C engines (QUP1 SE5, QUP2 SE0) at 400 kHz from the 19.2 MHz DFS level
@@ -50,7 +51,7 @@ extern "C" int sheng_adsp_send(ShengAdspChannel *, const void *, uint32_t) __att
 extern "C" {volatile int32_t native_audio_stats[16];}
 // Per amplifier: device id, revision, EINT1, EINT2 while playing.
 extern "C" {volatile uint32_t native_audio_amps[CS35_AMPS][4];}
-// The microphone path (sheng-mic=1, after the speaker graphs): [0] stage (positive progress, negative the step that failed), [1] last PRM
+// The microphone path (sheng-audio bit 2, after the speaker graphs): [0] stage (positive progress, negative the step that failed), [1] last PRM
 // status, [2] codec rail (bit 0 found, bit 1 voted), [3] TX SoundWire master version, [4] its link status, [5] device status register
 // (2 bits per device number), [6] device 1 id bytes 5..4 | 3..0 low word, [7] high word, [8] the codec's efuse register, [9] its chip
 // id registers, [10] TX macro MCLK control, [11] VA macro MCLK control, [12] master interrupt status, [13] component parameters,
@@ -82,10 +83,10 @@ const int16_t kSine[64] = {0, 3212, 6393, 9512, 12539, 15446, 18204, 20787, 2317
     -28898, -27245, -25329, -23170, -20787, -18204, -15446, -12539, -9512, -6393, -3212};
 
 struct Region {OSSharedPtr<IOMemoryMap> keep; uintptr_t va = 0;};
-bool mapRegion(uint64_t phys, uint64_t length, Region &region) {
+bool mapRegion(uint64_t phys, uint64_t length, Region &region, IOOptionBits cache = kIOMapInhibitCache) {
     IODeviceMemory *memory = IODeviceMemory::withRange(phys, length);
     if (!memory) return false;
-    region.keep = OSSharedPtr<IOMemoryMap>(memory->map(kIOMapAnywhere | kIOMapInhibitCache), OSNoRetain);
+    region.keep = OSSharedPtr<IOMemoryMap>(memory->map(kIOMapAnywhere | cache), OSNoRetain);
     memory->release();
     region.va = region.keep ? static_cast<uintptr_t>(region.keep->getVirtualAddress()) : 0;
     return region.va != 0;
@@ -110,7 +111,8 @@ void smmuWr(void *ctx, unsigned o, uint32_t v) {wr32(reinterpret_cast<uintptr_t>
 int32_t smmuErrorCode(const char *e) {
     static const char *const names[] = {"SMMU AArch64 stage 1 unsupported", "DMA exceeds SMMU address width", "unsupported SMMU geometry",
         "conflicting stream mapping", "reserved context bank is not a bypass bank", "no free stream-match group",
-        "SMMU bypass bank readback", "SMMU stream context readback", "SMMU stream mapping readback"};
+        "SMMU bypass bank readback", "SMMU stream context readback", "SMMU stream mapping readback", "no free context bank", "bad window",
+        "SMMU window bank readback", "SMMU window stream readback"};
     for (unsigned i = 0; i < sizeof names / sizeof *names; ++i) if (strcmp(e, names[i]) == 0) return static_cast<int32_t>(i) + 1;
     return 99;
 }
@@ -126,13 +128,15 @@ struct Audio {
     OSSharedPtr<IOBufferMemoryDescriptor> buffer;
     uint8_t *bufferVa;
     uint64_t bufferPa;
+    Region low;
+    uint64_t dspAddr;   // the buffer as the DSP takes it
     ShengAdspChannel *channel;
     IOLock *lock;
     IOSimpleLock *ringLock;
     struct {uint32_t length; uint8_t data[kMessage];} ring[kRing];
     uint32_t ringHead, ringCount, token, handle;
     volatile uint32_t up;
-    uint32_t toneMs, atten;
+    uint32_t toneMs, atten, mode;
     // The shared memory of the service (ShengAudioAbi.h).
     OSSharedPtr<IOBufferMemoryDescriptor> control, outRing, inRing;
     ShengAudioControl *ctl;
@@ -247,6 +251,8 @@ bool runProgram(unsigned amp, const Cs35Step *steps, unsigned count, Cs35Run &ru
     }
 }
 
+// The DSP's audio streams in pass-through (the bypass bank the storage and touch drivers share). Programming a translating context for
+// them reset the board every time (i496 to i502, whatever bank or table): the hypervisor does not let the kernel translate them.
 bool setupSmmu() {
     if (!mapRegion(kSmmu, TB_APPS_SMMU_SIZE, gAudio.smmu)) return false;
     struct smmu_io io = {reinterpret_cast<void *>(gAudio.smmu.va), smmuRd, smmuWr};
@@ -261,17 +267,21 @@ bool setupSmmu() {
     return (result & 1) != 0;
 }
 
+// The DSP takes 32-bit buffer addresses (its client hands it 32-bit IOVAs; i491 to i495: a buffer above 4 GiB was refused with status 1),
+// and every page the kernel owns lies above 4 GiB. The buffer is 64 KiB of low DRAM the UEFI memory map leaves conventional and nothing
+// uses after boot (the gap 0xCCF80000 to 0xD8000000; sheng-audio-pa moves it), mapped write-combined (normal non-cacheable: memset and
+// memcpy need normal memory). The DSP takes it as address | stream index << 32: index 1 of the audio streams (0x1001 & 0xf), as its
+// client sends it; i491 to i495 sent a 36-bit address, whose upper word the DSP read as stream 8 and refused with status 1.
+constexpr uint64_t kLowBuffer = 0xd0000000ULL;
 bool setupBuffer() {
-    gAudio.buffer = OSSharedPtr<IOBufferMemoryDescriptor>(IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
-        static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous), kBufferBytes, 0xfffff000ULL), OSNoRetain);   // below 4 GiB: the DSP takes 32-bit buffer addresses (its client hands it 32-bit IOVAs)
-    if (!gAudio.buffer || gAudio.buffer->prepare() != kIOReturnSuccess) return false;
-    addr64_t length = 0;
-    gAudio.bufferPa = gAudio.buffer->getPhysicalSegment(0, &length);
-    gAudio.bufferVa = static_cast<uint8_t *>(gAudio.buffer->getBytesNoCopy());
+    uint64_t pa = kLowBuffer;
+    PE_parse_boot_argn("sheng-audio-pa", &pa, sizeof pa);
+    if ((pa & 0xfff) || pa + kBufferBytes > 0x100000000ULL || !mapRegion(pa, kBufferBytes, gAudio.low, kIOMapWriteCombineCache)) return false;
+    gAudio.bufferPa = pa;
+    gAudio.dspAddr = pa | 1ull << 32;
+    gAudio.bufferVa = reinterpret_cast<uint8_t *>(gAudio.low.va);
     native_audio_pa = gAudio.bufferPa;
-    if (!gAudio.bufferVa || !gAudio.bufferPa || length < kBufferBytes) return false;
     memset(gAudio.bufferVa, 0, kBufferBytes);
-    cacheClean(gAudio.bufferVa, kBufferBytes);
     return true;
 }
 
@@ -447,7 +457,7 @@ bool submit(uint64_t n) {
     const uint32_t at = (uint32_t)((n * kPeriodFrames) % kRingFrames);
     memcpy(dst, gAudio.out + at * kChannels, kPeriodBytes);   // kRingFrames is a multiple of kPeriodFrames' alignment step
     cacheClean(dst, kPeriodBytes);
-    if (!send(b, ar_write(b, sizeof b, kPort, (uint32_t)n, gAudio.bufferPa + slot * kPeriodBytes, gAudio.handle, kPeriodBytes))) return false;
+    if (!send(b, ar_write(b, sizeof b, kPort, (uint32_t)n, gAudio.dspAddr + slot * kPeriodBytes, gAudio.handle, kPeriodBytes))) return false;
     native_audio_stats[4] = native_audio_stats[4] + 1;
     gAudio.inFlight++;
     return true;
@@ -544,11 +554,11 @@ bool openGraphs() {
     if (!command(ar_open_playback_stream(b, sizeof b, kPort, ++gAudio.token), b, AR_OP_GRAPH_OPEN)) {fail(56); return false;}
     if (!command(ar_config_playback_stream(b, sizeof b, kPort, ++gAudio.token, &f), b, AR_OP_SET_CFG)) {fail(57); return false;}
     if (!command(ar_config_playback_shmem(b, sizeof b, kPort, ++gAudio.token, &f), b, AR_OP_SET_CFG)) {fail(58); return false;}
-    if (!command(ar_map(b, sizeof b, kPort, ++gAudio.token, gAudio.bufferPa, kBufferBytes), b, AR_OP_MEM_MAP)) {fail(53); return false;}
+    if (!command(ar_map(b, sizeof b, kPort, ++gAudio.token, gAudio.dspAddr, kBufferBytes), b, AR_OP_MEM_MAP)) {fail(53); return false;}
     return true;
 }
 
-// ---- the microphones (sheng-mic=1) ----
+// ---- the microphones (sheng-audio bit 2) ----
 // The codec (WCD938x) sits on the TX SoundWire master of the low power audio subsystem. Every LPASS register below (pins, VA and TX
 // macros, SoundWire) is unclocked until the DSP's PRM grants the macro and digital codec votes: they are touched only after those succeed.
 constexpr uint64_t kLpassTlmm = 0x06e80000ULL, kLpassSlew = 0x07250000ULL + 0xa000, kTxMacro = 0x06ae0000ULL, kVaMacro = 0x06d44000ULL,
@@ -731,10 +741,7 @@ void audioThread(void *, wait_result_t) {
     if (!openGraphs()) return;
     stage(56);
     if (gAudio.toneMs) playTone();
-    {
-        unsigned mic = 0;
-        if (PE_parse_boot_argn("sheng-mic", &mic, sizeof mic) && mic) micBringUp();
-    }
+    if (gAudio.mode & 4) micBringUp();
     if (!publishService()) {fail(58); return;}
     __atomic_store_n(&gAudio.ctl->state, gAudio.ctl->state | ShengAudioOutputReady, __ATOMIC_RELEASE);
     __atomic_store_n(&gAudio.serving, 1u, __ATOMIC_RELEASE);
@@ -767,8 +774,9 @@ extern "C" int sheng_audio_request(uint32_t selector) {
 
 extern "C" void sheng_audio_probe(void) {
     unsigned mode = 0;
-    if (!PE_parse_boot_argn("sheng-audio", &mode, sizeof mode) || (mode != 1 && mode != 2) || native_audio_stats[0]) return;
-    gAudio.toneMs = mode == 2 ? 1500 : 0;
+    if (!PE_parse_boot_argn("sheng-audio", &mode, sizeof mode) || !mode || mode > 7 || native_audio_stats[0]) return;
+    gAudio.mode = mode;
+    gAudio.toneMs = (mode & 2) ? 1500 : 0;
     gAudio.atten = 30;
     PE_parse_boot_argn("sheng-audio-tone-ms", &gAudio.toneMs, sizeof gAudio.toneMs);
     PE_parse_boot_argn("sheng-audio-atten", &gAudio.atten, sizeof gAudio.atten);
