@@ -1020,10 +1020,16 @@ void wifiStack(volatile uint32_t *m, uint64_t barBytes) {
     const int r = nw_wifi_start(&plat, &board);
     st[0] = r ? (uint32_t)(0x80000000u | (uint32_t)(-r & 0xffff)) : 21;
     bool netDone = false;
+    // The endpoint's interrupts are not delivered, so this loop is the only thing that moves frames: a fixed 1 ms sleep per round made every
+    // receive batch, transmit and TCP acknowledgement wait for the next round. While frames move it runs again at once, for 2 ms after the
+    // last frame it polls every 50 us (a TCP sender answers within that), and only then it sleeps.
+    unsigned quiet = 0;
     for (uint64_t n = 0;; ++n) {
-        nw_wifi_step();
+        const int busy = nw_wifi_step();
         if (!netDone && nw_wifi_stats.stage >= 4) {netDone = true; netStart();}
-        IOSleep(1);
+        if (busy) quiet = 0;
+        else if (quiet < 40) {++quiet; IODelay(50);}
+        else IOSleep(1);
         if ((n & 63) == 0) st[1] = nw_wifi_stats.stage | nw_wifi_stats.scans << 8 | nw_wifi_stats.bss_seen << 16;
     }
 }
