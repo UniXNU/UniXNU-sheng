@@ -13,7 +13,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'build/turnip-ios-compiler-peer'
-sys.path.insert(0, str(ROOT / 'kits/NativePrelink'))
+sys.path.insert(0, str(ROOT / 'kits/XnuPrelink'))
 from native_prelink import macho
 
 
@@ -50,7 +50,7 @@ for name, digest in build['sources'].items():
     require(sha(ROOT / name) == digest, 'Exact cross-built source: ' + name)
 require(sha(ROOT / 'build/turnip-smoke/NativeTurnipShaders.h') == build['shader_fixture_sha256'],
         'Exact authored shader fixture')
-require('drivers/NativeAdreno/NativeAdrenoVmAlias.h' in build['sources'], 'Complete current VM header dependency required')
+require('drivers/Adreno740/NativeAdrenoVmAlias.h' in build['sources'], 'Complete current VM header dependency required')
 for name, info in build['outputs'].items():
     require(sha(OUT / name) == info['sha256'] and own_signature(OUT / name) == info['cdhash'], 'Exact own signed cross-build')
 driver = ROOT / 'build/mesa-tu-ios/src/freedreno/vulkan/libvulkan_freedreno.dylib'

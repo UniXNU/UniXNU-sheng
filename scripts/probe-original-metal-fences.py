@@ -16,7 +16,7 @@ host=ROOT/'build/host-metal/host-metal-originals';qualification=json.loads((host
 if sha(host)!=qualification['process_sha256'] or sha(ROOT/'kits/sheng/HostMetalDiagnostic.mm')!=qualification['source_sha256']:raise SystemExit('Exact actual host diagnostic required')
 for name,digest in qualification['backend_sources'].items():
  if sha(ROOT/name)!=digest:raise SystemExit('Exact actual host backend required: '+name)
-base=ROOT/'build/native-prelink/native-owner-metal-fences-candidate';plan=json.loads(base.with_suffix('.json').read_text())
+base=ROOT/'build/xnu-prelink/native-owner-metal-fences-candidate';plan=json.loads(base.with_suffix('.json').read_text())
 if sha(base.with_suffix('.macho'))!=plan['candidate_sha256']:raise SystemExit('Exact immutable candidate required')
 cmd=['python3',str(ROOT/'scripts/probe-darwinboot-xnu.py'),'--kernel',str(base.with_suffix('.macho')),'--prelink-report',str(base.with_suffix('.json')),'--output',str(fixture),
  '--virtio-udif-image','.cache/firmware/target-volumes/044-76040-038.dmg','--virtio-extra-block-image','.cache/firmware/target-volumes/044-76034-038.dmg',

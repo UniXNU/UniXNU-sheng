@@ -15,7 +15,7 @@ print(run(['python3',ROOT/'scripts/build-arm-driver.py','NativeVirtioConsole'],t
 print(run(['python3',ROOT/'scripts/build-arm-driver.py','NativeOfflineGPU'],text=True),end='')
 llvm=Path(run(['brew','--prefix','llvm'],text=True).strip())/'bin';obj=OUT/'NativeOfflineGPU.o';late=OUT/'NativeOfflineGPU.late.o'
 run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_NativeOfflineGPU.cpp',obj,late])
-sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
+sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho
 def text_code(path):
     b=path.read_bytes();m=macho(b);s=next(s for g in m['segments'] for s in g['sections'] if s['name']=='__text')
@@ -39,11 +39,11 @@ if options.accelerator_abi:
     print(run(['python3',ROOT/'scripts/build-native-accelerator-abi.py'],text=True),end='')
     run(['xcrun','libtool','-static','-o',archive,late,OUT/'OfflineGPUBrokerProbe.o',ROOT/'build/native-offline-accelerator/libNativeOfflineAccelerator.late.a',*([ROOT/'build/native-original-provider/libNativeIOGPUProviderProbe.late.a'] if options.provider_probe else [])])
 else:run(['xcrun','ar','rcs',archive,late,OUT/'OfflineGPUBrokerProbe.o'])
-sysroot=ROOT/'drivers/NativeMetal';sources=[source,*(sysroot/n for n in ('NativeOfflineGPU.cpp','OfflineMetalWire.h','OfflineMetalQueueWire.h','OfflineMetalTextureWire.h','OfflineMetalDepthStencilWire.h','OfflineMetalFenceWire.h','OfflineMetalCommandWire.h','OfflineMetalEventWire.h','OfflineMetalSharedEventWire.h','OfflineMetalSessionWire.h')),
-    ROOT/'drivers/NativeVirtioConsole/NativeVirtioConsole.cpp',ROOT/'drivers/NativeVirtioConsole/NativeVirtioConsoleTransport.h']
-if options.accelerator_abi:sources.extend([ROOT/'drivers/NativeMetal/NativeOfflineAccelerator.cpp',ROOT/'drivers/NativeMetal/OriginalAcceleratorABI.h',ROOT/'kits/sheng/AcceleratorABIProbe.cpp',ROOT/'kits/sheng/OriginalGPUClientABIProbe.cpp'])
-if options.provider_probe:sources.extend([ROOT/'kits/sheng/OriginalGPUProviderProbe.cpp',ROOT/'drivers/NativeMetal/OriginalGPUProviderABI.h',ROOT/'drivers/NativeMetal/NativeIOGPUProviderProbe.cpp'])
+sysroot=ROOT/'drivers/AdrenoMetal';sources=[source,*(sysroot/n for n in ('NativeOfflineGPU.cpp','OfflineMetalWire.h','OfflineMetalQueueWire.h','OfflineMetalTextureWire.h','OfflineMetalDepthStencilWire.h','OfflineMetalFenceWire.h','OfflineMetalCommandWire.h','OfflineMetalEventWire.h','OfflineMetalSharedEventWire.h','OfflineMetalSessionWire.h')),
+    ROOT/'drivers/VirtioMmioConsole/NativeVirtioConsole.cpp',ROOT/'drivers/VirtioMmioConsole/NativeVirtioConsoleTransport.h']
+if options.accelerator_abi:sources.extend([ROOT/'drivers/AdrenoMetal/NativeOfflineAccelerator.cpp',ROOT/'drivers/AdrenoMetal/OriginalAcceleratorABI.h',ROOT/'kits/sheng/AcceleratorABIProbe.cpp',ROOT/'kits/sheng/OriginalGPUClientABIProbe.cpp'])
+if options.provider_probe:sources.extend([ROOT/'kits/sheng/OriginalGPUProviderProbe.cpp',ROOT/'drivers/AdrenoMetal/OriginalGPUProviderABI.h',ROOT/'drivers/AdrenoMetal/NativeIOGPUProviderProbe.cpp'])
 (OUT/'build-report.json').write_text(json.dumps(dict(source_sha256={str(p.relative_to(ROOT)):sha(p) for p in sources},
-    archive_sha256=sha(archive),console_archive_sha256=sha(ROOT/'build/native-virtio-console/libNativeVirtioConsole.a'),
+    archive_sha256=sha(archive),console_archive_sha256=sha(ROOT/'build/virtio-mmio-console/libVirtioMmioConsole.a'),
     compiled_object_sha256=sha(obj),late_object_sha256=sha(late),accelerator_abi_probe=options.accelerator_abi,provider_probe=options.provider_probe,normal_system_device_discovery=False,runtime_qualified=False),indent=2)+'\n')
 print('PASS: actual ARM64/iOS17 private GPU broker and real exclusive byte-transport interface build with -Werror')

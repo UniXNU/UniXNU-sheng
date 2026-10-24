@@ -2,7 +2,7 @@
 """Qualify original Sandbox exact, parent and unrelated signed client policies."""
 import argparse,hashlib,json,plistlib,re,struct,subprocess,sys
 from pathlib import Path
-ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
+ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho,backed_offset
 def require(value,why):
  if not value:raise SystemExit(why)
@@ -14,13 +14,13 @@ def modules(raw):
 def text_code(path):
  raw=path.read_bytes();section=next(s for g in macho(raw)['segments'] for s in g['sections'] if s['name']=='__text')
  return raw[section['fileoff']:section['fileoff']+section['size']]
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--candidate-base',type=Path,default=ROOT/'build/native-prelink/native-owner-original-provider-probe-candidate');args=p.parse_args()
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--candidate-base',type=Path,default=ROOT/'build/xnu-prelink/native-owner-original-provider-probe-candidate');args=p.parse_args()
 base=args.candidate_base.resolve();plan=load(base.with_suffix('.json'));raw=base.with_suffix('.macho').read_bytes();segments=macho(raw)['segments']
 require(sha(base.with_suffix('.macho'))==plan['candidate_sha256'] and sha(ROOT/'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf')==plan['native_sha256'],'Exact unchanged candidate and native kernel')
 broker_build=load(ROOT/'build/native-offline-gpu/build-report.json')
 for rel,digest in broker_build['source_sha256'].items():require(sha(ROOT/rel)==digest,'Exact compiled broker source '+rel)
 require(sha(ROOT/'build/native-offline-gpu/libNativeOfflineGPU.late.a')==broker_build['archive_sha256'],'Exact real broker archive')
-old=load(ROOT/'build/native-prelink/native-owner-offline-gpu-broker-cpu-candidate.json')
+old=load(ROOT/'build/xnu-prelink/native-owner-offline-gpu-broker-cpu-candidate.json')
 require(plan['components']==old['components'] and plan['original_executable_sha256']==old['original_executable_sha256'] and plan['early_security_initializers']==old['early_security_initializers'],'All original components/security initializers retained')
 for module,digest in plan['original_executable_sha256'].items():
  extent=next(e for e in plan['extents'] if e['module']==module and e['segment']=='__TEXT_EXEC');at=backed_offset(segments,extent['va'],extent['size'],len(raw))

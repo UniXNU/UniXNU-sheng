@@ -43,7 +43,7 @@ def main():
             require(sha(ROOT/name) == digest, 'Changed '+field+': '+name)
     require(sha(ROOT/r['candidate']) == r['candidate_sha256'], 'Candidate changed')
     require(sha(ROOT/r['image']) == r['image_sha256'], 'Boot image changed')
-    require(subprocess.check_output(['git','-C',str(ROOT/'drivers/NativeUfs'),'rev-parse','HEAD'],text=True).strip()
+    require(subprocess.check_output(['git','-C',str(ROOT/'drivers/ShengUfs'),'rev-parse','HEAD'],text=True).strip()
             == r['native_ufs_commit'], 'UFS revision changed')
     package = load(BASE/'package-audit/report.json')
     for name in ('candidate_sha256','image_sha256','data_seed_sha256','embedded_kernel_sha256'):
@@ -97,7 +97,7 @@ def main():
     require(symbols['local_symbols_uuid_matches'] and symbols['actual_exception'] == 'EXC_BREAKPOINT' and
             symbols['static_original_assertion']['text'] == 'failed to find the main CADisplay' and
             not symbols['original_files_modified'], 'Exception attribution failed')
-    old = load(ROOT/'build/native-prelink/native-owner-stage5-candidate.json')
+    old = load(ROOT/'build/xnu-prelink/native-owner-stage5-candidate.json')
     new = load(Path(str(ROOT/r['candidate']).replace('.macho','.json')))
     require(old['components'] == new['components'] and old['original_executable_sha256'] == new['original_executable_sha256'], 'Original executable components changed')
     pixels = load(BASE/'live-pixels.json')

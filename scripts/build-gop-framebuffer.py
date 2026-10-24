@@ -8,15 +8,15 @@ import subprocess
 import sys
 
 ROOT=Path(__file__).resolve().parents[1]
-OUT=ROOT/'build/native-mobile-display'
-sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
+OUT=ROOT/'build/gop-framebuffer'
+sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho,backed_offset,exports
 def run(cmd,**kw):return subprocess.check_output([str(x) for x in cmd],timeout=90,**kw)
 def require(v,why):
     if not v:raise SystemExit(why)
 def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 print(run(['python3',ROOT/'scripts/build-arm-driver.py','NativeMobileDisplay'],text=True),end='')
-candidate=ROOT/'build/native-prelink/native-owner-mobile-graphics-candidate.macho'
+candidate=ROOT/'build/xnu-prelink/native-owner-mobile-graphics-candidate.macho'
 require(sha(candidate)=='aded28d3c61dafaf7b8a7c96b14427a798e9e95470ae6f287bcd038c07626798','Exact qualified original parent candidate')
 b=candidate.read_bytes();m=macho(b);names={n:v for v,ns in exports(b,m).items() for n in ns}
 def read(v,n):
@@ -91,11 +91,11 @@ while i<len(args):
 cmd+=['-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-unnecessary-virtual-specifier',
       '-Wno-c99-designator','-Wno-reorder-init-list','-Wno-deprecated-enum-enum-conversion','-I',str(ROOT/'.cache/xnu-work/osfmk')]
 run(cmd,cwd=r['directory'])
-archive=OUT/'libNativeMobileDisplay.late.a';archive.unlink(missing_ok=True)
+archive=OUT/'libGopFramebuffer.late.a';archive.unlink(missing_ok=True)
 run(['xcrun','ar','rcs',archive,late,OUT/'original-bindings.o',OUT/'MobileDisplayProviderProbe.o'])
-sources=[ROOT/'drivers/NativeMobileDisplay/NativeMobileDisplay.cpp',ROOT/'drivers/NativeMobileDisplay/OriginalMobileFramebufferABI.h',source]
+sources=[ROOT/'drivers/GopFramebuffer/NativeMobileDisplay.cpp',ROOT/'drivers/GopFramebuffer/OriginalMobileFramebufferABI.h',source]
 (OUT/'build-report.json').write_text(json.dumps(dict(
-    kit_revision=run(['git','-C',ROOT/'drivers/NativeMobileDisplay','rev-parse','HEAD'],text=True).strip(),
+    kit_revision=run(['git','-C',ROOT/'drivers/GopFramebuffer','rev-parse','HEAD'],text=True).strip(),
     source_sha256={str(p.relative_to(ROOT)):sha(p) for p in sources},
     original_parent_candidate_sha256=sha(candidate),compiled_object_sha256=sha(obj),
     late_object_sha256=sha(late),archive_sha256=sha(archive),

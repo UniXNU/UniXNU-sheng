@@ -2,7 +2,7 @@
 """Qualify real native Mach shared-event capabilities and original handle lifetime."""
 import argparse,hashlib,json,plistlib,re,struct,subprocess,sys
 from pathlib import Path
-ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
+ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho,backed_offset
 def require(value,why):
  if not value:raise SystemExit(why)
@@ -19,13 +19,13 @@ kind='offline-metal-shared-cross-process' if a.cross_process else 'offline-metal
 folder=ROOT/'build'/kind;fixture=ROOT/('build/darwinboot-owner-hvf-'+kind+('-api-validation' if a.api_validation else ''))
 host_path=folder/('host-'+tag+'-report.json');d=load(fixture/'gdb-stop.json');host=load(host_path);provenance=load(folder/('host-'+tag+'-provenance.json'))
 build=load(folder/'build-report.json');data=load(folder/'data-report.json');manifest=load(folder/'test-inputs.json')
-base=ROOT/'build/native-prelink/native-owner-metal-shared-events-candidate';plan=load(base.with_suffix('.json'));raw=base.with_suffix('.macho').read_bytes();segments=macho(raw)['segments']
+base=ROOT/'build/xnu-prelink/native-owner-metal-shared-events-candidate';plan=load(base.with_suffix('.json'));raw=base.with_suffix('.macho').read_bytes();segments=macho(raw)['segments']
 require(sha(base.with_suffix('.macho'))==plan['candidate_sha256']==d['kernel_sha256'],'Actual immutable candidate identity')
 require(sha(ROOT/'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf')==plan['native_sha256'],'Exact current native kernel')
 broker_build=load(ROOT/'build/native-offline-gpu/build-report.json')
 for rel,digest in broker_build['source_sha256'].items():require(sha(ROOT/rel)==digest,'Exact compiled native broker source: '+rel)
 require(sha(ROOT/'build/native-offline-gpu/libNativeOfflineGPU.late.a')==broker_build['archive_sha256'],'Exact compiled private broker archive')
-old=load(ROOT/'build/native-prelink/native-owner-offline-gpu-broker-cpu-candidate.json')
+old=load(ROOT/'build/xnu-prelink/native-owner-offline-gpu-broker-cpu-candidate.json')
 require(plan['components']==old['components'] and plan['original_executable_sha256']==old['original_executable_sha256'] and plan['early_security_initializers']==old['early_security_initializers'],'All 29 original executable hashes and security initialization preserved')
 for module,digest in plan['original_executable_sha256'].items():
  e=next(e for e in plan['extents'] if e['module']==module and e['segment']=='__TEXT_EXEC');at=backed_offset(segments,e['va'],e['size'],len(raw))

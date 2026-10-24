@@ -1,11 +1,7 @@
-# Proprietary files of the Xiaomi Pad 6S Pro (sheng). They stay out of Git: scripts/extract-files.py copies them
-# into .cache/firmware/ (see "unixnu tree"), checks every file against its SHA-256 and refuses any other content.
-#
-# path|sha256       path relative to the source (a dump directory, a mounted partition, an ssh path or the fetch base)
-# -path|sha256      optional file: a missing one is reported, not an error
-# @fetch BASE       public mirror used when no source is given; BASE + path is the file URL
-#
+# Firmware paths and SHA-256 digests for scripts/extract-files.py.
+# Files are written under .cache/firmware/.
+# Format: path|sha256. Prefix a path with - for an optional file.
 @fetch https://raw.githubusercontent.com/ianchb/sheng-firmware/2c1e2729a085c7f0470c855d236e49455c4601f0/
 
-# Touch: Novatek NT36532 host-download firmware, N81A panel, CSOT
+# Touch
 novatek/novatek_nt36532_n81a_fw_csot.bin|750508bb4d75472d35ce5852ec8470d66afa6bf4a4274c136b3759034260ef59

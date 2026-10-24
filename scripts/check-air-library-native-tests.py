@@ -6,7 +6,7 @@ from pathlib import Path
 import struct
 import sys
 ROOT=Path(__file__).resolve().parents[1];OUT=ROOT/'build/air-library-native-tests'
-sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
+sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho
 def require(v,why):
  if not v:raise SystemExit(why)
@@ -20,8 +20,8 @@ raw=(OUT/'air-native').read_bytes();m=macho(raw)
 require(m['kind']==2 and [struct.unpack_from('<II',raw,p+8) for cmd,p,_ in m['commands'] if cmd==0x32]==[(2,0x110000)] and b['code_signature_page_bytes']==4096,'Actual ordinary ARM64/iOS17 image and own 4K CodeDirectory')
 bundle=(OUT/'offline-trust.bundle').read_bytes();offsets=struct.unpack_from('<3I',bundle,4);original=(ROOT/'build/original-static-system-trust/original-static-system.bundle').read_bytes();old=struct.unpack_from('<2I',original,4)
 require(struct.unpack_from('<I',bundle)[0]==3 and bundle[offsets[1]:offsets[2]]==original[old[0]:old[1]] and bundle[offsets[2]:]==original[old[1]:] and bundle[offsets[0]+24:offsets[0]+44].hex()==b['cdhash'],'Explicit own trust; both original trust modules unchanged')
-p=ROOT/'build/darwinboot-owner-hvf-air-library-controls/gdb-stop.json';d=json.loads(p.read_text());r={k:int(v,16) for k,v in d['system_registers'].items()};plan=json.loads((ROOT/'build/native-prelink/native-owner-air-outer-candidate.json').read_text())
-require(d['kernel_sha256']==plan['candidate_sha256']==sha(ROOT/'build/native-prelink/native-owner-air-outer-candidate.macho') and d['qemu_accelerator']=='hvf' and not d['bounded_timeout_interrupted'],'Actual bounded same-candidate native boot')
+p=ROOT/'build/darwinboot-owner-hvf-air-library-controls/gdb-stop.json';d=json.loads(p.read_text());r={k:int(v,16) for k,v in d['system_registers'].items()};plan=json.loads((ROOT/'build/xnu-prelink/native-owner-air-outer-candidate.json').read_text())
+require(d['kernel_sha256']==plan['candidate_sha256']==sha(ROOT/'build/xnu-prelink/native-owner-air-outer-candidate.macho') and d['qemu_accelerator']=='hvf' and not d['bounded_timeout_interrupted'],'Actual bounded same-candidate native boot')
 require(d['stop_symbol']=='_exit' and d['entry_regions']['1:0:8']['bytes']=='5a00000000000000' and int(d['x0'],16)==d['actual_initproc_pointer'],'Actual init exit(90), after live assertions and exact suite counts')
 require(d['native_4k_mmu_observed'] and (r['TCR_EL1']>>14)&3==0 and (r['TCR_EL1']>>30)&3==2 and r['SCTLR_EL1']&1 and r['TTBR0_EL1'] and r['TTBR1_EL1'] and set(d['commpage_user64_shifts'].values())=={12},'Actual active hardware granules and user ABI 4K')
 require(d['original_amfi_table_owner_observed'] and d['owner_root_binding_audit']['boot_root_accepted'] and d['owner_root_binding_audit']['_native_owner_root_apple_autherr']==80 and d['actual_signature_failures']==dict(_cs_validate_page_bad_hash=0,_cs_validate_page_no_hash=0) and not d['native_virtio_integrity']['_native_virtio_integrity_failures'],'Genuine original AMFI/root/signature/storage checks')

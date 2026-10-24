@@ -22,8 +22,8 @@ manifest=ROOT/'scripts/data/native-air-diagnostic-inputs.json';cases=json.loads(
 require(len(cases)==17 and sum(c['stage']=='fragment' for c in cases)==3 and build['manifest_sha256']==sha(manifest)==data['manifest_sha256'],'All 17 exact original vertex/fragment inputs')
 for case in cases:
     require(sha(ROOT/f"build/gpu-analysis/air/{case['library']}/module-{case['index']}.bc")==case['input_sha256'],'Original AIR unchanged')
-plan=json.loads((ROOT/'build/native-prelink/native-owner-air-outer-candidate.json').read_text())
-require(plan['candidate_sha256']==sha(ROOT/'build/native-prelink/native-owner-air-outer-candidate.macho'),'Exact native candidate identity')
+plan=json.loads((ROOT/'build/xnu-prelink/native-owner-air-outer-candidate.json').read_text())
+require(plan['candidate_sha256']==sha(ROOT/'build/xnu-prelink/native-owner-air-outer-candidate.macho'),'Exact native candidate identity')
 checkpoints={}
 for label in ('exit','bad-input','no-trust','default-off'):
     path=ROOT/('build/darwinboot-owner-hvf-air17-'+label)/'gdb-stop.json';d=json.loads(path.read_text())

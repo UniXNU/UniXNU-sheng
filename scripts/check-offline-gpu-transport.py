@@ -8,7 +8,7 @@ import struct
 import subprocess
 import sys
 ROOT=Path(__file__).resolve().parents[1];OUT=ROOT/'build/offline-gpu-transport'
-sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
+sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho,exports,backed_offset
 def require(v,why):
     if not v:raise SystemExit(why)
@@ -20,10 +20,10 @@ require(sha(OUT/'air-native')==build['process_sha256'] and sha(OUT/'offline-trus
         'Exact explicitly signed own process and trust handoff')
 require(sha(OUT/'compiler-data-32.cdr')==json.loads((OUT/'data-report.json').read_text())['sha256']
         and json.loads((OUT/'data-report.json').read_text())['process_sha256']==build['process_sha256'],'Exact own mutable Data fixture')
-kit=ROOT/'drivers/NativeVirtioConsole';revision=subprocess.check_output(['git','-C',str(kit),'rev-parse','HEAD'],text=True).strip()
+kit=ROOT/'drivers/VirtioMmioConsole';revision=subprocess.check_output(['git','-C',str(kit),'rev-parse','HEAD'],text=True).strip()
 require(hashlib.sha256(subprocess.check_output(['git','-C',str(kit),'show',revision+':NativeVirtioConsole.cpp'])).hexdigest()
         ==sha(kit/'NativeVirtioConsole.cpp'),'Exact committed native transport')
-candidate=ROOT/'build/native-prelink/native-owner-console-bounds-candidate.macho'
+candidate=ROOT/'build/xnu-prelink/native-owner-console-bounds-candidate.macho'
 plan=json.loads(candidate.with_suffix('.json').read_text());raw=candidate.read_bytes();image=macho(raw)
 require(sha(candidate)==plan['candidate_sha256'] and plan['source_inputs_modified'] is False,'Exact native original-component candidate')
 for extent in plan['extents']:
@@ -43,7 +43,7 @@ names={name:va for va,group in exports(raw,image).items() for name in group}
 for name,_,va in symbols(raw,image):
     if 'NativeVirtioConsole' in name:
         require(name not in names or names[name]==va,'Unambiguous actual linked transport symbol');names[name]=va
-obj=(ROOT/'build/native-virtio-console/NativeVirtioConsole.o').read_bytes();oi=macho(obj);os=symbols(obj,oi)
+obj=(ROOT/'build/virtio-mmio-console/NativeVirtioConsole.o').read_bytes();oi=macho(obj);os=symbols(obj,oi)
 object_st=next(p for cmd,p,_ in oi['commands'] if cmd==2)
 object_nlist,object_count,object_strings,_=struct.unpack_from('<4I',obj,object_st+8)
 sections=[s for segment in oi['segments'] for s in segment['sections']];checks=[]

@@ -16,7 +16,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser(description=__doc__)
-p.add_argument('--candidate', type=Path, default=ROOT / 'build/native-prelink/native-owner-ufs-rootauth3-candidate.macho')
+p.add_argument('--candidate', type=Path, default=ROOT / 'build/xnu-prelink/native-owner-ufs-rootauth3-candidate.macho')
 p.add_argument('--message-file', type=Path, help='Bounded ASCII diagnostic fixture; no printf conversions')
 p.add_argument('--output', type=Path, default=ROOT / 'build/panic-screen-qemu')
 p.add_argument('--exec-policy-format', action='store_true', help='Heap strings, precision, unmapped page and unsafe-pointer refusal')

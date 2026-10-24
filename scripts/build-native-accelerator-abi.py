@@ -3,7 +3,7 @@
 import hashlib,json,struct,subprocess,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];OUT=ROOT/'build/native-offline-accelerator';OUT.mkdir(exist_ok=True)
-sys.path.insert(0,str(ROOT/'kits/NativePrelink'));from native_prelink import macho
+sys.path.insert(0,str(ROOT/'kits/XnuPrelink'));from native_prelink import macho
 
 def run(cmd,**kw):return subprocess.check_output([str(x) for x in cmd],timeout=90,**kw)
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -46,7 +46,7 @@ while i<len(args):
 cmd+=['-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-unnecessary-virtual-specifier','-Wno-c99-designator','-Wno-reorder-init-list','-Wno-deprecated-enum-enum-conversion','-I',str(ROOT/'.cache/xnu-work/osfmk')];run(cmd,cwd=record['directory'])
 original_source=ROOT/'kits/sheng/OriginalGPUClientABIProbe.cpp';original_cmd=[str(v).replace(str(source),str(original_source)).replace(str(OUT/'AcceleratorABIProbe.o'),str(OUT/'OriginalGPUClientABIProbe.o')) for v in cmd];run(original_cmd,cwd=record['directory'])
 archive=OUT/'libNativeOfflineAccelerator.late.a';archive.unlink(missing_ok=True);run(['xcrun','ar','rcs',archive,late,OUT/'original-bindings.o',OUT/'AcceleratorABIProbe.o',OUT/'OriginalGPUClientABIProbe.o'])
-sources=[ROOT/'drivers/NativeMetal/NativeOfflineAccelerator.cpp',ROOT/'drivers/NativeMetal/OriginalAcceleratorABI.h',source,original_source]
+sources=[ROOT/'drivers/AdrenoMetal/NativeOfflineAccelerator.cpp',ROOT/'drivers/AdrenoMetal/OriginalAcceleratorABI.h',source,original_source]
 (OUT/'build-report.json').write_text(json.dumps(dict(source_sha256={str(p.relative_to(ROOT)):sha(p) for p in sources},archive_sha256=sha(archive),
  original_abi_sha256=sha(ROOT/'build/gpu-analysis/ioaccelerator-base-abi.json'),original_client_abi_sha256=sha(ROOT/'build/gpu-analysis/original-iogpu-userclient-abi.json'),bindings={n:hex(a) for n,a in bindings.items()},virtual_entries=168,owned_entries=[0,1,7],
  original_instructions_modified=False,system_device_published=False,runtime_qualified=False,original_desktop=False),indent=2)+'\n')

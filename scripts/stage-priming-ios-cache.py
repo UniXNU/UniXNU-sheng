@@ -47,8 +47,8 @@ qualified = json.loads(qualified_path.read_text())
 for name, digest in qualified['sources_sha256'].items():
     require(sha(ROOT / name) == digest, 'Exact qualified compiler instrument source: ' + name)
 for name, digest in qualified['runtime_patches_sha256'].items():
-    require(sha(ROOT / 'drivers/NativeMetal/bridge/patches' / name) == digest, 'Exact qualified runtime patch')
-require(sha(ROOT / 'build/native-metal-bridge/ios/libnative_metal_bridge.a') == qualified['ios_cross_link']['bridge_sha256'], 'Exact cross-linked iOS bridge')
+    require(sha(ROOT / 'drivers/AdrenoMetal/bridge/patches' / name) == digest, 'Exact qualified runtime patch')
+require(sha(ROOT / 'build/adreno-metal-bridge/ios/libadreno_metal_bridge.a') == qualified['ios_cross_link']['bridge_sha256'], 'Exact cross-linked iOS bridge')
 OUT.mkdir(parents=True)
 for name, info in qualified['ios_cross_link']['outputs'].items():
     source = ROOT / 'build/priming-cache/ios' / name
@@ -60,8 +60,8 @@ for name in ['libOfflineTurnipCompilerPeer.dylib','libvulkan_freedreno.dylib']:
 peer_build = json.loads((ROOT / 'build/turnip-ios-compiler-peer/build-report.json').read_text())
 for name, digest in peer_build['sources'].items():
     require(sha(ROOT / name) == digest, 'Exact linked software peer source')
-source = ROOT / 'drivers/NativeMetal/bridge/priming_cache_ios.cpp'
-shared = ROOT / 'drivers/NativeMetal/bridge/quartzcore_cache_ios.cpp'
+source = ROOT / 'drivers/AdrenoMetal/bridge/priming_cache_ios.cpp'
+shared = ROOT / 'drivers/AdrenoMetal/bridge/quartzcore_cache_ios.cpp'
 require(sha(shared) == base['parent_source_sha256'], 'Exact shared volume/capture helpers')
 sdk = subprocess.check_output(['xcrun','--sdk','iphoneos','--show-sdk-path'],text=True,timeout=10).strip()
 parent = OUT / 'air-native'
@@ -135,7 +135,7 @@ report.update(evidence='owned iOS priming fixture cross-build/signing/staging on
     parent_source_dependencies={str(shared.relative_to(ROOT)):sha(shared)},qualified_host_sources=qualified['sources_sha256'],runtime_patches_sha256=qualified['runtime_patches_sha256'],
     runtime_base_revision=qualified['runtime_base_revision'],ios_bridge_sha256=qualified['ios_cross_link']['bridge_sha256'],outputs=outputs,staged_paths=staged,
     data_sha256=sha(image),trust_bundle_sha256=sha(OUT/'offline-trust.bundle'),own_parent_permissions=permissions,
-    native_metal_revision=subprocess.check_output(['git','-C',str(ROOT/'drivers/NativeMetal'),'rev-parse','HEAD'],text=True).strip(),
+    native_metal_revision=subprocess.check_output(['git','-C',str(ROOT/'drivers/AdrenoMetal'),'rev-parse','HEAD'],text=True).strip(),
     initial_pack_report_relative=str(pack_path.relative_to(ROOT)) if pack_path else None,initial_pack_report_sha256=sha(pack_path) if pack_path else None,
     initial_cache_manifest_sha256=pack['cache_manifest_sha256'] if pack else None,initial_record_sha256=pack['cache_record_sha256'] if pack else None,
     producer_runs_in_boot=0 if pack else 1,cache_execution_qualified=False,production_root_authorization=False,hardware_ready=False)

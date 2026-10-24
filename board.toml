@@ -1,235 +1,139 @@
-# Board description of the Xiaomi Pad 6S Pro (sheng, SM8550), read by the unixnu build driver.
+"schema_version" = 2
 
-[board]
-name = "sheng"
-soc = "SM8550"
-description = "Xiaomi Pad 6S Pro"
-kit = "sheng"                      # the package/ of this repository appears as kits/sheng in the build tree
+["board"]
+"name" = "sheng"
+"soc" = "SM8550"
+"description" = "Xiaomi Pad 6S Pro"
+"kit" = "sheng"
+"soc_source" = "sm8550"
+"os_profile" = "ipados-17.7.11-21H461"
 
-# The target OS image: the unchanged iPad7,1 iPadOS 17.7.11 restore image. Give --ipsw PATH to use a local file; without
-# it the remote url is read with range requests, only the members that are needed.
-[ipsw]
-url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
-product = "iPad7,1"
-version = "17.7.11"
-build = "21H461"
-device_class = "j120ap"
-chip_id = 0x8011
-board_id = 12
-fetch = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustCache"]   # the small components
 
-[ipsw.sha256]
-"044-76040-038.dmg" = "3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d"
-"044-76034-038.dmg" = "b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f"
+["userdata"]
+"first_lba" = 3094592
+"last_lba" = 64007162
+"lba_bytes" = 4096
+"windows" = [{ "name" = "OS", "component" = "OS" }, { "name" = "SystemOS", "component" = "Cryptex1,SystemOS" }]
 
-# The raw image for the userdata partition: the OS and SystemOS disk images of the IPSW behind a manifest.
-# first_lba and last_lba are the GPT entry "userdata" of LUN 0, read from the tablet.
-[userdata]
-first_lba = 0x2f3840
-last_lba = 0x3d0abfa
-lba_bytes = 4096
-windows = [
-  { name = "OS", component = "OS" },
-  { name = "SystemOS", component = "Cryptex1,SystemOS" },
-]
 
-[kernel]
-defconfig = "sheng_defconfig"
-# Archive builders of the kernel step, in order. Each is a script of the build tree with its arguments. The VerifiedRoot
-# and VirtIO verified bundles are not built here; they need the volume policies of the target image.
-archives = [
+["kernel"]
+"defconfig" = "sheng_defconfig"
+"archives" = [
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
-  "build-arm-driver.py ArmDTPlatform",
-  "build-arm-driver.py ArmCpu",
-  "build-arm-driver.py NativeAES",
-  "build-native-aes-bindings.py",
-  "build-arm-driver.py NativeUfs",
-  "build-arm-driver.py NativeVirtioBlock",
-  "build-arm-driver.py NativeRamBlock",
-  "build-native-virtio-bindings.py --component NativeRamBlock --directory build/native-ram-block",
-  "build-native-virtio-bindings.py --component NativeVirtioBlock",
+  "component:ArmDTPlatform",
+  "component:ArmCpu",
+  "component:SoftwareAES",
+  "build-software-aes-bindings.py",
+  "component:ShengUfs",
+  "component:VirtioMmioBlock",
+  "component:RamBlock",
+  "build-virtio-mmio-bindings.py --component RamBlock --directory build/ram-block",
+  "build-virtio-mmio-bindings.py --component VirtioMmioBlock",
   "build-mockfs-fixture.py",
   "build-sheng-platform-power.py",
   "build-boot-progress.py",
   "build-libpthread-kernel.py",
-  "build-arm-driver.py NativeAdreno",
-  "build-native-adreno-kits.py",
-  "build-native-adreno-accelerator.py",
-  "build-native-legacy-display.py",
+  "component:Adreno740",
+  "build-adreno740-kits.py",
+  "build-adreno740-accelerator.py",
+  "component:ShengHidInput",
+  "component:AppleKeyStoreState",
+  "build-gop-legacy-display.py",
 ]
+"config_fragments" = ["arch:configs/common.config", "soc:configs/sm8550.config", "os:configs/ipados.config"]
+"patch_series" = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu/series"]
 
-[kernel.prelink]
-tool = "kits/NativePrelink/emit_prelink.py"
-kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
-kernelcache_sha256 = "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7"
-slide = "-0x1000000"
-early_security_init = "com.apple.driver.AppleMobileFileIntegrity=0xfffffff005ab4ae0"
-roots = [
-  "com.apple.AppleFSCompression.AppleFSCompressionTypeZlib",
-  "com.apple.driver.AppleARMPlatform",
-  "com.apple.driver.AppleARMWatchdogTimer",
-  "com.apple.driver.AppleAudioClockLibs",
-  "com.apple.driver.AppleEffaceableStorage",
-  "com.apple.driver.AppleIISController",
-  "com.apple.driver.AppleM2ScalerCSCDriver",
-  "com.apple.driver.AppleMobileFileIntegrity",
-  "com.apple.driver.ApplePMGR",
-  "com.apple.driver.IODARTFamily",
-  "com.apple.filesystems.apfs",
-  "com.apple.iokit.CoreAnalyticsFamily",
-  "com.apple.iokit.IOAVFamily",
-  "com.apple.iokit.IOAudio2Family",
-  "com.apple.iokit.IOCECFamily",
-  "com.apple.iokit.IOCryptoAcceleratorFamily",
-  "com.apple.iokit.IOGPUFamily",
-  "com.apple.iokit.IOHDCPFamily",
-  "com.apple.iokit.IOMobileGraphicsFamily",
-  "com.apple.iokit.IOReportFamily",
-  "com.apple.iokit.IOSlowAdaptiveClockingFamily",
-  "com.apple.iokit.IOStorageFamily",
-  "com.apple.iokit.IOSurface",
-  "com.apple.kec.Libm",
-  "com.apple.kec.corecrypto",
-  "com.apple.kext.AppleMatch",
-  "com.apple.kext.CoreTrust",
-  "com.apple.security.AppleImage4",
-  "com.apple.security.sandbox",
-  "com.apple.iokit.IOHIDFamily",
-  "com.apple.iokit.IOHIDEventDriver",
-]
 
-[firmware]
-config = "sheng"                   # Resources/Configs/sheng.toml in the Mu-Silicium checkout (--uefi)
-dsc = "Platforms/Xiaomi/shengPkg/sheng.dsc"
-fd = "Build/shengPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
-preflight = ["scripts/check-sheng.py"]
-submodules = ["Common/Mu", "Common/Mu_OEM_Sample", "Silicium-ACPI", "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl"]
-patches = ["Resources/MuPatches/Gic-Spurious.patch"]
-packages = [
-  "{uefi}",
-  "{uefi}/Platforms/Xiaomi",
-  "{tree}/package",
-  "{tree}/drivers/DarwinBoot",
-  "{edk2}",
-  "{uefi}/Common/Mu",
-  "{uefi}/Common/Mu_OEM_Sample",
-  "{uefi}/Silicon/Qualcomm",
-  "{uefi}/Silicon/Silicium",
-  "{uefi}/Silicium-ACPI",
-  "{uefi}/Silicium-ACPI/Platforms/Xiaomi",
-  "{uefi}/Silicium-ACPI/Silicon/Qualcomm",
-]
+["firmware"]
+"config" = "sheng"
+"dsc" = "Platforms/Xiaomi/shengPkg/sheng.dsc"
+"fd" = "Build/shengPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
+"preflight" = ["scripts/check-sheng.py"]
+"submodules" = ["Common/Mu", "Common/Mu_OEM_Sample", "Silicium-ACPI", "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl"]
+"patches" = ["Resources/MuPatches/Gic-Spurious.patch"]
+"packages" = ["{uefi}", "{uefi}/Platforms/Xiaomi", "{tree}/package", "{tree}/drivers/DarwinBoot", "{edk2}", "{uefi}/Common/Mu", "{uefi}/Common/Mu_OEM_Sample", "{uefi}/Silicon/Qualcomm", "{uefi}/Silicon/Silicium", "{uefi}/Silicium-ACPI", "{uefi}/Silicium-ACPI/Platforms/Xiaomi", "{uefi}/Silicium-ACPI/Silicon/Qualcomm"]
 
-[firmware.defines]
-ENABLE_SECUREBOOT = "1"
-DEVICE_MODEL = "sheng"
-MEMORY_PROTECTION = "TRUE"
-SHIP_MODE = "FALSE"
-BUILDID_STRING = "sheng-research"
+["firmware"."defines"]
+"ENABLE_SECUREBOOT" = "1"
+"DEVICE_MODEL" = "sheng"
+"MEMORY_PROTECTION" = "TRUE"
+"SHIP_MODE" = "FALSE"
+"BUILDID_STRING" = "sheng-research"
 
-# The ramdisk of the boot image: a FAT volume with the UniXNU config, the kernel, its device tree and
-# the optional trust cache and Data seed. The loader (DarwinBoot) is part of the firmware volume.
-[payload]
-volume = "SHENGESP"
-size_mib = 208
-loader = "firmware"
-title = "Boot"
-dram_size = "0x80000000"             # SMEM RAM table observed on the device
-skip_setup_tool = "scripts/seed-data-skip-setup.py"   # used by --skip-setup
-panic_screen = true                  # patch panic() screen output into the payload copy of the kernel
-# The original static/System trust caches, and the owner trust bundle built around them.
-trust_cache_sha256 = [
-  "7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7",
-  "8900d6a93d7a59ce1a872a5c081e559f4240a218f97e12d44d22dda46644d68f",
-]
-kernel_args = [
-  "-v",
-  "serial=3",
-  "debug=0x14e",
-  "kt_fixed_zones=120",
-  "offline-legacy-register=1",
-  "offline-legacy-gop=1",
-  "offline-legacy-unit-scale=2",
-  "offline-legacy-pm=1",
-  "offline-legacy-validate=1",
-  "offline-legacy-transfer=1",
-  "offline-legacy-cpu-present=1",
-  "offline-hid-home=1",
-  "offline-hid-input=1",
-  "offline-legacy-phase=4",
-  "offline-mobile-graphics-client=1",
-  "offline-mobile-graphics-load=1",
-  "offline-apfs-load=1",
-  "boot-progress=2",
-  "-apfs_shared_datavolume",
-  "offline-key-events=1",
-  "native-ufs-root=1",
-  "sheng-pmgr=2",
-  "sheng-disable-watchdogd=1",
-  "sheng-lite=1",
-  "boot-ui-focus4=SpringBoard",
-  "sheng-smp=1",
-  "sheng-cpufreq=3",
-  "sheng-touch=4",
-  "sheng-aks=1",
-  "sheng-gpu-power=9",
-  "sheng-gpu-metal=1",
-  "sheng-fb-gpu=1",
-  "sheng-banner=0",
-  "sheng-gpu-perf=8",
-  "sheng-gpu-addon=1",
-  "armcpu-spi-ipi=1",
-  "-no_slto_panic",
-  "ml-timeout-lock-panic-scale=40",
-  "sheng-touch-hid=1",
-  "sheng-data-persist=2",
-  "sheng-staged-apps=1",
-  "sheng-buttons=1",
-  "sheng-backlight=1",
-  "sheng-vsync=120",
-]
 
-# Fixups of signed text, applied by the kernel after signature validation (patches/xnu/native-text-fixup.patch); they reach it as
-# /chosen/text-fixups, not on the command line. Each is <file name>,<file offset>,<original>,<replacement>, in hex.
-text_fixups = [
-  # +[AWAttentionAwarenessConfiguration initialize] (21H461) only forces +[AWClientPreferences initialize] and deadlocks
-  # SpringBoard startup against it (ABBA between the main thread and Siri's SASMyriadController); it returns at once instead.
-  "dyld_shared_cache_arm64.15,421e8bc,28ad1bb0008544f9,c0035fd6008544f9",
-  # PosterBoardServices: PRSPosterPathURLResourceValues and PRSPosterPathFileAttributes require NSFileProtectionNone, which a Data
-  # volume without data protection never reports, so PosterBoard's data store is never viable ("Failed to migrate to Version 61
-  # from 59") and no poster, hence no wallpaper, is ever made. Both dictionaries keep only their first entry (readable / POSIX mode).
-  "dyld_shared_cache_arm64.13,1b05bec,44008052,24008052",
-  "dyld_shared_cache_arm64.13,1b05b08,44008052,24008052",
-  # BTAudioHALPlugin's factory returns NULL, so audiomxd skips it: with bluetoothd disabled (sheng-lite) the plugin reconnects to the
-  # missing com.apple.BTAudioHALPlugin.xpc in a tight loop (about 2700 times a second, millions of log lines, one core busy).
-  "BTAudioHALPlugin,38bec,ffc300d1f44f01a9,000080d2c0035fd6",
-]
 
-# The second boot menu entry, behind a confirmation: erase the Data seed's persistent store and start over (sheng-data-reset), with or without the Hello pages.
-[payload.install]
-title = "Install and boot"
-confirm = "ERASE all iPadOS user data and install again?"
-confirm_titles = ["Erase Data, skip Hello, boot", "Erase Data, show Hello, boot"]
-confirm_args = ["sheng-data-reset=1", "sheng-data-reset=2"]
+["payload"]
+"volume" = "SHENGESP"
+"size_mib" = 208
+"loader" = "firmware"
+"title" = "Boot"
+"dram_size" = "0x80000000"
+"skip_setup_tool" = "scripts/seed-data-skip-setup.py"
+"panic_screen" = true
+"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-hid-home=1", "offline-hid-input=1", "offline-legacy-phase=4", "offline-mobile-graphics-client=1", "offline-mobile-graphics-load=1", "offline-apfs-load=1", "boot-progress=2", "-apfs_shared_datavolume", "offline-key-events=1", "native-ufs-root=1", "sheng-pmgr=2", "sheng-disable-watchdogd=1", "sheng-lite=1", "boot-ui-focus4=SpringBoard", "sheng-smp=1", "sheng-cpufreq=3", "sheng-touch=4", "sheng-aks=1", "sheng-gpu-power=9", "sheng-gpu-metal=1", "sheng-fb-gpu=1", "sheng-banner=0", "sheng-gpu-perf=8", "sheng-gpu-addon=1", "armcpu-spi-ipi=1", "-no_slto_panic", "ml-timeout-lock-panic-scale=40", "sheng-touch-hid=1", "sheng-data-persist=2", "sheng-staged-apps=1", "sheng-buttons=1", "sheng-backlight=1", "sheng-vsync=120"]
 
-[payload.adt]
-tool = "scripts/make-sheng-adt.py"
-chip_id = "207"
-owned_memory_size = "0x130000000"
-root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
-cpu_regs = "0,0x300,0x400,0x500,0x600,0x700"
-packed_data_ramdisk = true
-persistent_data = true               # sheng-data-persist keeps Data writes, so Data is not ephemeral storage
-ipad_identity = true
-unique_chip_id = "required"          # the platform seed is not stored in any repository
+["payload"."install"]
+"title" = "Install and boot"
+"confirm" = "ERASE all iPadOS user data and install again?"
+"confirm_titles" = ["Erase Data, skip Hello, boot", "Erase Data, show Hello, boot"]
+"confirm_args" = ["sheng-data-reset=1", "sheng-data-reset=2"]
 
-# Image parameters come from the Mu-Silicium device config; [bootimg.image] would override them.
 
-# The stock ABL powers the panel off when the device tree has no splash region, so add it.
-[[bootimg.dtb_node]]
-path = "/reserved-memory/splash_region"
-props = [
-  { name = "label", type = "s", value = "cont_splash_region" },
-  { name = "reg", type = "x", value = ["0x0", "0xb8000000", "0x0", "0x2b00000"] },
-]
+["payload"."adt"]
+"chip_id" = "207"
+"owned_memory_size" = "0x130000000"
+"root_match_volume_uuid" = "04769D26-2CA0-4825-B443-E2E5F88300F2"
+"packed_data_ramdisk" = true
+"persistent_data" = true
+"unique_chip_id" = "required"
+
+
+
+["bootimg"]
+"dtb_node" = [{ "path" = "/reserved-memory/splash_region", "props" = [{ "name" = "label", "type" = "s", "value" = "cont_splash_region" }, { "name" = "reg", "type" = "x", "value" = ["0x0", "0xb8000000", "0x0", "0x2b00000"] }] }]
+
+
+["device_tree"]
+"source" = "device:dts/sheng.dts"
+"include_dirs" = ["soc:dts"]
+
+
+["components"]
+"include" = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "ShengUfs", "VirtioMmioBlock", "RamBlock", "Adreno740", "AdrenoMetal", "GopFramebuffer", "ShengHidInput", "ShengNovatekTouch", "QcomGeniSpi", "AppleKeyStoreState", "XnuPrelink", "DarwinBoot", "VerifiedRoot", "ShengPreflight", "AirNir", "Ath12kWifi"]
+
+
+["adt"]
+
+["adt"."product"]
+
+["adt"."product"."string"]
+"model" = "xiaomi,sheng"
+"artwork-display-gamut" = "sRGB"
+
+
+["adt"."product"."u32"]
+"thin-bezel" = 1
+
+
+
+["adt"."defaults"]
+
+["adt"."defaults"."u32"]
+"sleep-disabled" = 1
+
+
+
+["adt"."buttons"]
+
+["adt"."buttons"."string"]
+"compatible" = "buttons"
+"device_type" = "buttons"
+
+
+["adt"."buttons"."strings"]
+"button-names" = ["hold", "voldown", "volup"]
+
+
+["adt"."buttons"."u32"]
+"home-button-type" = 2

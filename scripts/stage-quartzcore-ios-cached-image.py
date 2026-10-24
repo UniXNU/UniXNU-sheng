@@ -44,7 +44,7 @@ require(sha(base_report_path) == pack['stage_report_sha256'], 'Exact verified pr
 require(sha(BASE / 'ui-compiler-data-64.cdr') == base['data_sha256'], 'Exact unrun own initial image, not the paused mutable snapshot')
 require(pack['extracted_pack_matches_guest_manifest'] and pack['ios_driver_input_sha256'] == base['driver_input_sha256'] and
         pack['ios_driver_uuid'] == base['driver_identity']['macho_uuid'], 'Exact qualified iOS compiler/cache identity')
-require(sha(ROOT / 'drivers/NativeMetal/bridge/quartzcore_cache_ios.cpp') == base['parent_source_sha256'], 'Exact shared parent helpers')
+require(sha(ROOT / 'drivers/AdrenoMetal/bridge/quartzcore_cache_ios.cpp') == base['parent_source_sha256'], 'Exact shared parent helpers')
 for name, digest in base['qualified_host_sources'].items():
     require(sha(ROOT / name) == digest, 'Exact UI compiler source: ' + name)
 for name, info in base['outputs'].items():
@@ -57,7 +57,7 @@ require(len(files) == pack['cache_file_count'] <= 2048, 'Exact bounded initial c
 for path in files:
     require(not path.is_symlink() and path.stat().st_size <= 16 * 1024**2 and
             sha(path) == pack['cache_manifest'][str(path.relative_to(PACK / 'ui.cache'))]['sha256'], 'Exact exported iOS cache file')
-source = ROOT / 'drivers/NativeMetal/bridge/quartzcore_cache_provisioned_ios.cpp'
+source = ROOT / 'drivers/AdrenoMetal/bridge/quartzcore_cache_provisioned_ios.cpp'
 parent = OUT / 'air-native'
 sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True, timeout=10).strip()
 run(['xcrun', 'clang++', '-target', 'arm64-apple-ios17.0', '-isysroot', sdk, '-O1', '-fstack-protector-strong', '-std=c++23',
@@ -115,8 +115,8 @@ report = dict(base)
 report.update(evidence='fresh own initial-image staging only; no execution', first_consumer_only=True,
     stage_script_relative='scripts/stage-quartzcore-ios-cached-image.py', stage_script_sha256=sha(Path(__file__)),
     parent_source_relative=str(source.relative_to(ROOT)), parent_source_sha256=sha(source),
-    parent_source_dependencies={'drivers/NativeMetal/bridge/quartzcore_cache_ios.cpp': base['parent_source_sha256']},
-    native_metal_revision=subprocess.check_output(['git', '-C', str(ROOT / 'drivers/NativeMetal'), 'rev-parse', 'HEAD'], text=True).strip(),
+    parent_source_dependencies={'drivers/AdrenoMetal/bridge/quartzcore_cache_ios.cpp': base['parent_source_sha256']},
+    native_metal_revision=subprocess.check_output(['git', '-C', str(ROOT / 'drivers/AdrenoMetal'), 'rev-parse', 'HEAD'], text=True).strip(),
     outputs=outputs, base_unrun_image_sha256=base['data_sha256'], data_sha256=sha(image), trust_bundle_sha256=sha(OUT / 'offline-trust.bundle'),
     initial_pack_report_relative=str(pack_report_path.relative_to(ROOT)), initial_pack_report_sha256=sha(pack_report_path),
     initial_archive_sha256=pack['archive_sha256'], initial_cache_manifest_sha256=pack['cache_manifest_sha256'],

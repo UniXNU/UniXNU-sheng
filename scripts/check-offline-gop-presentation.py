@@ -13,7 +13,7 @@ parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--resou
 if args.resources and args.compose:parser.error('Select composition or resource instrument')
 ROOT=Path(__file__).resolve().parents[1];case_kind='offline-gop-composition' if args.compose else 'offline-gop-resources' if args.resources else 'offline-gop-presentation';OUT=ROOT/'build'/case_kind
 frame_count=3 if args.resources or args.compose else 2
-sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
+sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho,backed_offset,exports
 def require(value,reason):
     if not value:raise SystemExit(reason)
@@ -30,10 +30,10 @@ require(sha(OUT/'test-inputs.json')==build['manifest_sha256'] and sha(OUT/'air-n
 for name,digest in manifest['sources'].items():require(sha(ROOT/name)==digest,'Exact source '+name)
 metal_revision=None
 for name in ['OfflineMetalFrontend.mm','OfflineMetalWire.h','HostMetalCommandServer.mm','HostMetalCommandServer.h']:
-    metal_revision=committed('drivers/NativeMetal',name)
+    metal_revision=committed('drivers/AdrenoMetal',name)
 display_revision=None
 for name in ['NativeGOPPresenter.cpp','NativeGOPWire.h','NativeLegacyDisplay.cpp']:
-    display_revision=committed('drivers/NativeMobileDisplay',name)
+    display_revision=committed('drivers/GopFramebuffer',name)
 subprocess.run(['codesign','--verify','--strict',OUT/'air-native'],check=True,timeout=30)
 details=subprocess.run(['codesign','--display','--verbose=4',OUT/'air-native'],check=True,capture_output=True,text=True).stderr
 require(re.search(r'^Page size=4096$',details,re.M) and build['cdhash'] in details,'Actual 4K own CodeDirectory')
@@ -51,7 +51,7 @@ def modules(b):
     return [b[a:z] for a,z in zip(offsets,(*offsets[1:],len(b)))]
 require(len(modules(trust))==3 and len(modules(original))==2 and modules(trust)[1:]==modules(original),'Original trust modules unchanged')
 
-kernel=ROOT/'build/native-prelink/native-owner-gop-present-candidate.macho';plan=read_json(kernel.with_suffix('.json'))
+kernel=ROOT/'build/xnu-prelink/native-owner-gop-present-candidate.macho';plan=read_json(kernel.with_suffix('.json'))
 raw=kernel.read_bytes();parsed=macho(raw)
 require(sha(kernel)==plan['candidate_sha256'],'Exact native kernel candidate')
 require(sha(ROOT/'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf')==plan['native_sha256'],'Current source kernel')

@@ -7,8 +7,8 @@ out=ROOT/'build/sheng-gpu-smmu';out.mkdir(exist_ok=True);(out/'report.json').unl
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 spec=importlib.util.spec_from_file_location('prepare',ROOT/'scripts/prepare-sheng-gpu-smmu.py')
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);_,provenance=module.prepare()
-sources=[kit/(n+'.c') for n in ['ArmSmmu4K','ArmSmmu4KContext','ArmSmmu4KProgram','ArmSmmu4KStreams','ArmSmmu4KMmio','ArmSmmu4KAudit','ArmSmmu4KTableMemory','ArmSmmu4KLive']]+[board/'ShengGpuSmmu.c']
-includes=['-I',kit,'-I',board,'-I',out];test=out/'test-lifecycle'
+sources=[kit/(n+'.c') for n in ['ArmSmmu4K','ArmSmmu4KContext','ArmSmmu4KProgram','ArmSmmu4KStreams','ArmSmmu4KMmio','ArmSmmu4KAudit','ArmSmmu4KTableMemory','ArmSmmu4KLive']]+[(ROOT/'kits/Sm8550Platform')/'ShengGpuSmmu.c']
+includes=['-I',str(ROOT/'kits/Sm8550Platform'),'-I',kit,'-I',board,'-I',out];test=out/'test-lifecycle'
 subprocess.run(['xcrun','clang','-std=c11','-O2','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',*includes,*sources,board/'ShengGpuSmmuHostTests.c','-o',test],check=True,timeout=60)
 r=subprocess.run([test],capture_output=True,text=True,timeout=30)
 print(r.stdout,end='')

@@ -38,7 +38,7 @@ LOG_BLOCKS = 8192               # the window the reader dumps (package/linux-log
 
 
 def unpack_export(blob, run, name='export'):
-    """The export area's blob (package/BootLog.c, drivers/NativeMetal/CacheExport.h) into run/<name>/: the files and a manifest. The
+    """The export area's blob (package/BootLog.c, drivers/AdrenoMetal/CacheExport.h) into run/<name>/: the files and a manifest. The
     diagnostic export (name diag) has the same form with root /."""
     (run / f'{name}.bin').write_bytes(blob)
     raw_bytes, zbytes = struct.unpack_from('<II', blob, 8)

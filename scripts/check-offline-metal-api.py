@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import struct
 import subprocess
-ROOT=Path(__file__).resolve().parents[1];KIT=ROOT/'drivers/NativeMetal'
+ROOT=Path(__file__).resolve().parents[1];KIT=ROOT/'drivers/AdrenoMetal'
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--iosurface',action='store_true');p.add_argument('--bgra',action='store_true');a=p.parse_args()
 if a.bgra:a.iosurface=True
 kind='offline-metal-bgra' if a.bgra else 'offline-metal-iosurface' if a.iosurface else 'offline-metal-api';OUT=ROOT/'build'/kind
@@ -46,8 +46,8 @@ n=struct.unpack_from('<I',trust)[0];starts=struct.unpack_from('<'+str(n)+'I',tru
 on=struct.unpack_from('<I',original)[0];os=struct.unpack_from('<'+str(on)+'I',original,4)
 require(n==3 and on==2 and [trust[a:b] for a,b in zip(starts[1:],(*starts[2:],len(trust)))]
         ==[original[a:b] for a,b in zip(os,(*os[1:],len(original)))],'Both original trust modules preserved exactly')
-plan=json.loads((ROOT/'build/native-prelink/native-owner-console-bounds-candidate.json').read_text())
-require(sha(ROOT/'build/native-prelink/native-owner-console-bounds-candidate.macho')==plan['candidate_sha256'],'Exact native-4K candidate')
+plan=json.loads((ROOT/'build/xnu-prelink/native-owner-console-bounds-candidate.json').read_text())
+require(sha(ROOT/'build/xnu-prelink/native-owner-console-bounds-candidate.macho')==plan['candidate_sha256'],'Exact native-4K candidate')
 host_build=json.loads((ROOT/'build/host-metal/qualification.json').read_text())
 require(host_build['source_sha256']==sha(ROOT/'kits/sheng/HostMetalDiagnostic.mm')
         and host_build['process_sha256']==sha(ROOT/'build/host-metal/host-metal-originals'),'Exact live host process and loader')

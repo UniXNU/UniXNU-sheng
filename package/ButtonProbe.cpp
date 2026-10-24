@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Power and volume buttons of the sheng board (boot argument sheng-buttons=1), sent as the Consumer Power, Volume Increment and Volume
-// Decrement bits of the HID input device's report 2 (drivers/NativeHidInput).
+// Decrement bits of the HID input device's report 2 (drivers/ShengHidInput).
 // The devicetree facts: power is the PMK8550 PON (SPMI SID 0, peripheral 0x13, interrupt 7 "pwrkey"), volume down its RESIN (interrupt 6),
 // volume up the PM8550 GPIO 6 (SID 1, peripheral 0x8d, active low with a pull-up, gpio-keys). All three are PMIC peripheral interrupts the
 // SPMI arbiter (spmi@c400000, EE 0) gathers into its "periph_irq", PDC pin 1, which the PDC forwards as SPI 481 (qcom,pdc-ranges 0 -> 480).

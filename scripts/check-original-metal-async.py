@@ -2,7 +2,7 @@
 """Qualify original-runtime asynchronous GPU events, resource visibility and callback lifetime."""
 import argparse,hashlib,json,re,struct,subprocess,sys
 from pathlib import Path
-ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
+ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho,backed_offset
 def require(value,why):
  if not value:raise SystemExit(why)
@@ -11,7 +11,7 @@ def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 def modules(raw):
  n=struct.unpack_from('<I',raw)[0];starts=struct.unpack_from('<'+'I'*n,raw,4)
  return [raw[a:b] for a,b in zip(starts,(*starts[1:],len(raw)))]
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--primary-only',action='store_true',help='Qualify only the actual async path, without claiming fresh sync/default-off regressions');p.add_argument('--candidate-base',type=Path,default=ROOT/'build/native-prelink/native-owner-metal-async-candidate');a=p.parse_args()
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--primary-only',action='store_true',help='Qualify only the actual async path, without claiming fresh sync/default-off regressions');p.add_argument('--candidate-base',type=Path,default=ROOT/'build/xnu-prelink/native-owner-metal-async-candidate');a=p.parse_args()
 folder=ROOT/'build/offline-metal-async';fixture=ROOT/'build/darwinboot-owner-hvf-offline-metal-async'
 d=load(fixture/'gdb-stop.json');host=load(folder/'host-enabled-report.json');provenance=load(folder/'host-enabled-provenance.json')
 build=load(folder/'build-report.json');data=load(folder/'data-report.json');manifest=load(folder/'test-inputs.json')
@@ -21,7 +21,7 @@ require(sha(ROOT/'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.b
 broker_build=load(ROOT/'build/native-offline-gpu/build-report.json')
 for rel,digest in broker_build['source_sha256'].items():require(sha(ROOT/rel)==digest,'Exact compiled native broker source: '+rel)
 require(sha(ROOT/'build/native-offline-gpu/libNativeOfflineGPU.late.a')==broker_build['archive_sha256'],'Exact compiled private broker archive')
-old=load(ROOT/'build/native-prelink/native-owner-offline-gpu-broker-cpu-candidate.json')
+old=load(ROOT/'build/xnu-prelink/native-owner-offline-gpu-broker-cpu-candidate.json')
 require(plan['components']==old['components'] and plan['original_executable_sha256']==old['original_executable_sha256'] and plan['early_security_initializers']==old['early_security_initializers'],'All 29 original executable hashes and security initialization preserved')
 for module,digest in plan['original_executable_sha256'].items():
  e=next(e for e in plan['extents'] if e['module']==module and e['segment']=='__TEXT_EXEC');at=backed_offset(segments,e['va'],e['size'],len(raw))

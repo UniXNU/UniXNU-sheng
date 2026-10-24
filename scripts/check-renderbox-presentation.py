@@ -2,7 +2,7 @@
 """Verify genuine original RenderBox GPU images, repeated swaps and actual QEMU scanout."""
 import hashlib,json,re,struct,subprocess,sys,zlib
 from pathlib import Path
-ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
+ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho,backed_offset
 def require(value,why):
  if not value:raise SystemExit(why)
@@ -30,9 +30,9 @@ def rgb_pixels(path):
    row[x]=(row[x]+predict)&255
   pixels+=row;previous=row
  return bytes(pixels)
-base=ROOT/'build/native-prelink/native-owner-renderbox-presentation-candidate';plan=load(base.with_suffix('.json'));kernel=base.with_suffix('.macho');raw=kernel.read_bytes();segments=macho(raw)['segments']
+base=ROOT/'build/xnu-prelink/native-owner-renderbox-presentation-candidate';plan=load(base.with_suffix('.json'));kernel=base.with_suffix('.macho');raw=kernel.read_bytes();segments=macho(raw)['segments']
 require(sha(kernel)==plan['candidate_sha256'] and sha(ROOT/'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf')==plan['native_sha256'],'Exact current native and immutable candidate')
-old=load(ROOT/'build/native-prelink/native-owner-offline-gpu-broker-cpu-candidate.json')
+old=load(ROOT/'build/xnu-prelink/native-owner-offline-gpu-broker-cpu-candidate.json')
 require(plan['components']==old['components'] and plan['original_executable_sha256']==old['original_executable_sha256'] and plan['early_security_initializers']==old['early_security_initializers'],'Same 29 original components and actual security initialization')
 for module,digest in plan['original_executable_sha256'].items():
  e=next(e for e in plan['extents'] if e['module']==module and e['segment']=='__TEXT_EXEC');at=backed_offset(segments,e['va'],e['size'],len(raw))

@@ -18,7 +18,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'build/quartzcore-ios-compiler-peer'
-sys.path.insert(0, str(ROOT / 'kits/NativePrelink'))
+sys.path.insert(0, str(ROOT / 'kits/XnuPrelink'))
 from native_prelink import macho, backed_offset
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--observation', type=Path, required=True)
@@ -47,7 +47,7 @@ require(shutil.disk_usage(ROOT).free > 5 * 1024**3 + 256 * 1024**2, 'Preserve 5 
 stage_path = OUT / 'stage-report.json'
 stage = load(stage_path)
 require(sha(ROOT / stage.get('stage_script_relative', 'scripts/stage-quartzcore-ios-compiler-peer.py')) == stage['stage_script_sha256'] and
-        sha(ROOT / stage.get('parent_source_relative', 'drivers/NativeMetal/bridge/quartzcore_cache_ios.cpp')) == stage['parent_source_sha256'], 'Exact staging/compiled parent source')
+        sha(ROOT / stage.get('parent_source_relative', 'drivers/AdrenoMetal/bridge/quartzcore_cache_ios.cpp')) == stage['parent_source_sha256'], 'Exact staging/compiled parent source')
 first_only = stage.get('first_consumer_only', False)
 child_count = 3 if first_only else 4
 for name, digest in stage.get('parent_source_dependencies', {}).items():
@@ -90,7 +90,7 @@ hashes = sorted(v['cdhash'] for v in stage['outputs'].values())
 require(struct.unpack_from('<I', modules[0], 20)[0] == len(hashes) and len(modules[0]) == 24 + 24 * len(hashes) and
         [modules[0][i:i + 20].hex() for i in range(24, len(modules[0]), 24)] == hashes and
         all(modules[0][i + 20:i + 24] == bytes([2, 0, 0, 0]) for i in range(24, len(modules[0]), 24)), 'Exact five own signed artifacts')
-base = ROOT / 'build/native-prelink/native-owner-turnip-compiler-qemu-candidate'
+base = ROOT / 'build/xnu-prelink/native-owner-turnip-compiler-qemu-candidate'
 plan, kernel = load(base.with_suffix('.json')), base.with_suffix('.macho')
 require(sha(kernel) == plan['candidate_sha256'] and plan['original_sha256'] == 'f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7',
         'Exact QEMU candidate and supplied original ordinary ARM64 kernel')

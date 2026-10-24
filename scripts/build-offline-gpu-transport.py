@@ -29,7 +29,7 @@ for data in modules:offsets.append(cursor);cursor+=len(data)
 bundle=struct.pack('<4I',3,*offsets)+b''.join(modules);(OUT/'offline-trust.bundle').write_bytes(bundle)
 manifest=OUT/'test-inputs.json'
 manifest.write_text(json.dumps(dict(sources={str(p.relative_to(ROOT)):sha(p) for p in
-    (source,ROOT/'kits/sheng/OfflineGPUWire.h',ROOT/'drivers/NativeVirtioConsole/NativeVirtioConsole.cpp')},
+    (source,ROOT/'kits/sheng/OfflineGPUWire.h',ROOT/'drivers/VirtioMmioConsole/NativeVirtioConsole.cpp')},
     guest_metal_device=False,adreno_execution=False,original_desktop=False),indent=2)+'\n')
 (OUT/'build-report.json').write_text(json.dumps(dict(process_sha256=sha(exe),process_bytes=exe.stat().st_size,
     source_sha256=sha(source),manifest_sha256=sha(manifest),cdhash=cdhash,code_signature_page_bytes=4096,

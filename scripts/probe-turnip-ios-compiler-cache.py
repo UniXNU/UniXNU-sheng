@@ -34,7 +34,7 @@ if sha(OUT / 'build-report.json') != data['cross_build_report_sha256'] or sha(OU
     raise SystemExit('Exact staged own compiler fixture required')
 if sha(OUT / 'offline-trust.bundle') != data['trust_bundle_sha256']:
     raise SystemExit('Exact combined own/original trust bundle required')
-base = ROOT / 'build/native-prelink/native-owner-turnip-compiler-qemu-candidate'
+base = ROOT / 'build/xnu-prelink/native-owner-turnip-compiler-qemu-candidate'
 plan = json.loads(base.with_suffix('.json').read_text())
 if sha(base.with_suffix('.macho')) != plan['candidate_sha256'] or plan['original_sha256'] != 'f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7':
     raise SystemExit('Exact supplied ordinary ARM64 source and QEMU candidate required')

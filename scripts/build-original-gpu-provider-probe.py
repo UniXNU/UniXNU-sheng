@@ -3,7 +3,7 @@
 import hashlib,json,re,struct,subprocess,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];OUT=ROOT/'build/native-original-provider';OUT.mkdir(exist_ok=True)
-sys.path.insert(0,str(ROOT/'kits/NativePrelink'));from native_prelink import macho,exports
+sys.path.insert(0,str(ROOT/'kits/XnuPrelink'));from native_prelink import macho,exports
 
 def run(cmd,**kwargs):return subprocess.check_output([str(v) for v in cmd],timeout=90,**kwargs)
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
@@ -28,7 +28,7 @@ for g in im['segments']:
     if bits>>27&1 and bits>>28==0 and bits>>25&3==3:relocations[sec['va']+target]=symbols[bits&0xffffff][0]
 entries=[relocations.get(vtable+16+8*i) for i in range(215)];owned=sorted([0,1,7,84,*plan['pure_virtual_slots']])
 if not all(entries) or vtable+16+215*8 in relocations or [i for i,name in enumerate(entries) if cls in name]!=owned:raise SystemExit('Exact 215-entry own table and only metadata/registration/non-returning pure hooks required')
-reference=ROOT/'build/native-prelink/native-owner-renderbox-presentation-candidate.macho';reference_raw=reference.read_bytes()
+reference=ROOT/'build/xnu-prelink/native-owner-renderbox-presentation-candidate.macho';reference_raw=reference.read_bytes()
 if hashlib.sha256(reference_raw).hexdigest()!=plan['reference_candidate_sha256']:raise SystemExit('Exact original ABI reference candidate required')
 native_names={name:address for address,group in exports(reference_raw,macho(reference_raw)).items() for name in group}
 for i,name in enumerate(entries):
@@ -59,7 +59,7 @@ while i<len(args):
  i+=1
 cmd+=['-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-unnecessary-virtual-specifier','-Wno-c99-designator','-Wno-reorder-init-list','-Wno-deprecated-enum-enum-conversion','-I',str(ROOT/'.cache/xnu-work/osfmk')];run(cmd,cwd=record['directory'])
 archive=OUT/'libNativeIOGPUProviderProbe.late.a';archive.unlink(missing_ok=True);run(['xcrun','ar','rcs',archive,late,OUT/'original-bindings.o',OUT/'OriginalGPUProviderProbe.o'])
-sources=[source,*(ROOT/'drivers/NativeMetal'/name for name in ('OriginalGPUProviderABI.h','OriginalAcceleratorABI.h','NativeIOGPUProviderProbe.cpp'))]
+sources=[source,*(ROOT/'drivers/AdrenoMetal'/name for name in ('OriginalGPUProviderABI.h','OriginalAcceleratorABI.h','NativeIOGPUProviderProbe.cpp'))]
 (OUT/'build-report.json').write_text(json.dumps(dict(source_sha256={str(p.relative_to(ROOT)):sha(p) for p in sources},archive_sha256=sha(archive),abi_sha256=sha(abi),bindings={name:hex(va) for name,va in bindings.items()},virtual_entries=215,own_entries=owned,vtable_source_symbols=entries,pure_source_signatures_qualified=False,original_methods_modified=False,normal_publication_blocked=True,runtime_qualified=False,original_desktop=False,adreno_execution=False),indent=2)+'\n')
 print('PASS: exact original 215-slot inherited entry bindings and 736-byte storage; all ten required hooks and registration save actual registers and NEVER return success')
 print('Unpublished introspection only: opaque tail source signatures, successful original start, normal device/client authorization and GPU execution remain unqualified')

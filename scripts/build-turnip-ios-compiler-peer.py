@@ -17,7 +17,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'build/turnip-ios-compiler-peer'
-KIT = ROOT / 'drivers/NativeAdreno'
+KIT = ROOT / 'drivers/Adreno740'
 SIM = KIT / 'tests/hostsim'
 SMMU = ROOT / 'kits/ArmSmmu4K'
 TURNIP = ROOT / 'build/mesa-tu-ios/src/freedreno/vulkan/libvulkan_freedreno.dylib'

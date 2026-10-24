@@ -1,6 +1,6 @@
-[submodule "drivers/NativeNovatekTouch"]
-	path = drivers/NativeNovatekTouch
-	url = https://github.com/UniXNU/NativeNovatekTouch.git
+[submodule "drivers/ShengNovatekTouch"]
+	path = drivers/ShengNovatekTouch
+	url = https://github.com/UniXNU/ShengNovatekTouch.git
 [submodule "drivers/ShengPreflight"]
 	path = drivers/ShengPreflight
 	url = https://github.com/UniXNU/ShengPreflight.git

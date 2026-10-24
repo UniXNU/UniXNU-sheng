@@ -16,7 +16,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'build/turnip-ios-compiler-peer'
-sys.path.insert(0, str(ROOT / 'kits/NativePrelink'))
+sys.path.insert(0, str(ROOT / 'kits/XnuPrelink'))
 from native_prelink import macho, backed_offset
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -93,7 +93,7 @@ require(struct.unpack_from('<I', modules[0], 20)[0] == len(hashes) and len(modul
         [modules[0][o:o + 20].hex() for o in range(24, len(modules[0]), 24)] == hashes and
         all(modules[0][o + 20:o + 24] == bytes([2, 0, 0, 0]) for o in range(24, len(modules[0]), 24)), 'Exact four own signed artifacts')
 
-base = ROOT / 'build/native-prelink/native-owner-turnip-compiler-qemu-candidate'
+base = ROOT / 'build/xnu-prelink/native-owner-turnip-compiler-qemu-candidate'
 plan = load(base.with_suffix('.json'))
 kernel = base.with_suffix('.macho')
 require(sha(kernel) == plan['candidate_sha256'] and

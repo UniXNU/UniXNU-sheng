@@ -7,7 +7,7 @@ import struct
 import subprocess
 import sys
 ROOT=Path(__file__).resolve().parents[1];OUT=ROOT/'build/native-legacy-display';OUT.mkdir(parents=True,exist_ok=True)
-sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
+sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho,backed_offset,exports
 def run(cmd,**kw):return subprocess.check_output([str(x) for x in cmd],timeout=90,**kw)
 def require(v,why):
@@ -104,9 +104,9 @@ for segment in image['segments']:
                 if bits>>27&1 and bits>>28==0 and bits>>25&3==3:relocations[sec['va']+offset]=symbols[bits&0xffffff][0]
 compiled=[relocations.get(vtable+16+i*8) for i in range(358)]
 require(all(compiled) and vtable+16+358*8 not in relocations,'Exact owned 358-entry vtable')
-candidate=ROOT/'build/native-prelink/native-owner-mobile-graphics-candidate.macho'
+candidate=ROOT/'build/xnu-prelink/native-owner-mobile-graphics-candidate.macho'
 if not candidate.exists():  # pruned: same fallback as scripts/audit-mobile-graphics-legacy.py (identical original family executable)
-    later=sorted((ROOT/'build/native-prelink').glob('native-owner-ufs-cpu-desktop-*-candidate.macho'),key=lambda f:f.stat().st_mtime)
+    later=sorted((ROOT/'build/xnu-prelink').glob('native-owner-ufs-cpu-desktop-*-candidate.macho'),key=lambda f:f.stat().st_mtime)
     require(later,'No reference candidate available');candidate=later[-1]
 old=candidate.read_bytes();old_image=macho(old)
 names={n:v for v,group in exports(old,old_image).items() for n in group}
@@ -236,7 +236,7 @@ reset_obj=OUT/'BootReset.o'
 run([str(reset_source) if arg==str(process_source) else str(reset_obj) if arg==str(process_obj) else arg for arg in process_cmd]+['-I',str(ROOT/'kits/sheng')],cwd=pr['directory'])
 # Default-off touch bring-up: C++ board probe plus the generic GENI SPI and Novatek protocol/touch libraries, compiled with the
 # kernel C flags, and the firmware object generated from the copy kept outside Git.
-cmd+=['-I',str(ROOT/'kits/sheng'),'-I',str(ROOT/'drivers/NativeGeniSpi'),'-I',str(ROOT/'drivers/NativeNovatekTouch'),'-I',str(ROOT/'drivers/NativeUfs')]
+cmd+=['-I',str(ROOT/'kits/sheng'),'-I',str(ROOT/'drivers/QcomGeniSpi'),'-I',str(ROOT/'drivers/ShengNovatekTouch'),'-I',str(ROOT/'drivers/ShengUfs')]
 touch_dir=OUT/'touch';touch_dir.mkdir(exist_ok=True)
 touch_cpp=ROOT/'kits/sheng/TouchProbe.cpp';touch_cpp_obj=touch_dir/'TouchProbe.o'
 cpufreq_cpp=ROOT/'kits/sheng/CpuFreqProbe.cpp';cpufreq_obj=touch_dir/'CpuFreqProbe.o'
@@ -244,10 +244,10 @@ gpupower_cpp=ROOT/'kits/sheng/GpuPowerProbe.cpp';gpupower_obj=touch_dir/'GpuPowe
 wifi_cpp=ROOT/'kits/sheng/WifiProbe.cpp';wifi_obj=touch_dir/'WifiProbe.o'
 # The WiFi network side (interface, registry entries, Apple80211 requests): its classes are registered late, like the brightness service's.
 wifinet_cpp=ROOT/'kits/sheng/WifiNet.cpp';wifinet_obj=touch_dir/'WifiNet.o';wifinet_late=touch_dir/'WifiNet.late.o'
-# The WiFi module (NativeWifi): the board code includes its interface header, and its objects join the archive.
+# The WiFi module (Ath12kWifi): the board code includes its interface header, and its objects join the archive.
 import os
-nativewifi=Path(os.environ.get('NATIVE_WIFI_DIR') or ROOT/'drivers/NativeWifi')
-require((nativewifi/'include/nw_abi.h').exists(),'NativeWifi module directory (set NATIVE_WIFI_DIR)')
+nativewifi=Path(os.environ.get('NATIVE_WIFI_DIR') or ROOT/'drivers/Ath12kWifi')
+require((nativewifi/'include/nw_abi.h').exists(),'Ath12kWifi module directory (set NATIVE_WIFI_DIR)')
 # The audio DSP bring-up (sheng-adsp): the driver and its protocol cores (firmware images, SMEM, SMP2P, GLINK, AOSS QMP, RPMh). The
 # firmware file reader is BSD code and is built with the boot progress archive.
 adsp_cpp=ROOT/'kits/sheng/AdspProbe.cpp';adsp_obj=touch_dir/'AdspProbe.o'
@@ -268,7 +268,7 @@ battery_class_late=touch_dir/'ShengBattery.late.o'
 # The event-driven GENI I2C core the brightness service drives its two engines with.
 backlight_c=[ROOT/'kits/sheng/GeniI2c.c']
 run([str(touch_cpp) if str(arg)==str(source) else str(touch_cpp_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
-run([str(gpupower_cpp) if str(arg)==str(source) else str(gpupower_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd]+['-I',str(ROOT/'drivers/NativeAdreno'),'-I',str(ROOT/'kits/ArmSmmu4K'),'-I',str(ROOT/'kits/AdrenoFirmware'),'-I',str(ROOT/'kits/AdrenoPM4')],cwd=r['directory'])
+run([str(gpupower_cpp) if str(arg)==str(source) else str(gpupower_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd]+['-I',str(ROOT/'drivers/Adreno740'),'-I',str(ROOT/'kits/ArmSmmu4K'),'-I',str(ROOT/'kits/AdrenoFirmware'),'-I',str(ROOT/'kits/AdrenoPM4')],cwd=r['directory'])
 run([str(cpufreq_cpp) if str(arg)==str(source) else str(cpufreq_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
 run([str(wifi_cpp) if str(arg)==str(source) else str(wifi_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd]+['-I',str(nativewifi/'include')],cwd=r['directory'])
 run([str(wifinet_cpp) if str(arg)==str(source) else str(wifinet_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd]+['-I',str(nativewifi/'include')],cwd=r['directory'])
@@ -281,8 +281,8 @@ run([str(backlight_class_cpp) if str(arg)==str(source) else str(backlight_class_
 run([str(battery_cpp) if str(arg)==str(source) else str(battery_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
 run([str(battery_class_cpp) if str(arg)==str(source) else str(battery_class_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],cwd=r['directory'])
 print(run(['python3',ROOT/'scripts/gen-touch-firmware.py'],text=True),end='')
-touch_c=[ROOT/'drivers/NativeGeniSpi/GeniSpi.c',ROOT/'drivers/NativeNovatekTouch/NvtProtocol.c',
-         ROOT/'drivers/NativeNovatekTouch/NvtTouchCore.c',ROOT/'build/native-touch/NvtFirmware.c']
+touch_c=[ROOT/'drivers/QcomGeniSpi/GeniSpi.c',ROOT/'drivers/ShengNovatekTouch/NvtProtocol.c',
+         ROOT/'drivers/ShengNovatekTouch/NvtTouchCore.c',ROOT/'build/native-touch/NvtFirmware.c']
 touch_objs=[]
 for src in touch_c+adsp_c+backlight_c:
     obj=touch_dir/(src.stem+'.o');touch_objs.append(obj)
@@ -292,12 +292,12 @@ run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-
 run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_WifiNet.cpp',wifinet_obj,wifinet_late])
 run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_ShengBattery.cpp',
      battery_class_obj,battery_class_late])
-wifi_module_objs=[Path(l.split(' ',1)[1]) for l in subprocess.check_output(['python3',ROOT/'scripts/build-native-wifi.py',nativewifi,touch_dir/'nativewifi'],text=True,timeout=600).splitlines() if l.startswith('OBJ ')]
+wifi_module_objs=[Path(l.split(' ',1)[1]) for l in subprocess.check_output(['python3',ROOT/'scripts/build-ath12k-wifi.py',nativewifi,touch_dir/'ath12k-wifi'],text=True,timeout=600).splitlines() if l.startswith('OBJ ')]
 archive=OUT/'libNativeLegacyDisplay.late.a';archive.unlink(missing_ok=True)
-print(run(['python3',ROOT/'scripts/build-native-hid-input.py'],text=True),end='')
-hid_dir=ROOT/'build/native-hid-input'
+print(run(['python3',ROOT/'scripts/build-sheng-hid-input.py'],text=True),end='')
+hid_dir=ROOT/'build/sheng-hid-input'
 print(run(['python3',ROOT/'scripts/build-arm-driver.py','NativeKeyStoreEvents'],text=True),end='')
-keyevents=ROOT/'build/native-keystore-events'
+keyevents=ROOT/'build/apple-key-store-state'
 keyevents_late=keyevents/'NativeKeyStoreEvents.late.o'
 run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func',
      '--globalize-symbol=__GLOBAL__sub_I_NativeKeyStoreEvents.cpp',
@@ -306,12 +306,12 @@ require(code((keyevents/'NativeKeyStoreEvents.o').read_bytes(),macho((keyevents/
         code(keyevents_late.read_bytes(),macho(keyevents_late.read_bytes())),'Owned event-service instructions unchanged by late init staging')
 run(['xcrun','ar','rcs',archive,late,OUT/'original-bindings.o',OUT/'LegacyDisplayProbe.o',hid_obj,keystore_obj,process_obj,trace_obj,log_obj,reset_obj,
      hid_dir/'NativeHidInput.late.o',hid_dir/'hid-original-bindings.o',keyevents_late,touch_cpp_obj,cpufreq_obj,gpupower_obj,wifi_obj,wifinet_late,adsp_obj,audio_obj,buttons_obj,backlight_obj,dpu_obj,backlight_class_late,battery_obj,battery_class_late,*touch_objs,*wifi_module_objs])
-sources=[ROOT/'drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp',
-         ROOT/'drivers/NativeMobileDisplay/NativeLegacyRequest.h',source,hid_source,keystore_source,process_source,trace_source,log_source,reset_source,ROOT/'kits/sheng/BootResetCore.h',ROOT/'kits/sheng/BootUiTraceCore.h',ROOT/'kits/sheng/BootUiTraceDetails.h',
-         ROOT/'drivers/NativeHidInput/NativeHidInput.cpp',ROOT/'scripts/build-native-hid-input.py',
-         ROOT/'drivers/NativeKeyStoreEvents/NativeKeyStoreEvents.cpp',touch_cpp,cpufreq_cpp,wifi_cpp,adsp_cpp,*adsp_c,audio_cpp,buttons_cpp,backlight_cpp,backlight_class_cpp,*backlight_c,ROOT/'kits/sheng/GeniI2c.h',battery_cpp,battery_class_cpp,ROOT/'kits/sheng/TouchBoard.h',
-         ROOT/'drivers/NativeGeniSpi/GeniSpi.c',ROOT/'drivers/NativeGeniSpi/GeniSpi.h',ROOT/'drivers/NativeNovatekTouch/NvtProtocol.c',
-         ROOT/'drivers/NativeNovatekTouch/NvtProtocol.h',ROOT/'drivers/NativeNovatekTouch/NvtTouchCore.c',ROOT/'drivers/NativeNovatekTouch/NvtTouchCore.h']
+sources=[ROOT/'drivers/GopFramebuffer/NativeLegacyDisplay.cpp',
+         ROOT/'drivers/GopFramebuffer/NativeLegacyRequest.h',source,hid_source,keystore_source,process_source,trace_source,log_source,reset_source,ROOT/'kits/sheng/BootResetCore.h',ROOT/'kits/sheng/BootUiTraceCore.h',ROOT/'kits/sheng/BootUiTraceDetails.h',
+         ROOT/'drivers/ShengHidInput/NativeHidInput.cpp',ROOT/'scripts/build-sheng-hid-input.py',
+         ROOT/'drivers/AppleKeyStoreState/NativeKeyStoreEvents.cpp',touch_cpp,cpufreq_cpp,wifi_cpp,adsp_cpp,*adsp_c,audio_cpp,buttons_cpp,backlight_cpp,backlight_class_cpp,*backlight_c,ROOT/'kits/sheng/GeniI2c.h',battery_cpp,battery_class_cpp,ROOT/'kits/sheng/TouchBoard.h',
+         ROOT/'drivers/QcomGeniSpi/GeniSpi.c',ROOT/'drivers/QcomGeniSpi/GeniSpi.h',ROOT/'drivers/ShengNovatekTouch/NvtProtocol.c',
+         ROOT/'drivers/ShengNovatekTouch/NvtProtocol.h',ROOT/'drivers/ShengNovatekTouch/NvtTouchCore.c',ROOT/'drivers/ShengNovatekTouch/NvtTouchCore.h']
 print(run(['python3',ROOT/'scripts/build-arm-driver.py','NativeGOPPresenter'],text=True),end='')
 gop=ROOT/'build/native-gop-presenter';gop_late=gop/'NativeGOPPresenter.late.o'
 run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_NativeGOPPresenter.cpp',
@@ -319,7 +319,7 @@ run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-
 require(code((gop/'NativeGOPPresenter.o').read_bytes(),macho((gop/'NativeGOPPresenter.o').read_bytes()))==
         code(gop_late.read_bytes(),macho(gop_late.read_bytes())),'Owned presenter instructions unchanged by late init staging')
 run(['xcrun','ar','rcs',archive,gop_late])
-sources.extend([ROOT/'drivers/NativeMobileDisplay/NativeGOPPresenter.cpp',ROOT/'drivers/NativeMobileDisplay/NativeGOPWire.h'])
+sources.extend([ROOT/'drivers/GopFramebuffer/NativeGOPPresenter.cpp',ROOT/'drivers/GopFramebuffer/NativeGOPWire.h'])
 (OUT/'build-report.json').write_text(json.dumps(dict(
     source_sha256={str(p.relative_to(ROOT)):sha(p) for p in sources},generated_abi_sha256=sha(OUT/'OriginalLegacyFramebufferABI.h'),
     original_candidate_sha256=sha(candidate),original_audit_sha256=sha(ROOT/'build/display-analysis/mobile-graphics-legacy-abi.json'),

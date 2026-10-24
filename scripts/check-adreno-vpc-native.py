@@ -10,7 +10,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'build/adreno-vpc-native-tests'
-sys.path.insert(0, str(ROOT / 'kits/NativePrelink'))
+sys.path.insert(0, str(ROOT / 'kits/XnuPrelink'))
 from native_prelink import macho
 
 
@@ -73,9 +73,9 @@ require(struct.unpack_from('<I', bundle)[0] == 3
 p = ROOT / 'build/darwinboot-owner-hvf-adreno-vpc-controls/gdb-stop.json'
 d = json.loads(p.read_text())
 r = {k: int(v, 16) for k, v in d['system_registers'].items()}
-plan = json.loads((ROOT / 'build/native-prelink/native-owner-air-outer-candidate.json').read_text())
+plan = json.loads((ROOT / 'build/xnu-prelink/native-owner-air-outer-candidate.json').read_text())
 require(d['kernel_sha256'] == plan['candidate_sha256']
-        == sha(ROOT / 'build/native-prelink/native-owner-air-outer-candidate.macho')
+        == sha(ROOT / 'build/xnu-prelink/native-owner-air-outer-candidate.macho')
         and d['qemu_accelerator'] == 'hvf' and not d['bounded_timeout_interrupted'],
         'Actual bounded same-candidate native boot')
 require(d['stop_symbol'] == '_exit' and d['entry_regions']['1:0:8']['bytes'] == '5d00000000000000'

@@ -27,8 +27,8 @@ if not valid:subprocess.run([sys.executable,ROOT/'scripts/check-adreno-hfi-votes
 firmware=ROOT/'.cache/firmware/sheng-gpu/qcom/gmu_gen70200.bin'
 if sha(firmware)!=provenance['firmware_policy']['sha256']:raise SystemExit('Firmware hash mismatch')
 subprocess.run([sys.executable,ROOT/'scripts/prepare-sheng-command-db-oracle.py'],check=True,timeout=30)
-sources=[board/'ShengGmu.c',board/'ShengGmuVotes.c',board/'ShengGmuCommandDb.c',kit/'AdrenoFirmware.c',kit/'AdrenoHfi.c',kit/'AdrenoHfiStartup.c',kit/'AdrenoHfiVotes.c']
-includes=['-I',kit,'-I',out,'-I',board]
+sources=[(ROOT/'kits/Sm8550Platform')/'ShengGmu.c',board/'ShengGmuVotes.c',(ROOT/'kits/Sm8550Platform')/'ShengGmuCommandDb.c',kit/'AdrenoFirmware.c',kit/'AdrenoHfi.c',kit/'AdrenoHfiStartup.c',kit/'AdrenoHfiVotes.c']
+includes=['-I',str(ROOT/'kits/Sm8550Platform'),'-I',kit,'-I',out,'-I',board]
 test=out/'test-startup'
 subprocess.run(['xcrun','clang','-std=gnu11','-O2','-Wall','-Wextra','-Werror','-Wno-deprecated-declarations',
  '-fsanitize=address,undefined','-DVOTES_SOURCE_ORACLE','-Wno-sign-compare',*includes,*sources,board/'ShengGmuHostTests.c',board/'ShengGmuVotesHostTests.c',board/'ShengGmuCommandDbHostTests.c',out/'command-db-oracle.c',ROOT/'build/adreno-hfi-votes/original-votes-oracle.c','-o',test],check=True,timeout=60)
@@ -72,7 +72,7 @@ consumer=out/'startup-boundary.o';subprocess.run(['xcrun','clang++',*flags,'-std
 if set(subprocess.check_output(['xcrun','nm','-u',consumer],text=True).split())!={'_ShengGmuColdStart','_ShengGmuBuildStartup','_ShengGmuCommandDbInputs'}:raise SystemExit('C++/C boundary mismatch')
 archive=out/'libShengGmuStartup.a';archive.unlink(missing_ok=True)
 subprocess.run(['xcrun','ar','rcs',archive,*objects],check=True,timeout=30)
-inputs=sources+[board/'ShengGmu.h',board/'ShengGmuHostTests.c',kit/'AdrenoFirmware.h',kit/'AdrenoHfi.h',kit/'AdrenoHfiStartup.h',kit/'AdrenoHfiVotes.h',board/'ShengGmuVotes.h',board/'ShengGmuCommandDb.h',board/'ShengGmuCommandDbHostTests.c',ROOT/'scripts/prepare-sheng-command-db-oracle.py',board/'ShengGmuVotesHostTests.c',ROOT/'scripts/prepare-sheng-gmu-votes.py',Path(__file__),ROOT/'scripts/prepare-sheng-gmu.py']
+inputs=sources+[(ROOT/'kits/Sm8550Platform')/'ShengGmu.h',board/'ShengGmuHostTests.c',kit/'AdrenoFirmware.h',kit/'AdrenoHfi.h',kit/'AdrenoHfiStartup.h',kit/'AdrenoHfiVotes.h',(ROOT/'kits/Sm8550Platform')/'ShengGmuVotes.h',(ROOT/'kits/Sm8550Platform')/'ShengGmuCommandDb.h',board/'ShengGmuCommandDbHostTests.c',ROOT/'scripts/prepare-sheng-command-db-oracle.py',board/'ShengGmuVotesHostTests.c',ROOT/'scripts/prepare-sheng-gmu-votes.py',Path(__file__),ROOT/'scripts/prepare-sheng-gmu.py']
 report.write_text(json.dumps(dict(passed=True,linux_revision=provenance['linux_revision'],
  votes_source_report_sha256=sha(out/'votes-source-report.json'),votes_oracle_sha256=sha(ROOT/'build/adreno-hfi-votes/original-votes-oracle.c'),source_report_sha256=sha(out/'source-report.json'),firmware_sha256=sha(firmware),
  sources={str(p.relative_to(ROOT)):sha(p) for p in inputs},objects={str(p.relative_to(ROOT)):sha(p) for p in objects},

@@ -12,7 +12,7 @@ import sys
 import xml.etree.ElementTree as E
 ROOT=Path(__file__).resolve().parents[1];OUT=ROOT/'build/adreno-vpc';OUT.mkdir(parents=True,exist_ok=True)
 KIT=ROOT/'kits/AdrenoPM4';MESA=ROOT/'.cache/mesa-work';HEAD='85fda3b36405bcaea8bffc64aa4f2651dc90770d';REFERENCE=ROOT/'build/adreno-shader-bindings'
-sys.path.insert(0,str(ROOT/'kits/NativePrelink'));from native_prelink import macho
+sys.path.insert(0,str(ROOT/'kits/XnuPrelink'));from native_prelink import macho
 def run(cmd,**kw):return subprocess.check_output([str(v) for v in cmd],timeout=60,**kw)
 def require(value,why):
  if not value:raise RuntimeError(why)

@@ -18,7 +18,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-KIT = ROOT / 'drivers/NativeMetal'
+KIT = ROOT / 'drivers/AdrenoMetal'
 LIBRARY = ROOT / '.cache/firmware/target-volumes/os-mount/System/Library/Frameworks/QuartzCore.framework/default.metallib'
 LIBRARY_SHA = '606f913adf520420f9b4bb666efb782a68c830f082f1e559e17b20d0d13adbc9'
 parser = argparse.ArgumentParser(description=__doc__)
@@ -46,7 +46,7 @@ if not loader:
 require(Path(loader).is_file(), 'Actual host Vulkan driver required')
 out = ROOT / 'build/ui-shader-coverage'
 out.mkdir(parents=True, exist_ok=True)
-bridge = ROOT / 'build/native-metal-bridge/host/libnative_metal_bridge.a'
+bridge = ROOT / 'build/adreno-metal-bridge/host/libadreno_metal_bridge.a'
 require(bridge.is_file(), 'Build the current host bridge first')
 flags = ['-std=c++17', '-fobjc-arc', '-O1', '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-deprecated-declarations', '-I', KIT]
 program = out / 'quartzcore_blur_host'

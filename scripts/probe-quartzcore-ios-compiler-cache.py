@@ -32,7 +32,7 @@ def sha(path):
 
 
 stage = json.loads((OUT / 'stage-report.json').read_text())
-if sha(ROOT / stage.get('parent_source_relative', 'drivers/NativeMetal/bridge/quartzcore_cache_ios.cpp')) != stage['parent_source_sha256']:
+if sha(ROOT / stage.get('parent_source_relative', 'drivers/AdrenoMetal/bridge/quartzcore_cache_ios.cpp')) != stage['parent_source_sha256']:
     raise SystemExit('Exact compiled own parent source required')
 if sha(ROOT / stage.get('stage_script_relative', 'scripts/stage-quartzcore-ios-compiler-peer.py')) != stage['stage_script_sha256']:
     raise SystemExit('Exact own staging implementation required')
@@ -47,7 +47,7 @@ for name, info in stage['outputs'].items():
         raise SystemExit('Exact signed own executable input: ' + name)
 if sha(OUT / 'ui-compiler-data-64.cdr') != stage['data_sha256'] or sha(OUT / 'offline-trust.bundle') != stage['trust_bundle_sha256']:
     raise SystemExit('Exact staged own Data and combined trust bundle required')
-base = ROOT / 'build/native-prelink/native-owner-turnip-compiler-qemu-candidate'
+base = ROOT / 'build/xnu-prelink/native-owner-turnip-compiler-qemu-candidate'
 plan = json.loads(base.with_suffix('.json').read_text())
 if sha(base.with_suffix('.macho')) != plan['candidate_sha256'] or plan['original_sha256'] != 'f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7':
     raise SystemExit('Exact preserved QEMU candidate and supplied original kernel required')

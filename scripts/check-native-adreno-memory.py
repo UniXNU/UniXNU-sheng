@@ -10,10 +10,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'kits/NativePrelink'))
+sys.path.insert(0, str(ROOT / 'kits/XnuPrelink'))
 from native_prelink import macho
-kit = ROOT / 'drivers/NativeAdreno'
-out = ROOT / 'build/native-adreno-memory'
+kit = ROOT / 'drivers/Adreno740'
+out = ROOT / 'build/adreno740-memory'
 out.mkdir(parents=True, exist_ok=True)
 (out / 'report.json').unlink(missing_ok=True)
 
@@ -651,7 +651,7 @@ smmu_objects = [smmu_report_path.parent / name for name in smmu_report['objects'
 for p in smmu_objects:
     if sha(p) != smmu_report['objects'][p.name]:
         raise SystemExit('Actual native SMMU object identity differs')
-archive = out / 'libNativeAdrenoMemory.a'
+archive = out / 'libAdreno740Memory.a'
 subprocess.run(['xcrun', 'ar', 'rcs', archive, *objects, *smmu_objects, pm4_object], check=True, timeout=30)
 provided = set()
 for obj in [*objects, *smmu_objects, pm4_object]:

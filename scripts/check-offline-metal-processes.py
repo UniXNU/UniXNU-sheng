@@ -9,7 +9,7 @@ import struct
 import subprocess
 import sys
 ROOT=Path(__file__).resolve().parents[1];OUT=ROOT/'build/native-offline-gpu'
-sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
+sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho,backed_offset
 def require(v,s):
     if not v:raise SystemExit(s)
@@ -18,12 +18,12 @@ def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 build=load(OUT/'build-report.json')
 for name,digest in build['source_sha256'].items():require(sha(ROOT/name)==digest,'Exact compiled broker source '+name)
 require(sha(OUT/'libNativeOfflineGPU.late.a')==build['archive_sha256'] and
-        sha(ROOT/'build/native-virtio-console/libNativeVirtioConsole.a')==build['console_archive_sha256'],'Actual broker/transport archives')
+        sha(ROOT/'build/virtio-mmio-console/libVirtioMmioConsole.a')==build['console_archive_sha256'],'Actual broker/transport archives')
 def text_code(p):
     b=p.read_bytes();m=macho(b);s=next(s for g in m['segments'] for s in g['sections'] if s['name']=='__text')
     return b[s['fileoff']:s['fileoff']+s['size']]
 require(text_code(OUT/'NativeOfflineGPU.o')==text_code(OUT/'NativeOfflineGPU.late.o'),'Only own initializer registration changes during staging')
-kernel=ROOT/'build/native-prelink/native-owner-offline-gpu-depth-stencil-candidate.macho';plan=load(kernel.with_suffix('.json'))
+kernel=ROOT/'build/xnu-prelink/native-owner-offline-gpu-depth-stencil-candidate.macho';plan=load(kernel.with_suffix('.json'))
 require(sha(kernel)==plan['candidate_sha256'] and sha(ROOT/'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf')==plan['native_sha256'],'Exact current native kernel and original-component candidate')
 raw=kernel.read_bytes();image=macho(raw)
 for module,digest in plan['original_executable_sha256'].items():

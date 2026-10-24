@@ -21,7 +21,7 @@ source=ROOT/'kits/sheng/HostMetalDiagnostic.mm';kit=ROOT/'kits/AirNir'
 obj=OUT/'Library.o';exe=OUT/'host-metal-originals'
 run(['xcrun','clang','-std=c11','-O2','-Wall','-Wextra','-Werror','-c',kit/'Library.c','-o',obj])
 run(['xcrun','clang++','-std=c++17','-O2','-Wall','-Wextra','-Werror','-Wno-deprecated-declarations',
-     '-fobjc-arc','-I',kit,'-I',ROOT/'drivers/NativeMetal',source,ROOT/'drivers/NativeMetal/HostMetalCommandServer.mm',obj,'-framework','Foundation','-framework','Metal','-o',exe])
+     '-fobjc-arc','-I',kit,'-I',ROOT/'drivers/AdrenoMetal',source,ROOT/'drivers/AdrenoMetal/HostMetalCommandServer.mm',obj,'-framework','Foundation','-framework','Metal','-o',exe])
 report_path=OUT/'original-air-gpu-report.json'
 with report_path.open('w') as output:run([exe,*paths,*(['--bgra'] if args.bgra else [])],stdout=output)
 d=json.loads(report_path.read_text())
@@ -48,7 +48,7 @@ for label,draw,bits in [('clear_only_control',False,0xff336699 if args.bgra else
             'Real completed GPU commands, timestamps and independently checked pixel readback')
 require([sha(p) for p in paths]==expected,'Original inputs remain unchanged after compilation/execution')
 (OUT/'qualification.json').write_text(json.dumps(dict(source_sha256=sha(source),
-    backend_sources={str(p.relative_to(ROOT)):sha(p) for p in (ROOT/'drivers/NativeMetal/HostMetalCommandServer.mm',ROOT/'drivers/NativeMetal/HostMetalCommandServer.h',ROOT/'drivers/NativeMetal/OfflineMetalWire.h',ROOT/'drivers/NativeMetal/OfflineMetalFunctionWire.h',ROOT/'drivers/NativeMetal/OfflineMetalQueueWire.h',ROOT/'drivers/NativeMetal/OfflineMetalTextureWire.h',ROOT/'drivers/NativeMetal/OfflineMetalDepthStencilWire.h',ROOT/'drivers/NativeMetal/OfflineMetalVertexWire.h',ROOT/'drivers/NativeMetal/OfflineMetalFenceWire.h',ROOT/'drivers/NativeMetal/OfflineMetalCommandWire.h',ROOT/'drivers/NativeMetal/OfflineMetalEventWire.h',ROOT/'drivers/NativeMetal/OfflineMetalSharedEventWire.h',ROOT/'drivers/NativeMetal/OfflineMetalSessionWire.h')},
+    backend_sources={str(p.relative_to(ROOT)):sha(p) for p in (ROOT/'drivers/AdrenoMetal/HostMetalCommandServer.mm',ROOT/'drivers/AdrenoMetal/HostMetalCommandServer.h',ROOT/'drivers/AdrenoMetal/OfflineMetalWire.h',ROOT/'drivers/AdrenoMetal/OfflineMetalFunctionWire.h',ROOT/'drivers/AdrenoMetal/OfflineMetalQueueWire.h',ROOT/'drivers/AdrenoMetal/OfflineMetalTextureWire.h',ROOT/'drivers/AdrenoMetal/OfflineMetalDepthStencilWire.h',ROOT/'drivers/AdrenoMetal/OfflineMetalVertexWire.h',ROOT/'drivers/AdrenoMetal/OfflineMetalFenceWire.h',ROOT/'drivers/AdrenoMetal/OfflineMetalCommandWire.h',ROOT/'drivers/AdrenoMetal/OfflineMetalEventWire.h',ROOT/'drivers/AdrenoMetal/OfflineMetalSharedEventWire.h',ROOT/'drivers/AdrenoMetal/OfflineMetalSessionWire.h')},
     reader_revision=subprocess.check_output(['git','-C',str(kit),'rev-parse','HEAD'],text=True).strip(),
     reader_sha256={p.name:sha(p) for p in (kit/'Library.h',kit/'Library.c')},
     process_sha256=sha(exe),report_sha256=sha(report_path),

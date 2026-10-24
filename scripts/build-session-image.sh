@@ -11,7 +11,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd); cd "$ROOT"
 T=build/session-image
 for f in prelink payload; do [[ -f $T/$f.template.json ]] || { echo "missing $T/$f.template.json" >&2; exit 1; }; done
 # A rerun of the same tag replaces its earlier candidate (emit_prelink refuses to overwrite).
-rm -f build/native-prelink/native-owner-ufs-cpu-desktop-$tag-candidate.macho build/native-prelink/native-owner-ufs-cpu-desktop-$tag-candidate.json
+rm -f build/xnu-prelink/native-owner-ufs-cpu-desktop-$tag-candidate.macho build/xnu-prelink/native-owner-ufs-cpu-desktop-$tag-candidate.json
 sed "s/@TAG@/$tag/g" $T/prelink.template.json > $T/prelink-$tag.json
 python3 - "$tag" "$@" <<'P'
 import json,sys
@@ -28,21 +28,21 @@ c[i+1:i+1]=[f'--kernel-arg=sheng-build-tag={tag}']+extra
 json.dump(c,open(f'build/session-image/payload-{tag}.json','w'),indent=1)
 P
 export PATH=/opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/lld/bin:$PATH
-# libNativeUfs.a and libNativeRamBlock.a are linked into the kernel; rebuild them from the driver sources (stale archives once hid new symbols).
-python3 scripts/build-arm-driver.py NativeUfs
-python3 scripts/build-arm-driver.py NativeRamBlock
+# libShengUfs.a and libRamBlock.a are linked into the kernel; rebuild them from the driver sources (stale archives once hid new symbols).
+python3 scripts/build-arm-driver.py ShengUfs
+python3 scripts/build-arm-driver.py RamBlock
 # libArmCpu.a (XNU_ARMCPU) carries the SPI attach/dispatch the GPU probe calls.
 python3 scripts/build-arm-driver.py ArmCpu
-python3 scripts/build-native-virtio-bindings.py --component NativeRamBlock --directory build/native-ram-block
-python3 scripts/build-native-legacy-display.py
+python3 scripts/build-virtio-mmio-bindings.py --component NativeRamBlock --directory build/ram-block
+python3 scripts/build-gop-legacy-display.py
 # NativeAdreno is linked into the kernel (XNU_NATIVE_ADRENO); the kits step appends to the service archive.
-python3 scripts/build-arm-driver.py NativeAdreno
-python3 scripts/build-native-adreno-kits.py
+python3 scripts/build-arm-driver.py Adreno740
+python3 scripts/build-adreno740-kits.py
 # The staged AGXAccelerator (original IOAcceleratorES descendant for the Metal discovery) is appended to that archive.
-python3 scripts/build-native-adreno-accelerator.py
+python3 scripts/build-adreno740-accelerator.py
 python3 scripts/build-cpu-desktop-kernel.py
 python3 -c "import json,subprocess;subprocess.check_call(json.load(open('build/session-image/prelink-$tag.json')))"
-K=build/native-prelink/native-owner-ufs-cpu-desktop-$tag-candidate.macho
+K=build/xnu-prelink/native-owner-ufs-cpu-desktop-$tag-candidate.macho
 python3 scripts/check-panic-entry-coverage.py --kernel "$K"
 python3 -c "import json,subprocess;subprocess.check_call(json.load(open('build/session-image/payload-$tag.json')))"
 export PATH=/opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/lld/bin:$PATH

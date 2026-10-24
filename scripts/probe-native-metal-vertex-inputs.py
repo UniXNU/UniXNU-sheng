@@ -3,7 +3,7 @@
 import argparse,os,hashlib,json,shutil,subprocess,tempfile,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
-p=argparse.ArgumentParser(description=__doc__);p.add_argument('--default-off',action='store_true');p.add_argument('--candidate-base',type=Path,default=ROOT/'build/native-prelink/native-owner-original-provider-probe-candidate');a=p.parse_args()
+p=argparse.ArgumentParser(description=__doc__);p.add_argument('--default-off',action='store_true');p.add_argument('--candidate-base',type=Path,default=ROOT/'build/xnu-prelink/native-owner-original-provider-probe-candidate');a=p.parse_args()
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 if subprocess.run(['pgrep','-f','qemu-system-aarch64'],capture_output=True).returncode==0:raise SystemExit('Another QEMU is running')
 kind='offline-metal-vertex-inputs';out=ROOT/'build'/kind

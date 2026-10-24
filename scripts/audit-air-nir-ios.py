@@ -9,7 +9,7 @@ import struct
 import subprocess
 import sys
 ROOT=Path(__file__).resolve().parents[1]
-sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
+sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--diagnostic',action='store_true',help='Audit the independently signed offline compiler instrument')

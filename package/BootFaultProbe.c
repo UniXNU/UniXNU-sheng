@@ -127,7 +127,7 @@ void boot_progress_critical_exit(int pid, char *out, unsigned long capacity) {
 #define REASON_CHUNK 65536
 static char reason_chunk[REASON_CHUNK+1];
 static volatile int reason_busy;
-// The throw site: the Metal plugin's uncaught-exception handler (drivers/NativeMetal/ExceptionDiag.h) leaves "SHENGTHROW <name> | <reason> | <return
+// The throw site: the Metal plugin's uncaught-exception handler (drivers/AdrenoMetal/ExceptionDiag.h) leaves "SHENGTHROW <name> | <reason> | <return
 // addresses>" in the malloc heap before the process aborts. The abort itself loses the frames between the dispatch callout and the throw, so this is
 // where the exception came from. Filled by the same scan; BootProgress.c reads it right after.
 char boot_progress_throw_text[330];

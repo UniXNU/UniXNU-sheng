@@ -16,12 +16,12 @@ import struct
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-KIT = ROOT / 'drivers/NativeMetal'
+KIT = ROOT / 'drivers/AdrenoMetal'
 OUT = ROOT / 'build/ui-shader-coverage/turnip-graphics'
 DRIVER = ROOT / 'build/mesa-tu/src/freedreno/vulkan/libvulkan_freedreno.dylib'
 PEER = ROOT / 'build/turnip-darwin-host/libhostiokit.dylib'
 LIBRARY = ROOT / '.cache/firmware/target-volumes/os-mount/System/Library/Frameworks/QuartzCore.framework/default.metallib'
-BRIDGE = ROOT / 'build/native-metal-bridge/host/libnative_metal_bridge.a'
+BRIDGE = ROOT / 'build/adreno-metal-bridge/host/libadreno_metal_bridge.a'
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path, required=True, help='Fresh directory; preserve actual archive, cache, logs and identities')
 parser.add_argument('--cross-build-ios', action='store_true', help='Also link/sign the same instrument for iOS; does not run it')
@@ -84,7 +84,7 @@ if args.cross_build_ios:
     require(sha(peer) == peer_build['outputs'][peer.name]['sha256'], 'Exact separately signed software peer')
     for name, digest in peer_build['sources'].items():
         require(sha(ROOT / name) == digest, 'Exact software peer compiled source: ' + name)
-    bridge = ROOT / 'build/native-metal-bridge/ios/libnative_metal_bridge.a'
+    bridge = ROOT / 'build/adreno-metal-bridge/ios/libadreno_metal_bridge.a'
     policy = peer_dir / 'compiler-entitlements.plist'
     import plistlib
     require(plistlib.loads(policy.read_bytes()) == {'com.apple.private.security.no-container': True,

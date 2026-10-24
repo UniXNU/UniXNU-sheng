@@ -17,7 +17,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'build/quartzcore-ios-compiler-peer'
-sys.path.insert(0, str(ROOT / 'kits/NativePrelink'))
+sys.path.insert(0, str(ROOT / 'kits/XnuPrelink'))
 from native_prelink import macho
 
 
@@ -80,7 +80,7 @@ shutil.copyfile(peer, OUT / peer.name)
 policy = peer_dir / 'compiler-entitlements.plist'
 permissions = {'com.apple.private.security.no-container': True, 'com.apple.private.bindfs-allow': True}
 require(plistlib.loads(policy.read_bytes()) == permissions, 'Exact own helper permissions, no no-sandbox')
-source = ROOT / 'drivers/NativeMetal/bridge/quartzcore_cache_ios.cpp'
+source = ROOT / 'drivers/AdrenoMetal/bridge/quartzcore_cache_ios.cpp'
 sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True, timeout=10).strip()
 parent = OUT / 'air-native'
 run(['xcrun', 'clang++', '-target', 'arm64-apple-ios17.0', '-isysroot', sdk, '-O1', '-fstack-protector-strong',
@@ -157,7 +157,7 @@ finally:
     run(['hdiutil', 'detach', physical])
 require(sha(seed) == seed_report['sha256'] and sections(driver) == driver_identity, 'Source seed and driver remain unchanged')
 report = dict(evidence='own cross-build, signing and mutable staging only; no QEMU or hardware execution',
-    stage_script_sha256=sha(Path(__file__)), parent_source_sha256=sha(source), native_metal_revision=subprocess.check_output(['git', '-C', str(ROOT / 'drivers/NativeMetal'), 'rev-parse', 'HEAD'], text=True).strip(),
+    stage_script_sha256=sha(Path(__file__)), parent_source_sha256=sha(source), native_metal_revision=subprocess.check_output(['git', '-C', str(ROOT / 'drivers/AdrenoMetal'), 'rev-parse', 'HEAD'], text=True).strip(),
     qualified_host_report_sha256=sha(qualified_path), qualified_host_sources=qualified['sources_sha256'], software_peer_report_sha256=sha(peer_dir / 'build-report.json'),
     outputs=outputs, staged_paths=staged, driver_input_sha256=sha(driver), driver_identity=driver_identity,
     own_parent_permissions=permissions, source_seed_sha256=sha(seed), data_bytes=image.stat().st_size, data_sha256=sha(image),

@@ -6,7 +6,7 @@ from pathlib import Path
 import struct
 import sys
 ROOT=Path(__file__).resolve().parents[1];OUT=ROOT/'build/metal-runtime-diagnostic'
-sys.path.insert(0,str(ROOT/'kits/NativePrelink'))
+sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho
 def require(value,why):
     if not value:raise SystemExit(why)
@@ -26,8 +26,8 @@ original=(ROOT/'build/original-static-system-trust/original-static-system.bundle
 require(struct.unpack_from('<I',bundle)[0]==3 and bundle[offsets[1]:offsets[2]]==original[old[0]:old[1]] and bundle[offsets[2]:]==original[old[1]:],'Both complete original trust modules remain unchanged')
 require(bundle[offsets[0]+24:offsets[0]+44].hex()==build['cdhash'],'Exact explicitly trusted own CodeDirectory')
 p=ROOT/'build/darwinboot-owner-hvf-metal-runtime-complete/gdb-stop.json';d=json.loads(p.read_text())
-plan=json.loads((ROOT/'build/native-prelink/native-owner-air-outer-candidate.json').read_text())
-require(d['kernel_sha256']==plan['candidate_sha256']==sha(ROOT/'build/native-prelink/native-owner-air-outer-candidate.macho'),'Exact actual candidate')
+plan=json.loads((ROOT/'build/xnu-prelink/native-owner-air-outer-candidate.json').read_text())
+require(d['kernel_sha256']==plan['candidate_sha256']==sha(ROOT/'build/xnu-prelink/native-owner-air-outer-candidate.macho'),'Exact actual candidate')
 require(d['qemu_accelerator']=='hvf' and not d['bounded_timeout_interrupted'] and d['stop_symbol']=='_exit' and d['entry_regions']['1:0:8']['bytes']=='4a00000000000000' and int(d['x0'],16)==d['actual_initproc_pointer'],'Actual init exit(74) after all ABI and missing-provider checks')
 r={k:int(v,16) for k,v in d['system_registers'].items()}
 require(d['native_4k_mmu_observed'] and (r['TCR_EL1']>>14)&3==0 and (r['TCR_EL1']>>30)&3==2 and r['SCTLR_EL1']&1 and r['TTBR0_EL1'] and r['TTBR1_EL1'] and set(d['commpage_user64_shifts'].values())=={12},'Actual active CPU 4K and user ABI')
