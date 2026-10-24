@@ -884,24 +884,43 @@ void pDmaSync(uint64_t, size_t, int) {}
 struct FwCache {char name[24]; uint8_t *data; size_t size; bool tried;} gFw[8];
 // The radio's address (wlan_mac.bin): this board's firmware reports none, so a locally administered address is made from /chosen/unique-chip-id,
 // the same on every boot of the same image.
+// The address itself: made from /chosen/unique-chip-id (FNV-1a, locally administered, unicast), the same at every boot.
+bool boardMac(uint8_t m[6]) {
+    IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
+    OSData *id = chosen ? OSDynamicCast(OSData, chosen->getProperty("unique-chip-id")) : nullptr;
+    uint64_t seed = 0;
+    if (id && id->getLength() >= sizeof seed) memcpy(&seed, id->getBytesNoCopy(), sizeof seed);
+    OSSafeReleaseNULL(chosen);
+    if (!seed) return false;
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (unsigned i = 0; i < 8; ++i) h = (h ^ ((seed >> (8 * i)) & 0xff)) * 0x100000001b3ull;
+    for (unsigned i = 0; i < 6; ++i) m[i] = (uint8_t)(h >> (8 * i));
+    m[0] = (uint8_t)((m[0] & 0xfe) | 0x02);
+    return true;
+}
 int macFile(const uint8_t **data, size_t *size) {
     static char text[40]; static size_t len;
     if (!len) {
-        IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
-        OSData *id = chosen ? OSDynamicCast(OSData, chosen->getProperty("unique-chip-id")) : nullptr;
-        uint64_t seed = 0;
-        if (id && id->getLength() >= sizeof seed) memcpy(&seed, id->getBytesNoCopy(), sizeof seed);
-        OSSafeReleaseNULL(chosen);
-        if (!seed) return -1;
-        uint64_t h = 0xcbf29ce484222325ull;
-        for (unsigned i = 0; i < 8; ++i) h = (h ^ ((seed >> (8 * i)) & 0xff)) * 0x100000001b3ull;
         uint8_t m[6];
-        for (unsigned i = 0; i < 6; ++i) m[i] = (uint8_t)(h >> (8 * i));
-        m[0] = (uint8_t)((m[0] & 0xfe) | 0x02);
+        if (!boardMac(m)) return -1;
         len = (size_t)snprintf(text, sizeof text, "address=%02x%02x%02x%02x%02x%02x\n", m[0], m[1], m[2], m[3], m[4], m[5]);
     }
     *data = (const uint8_t *)text; *size = len;
     return 0;
+}
+// The system's own record of the Wi-Fi address, as a boot loader leaves it in the device tree: the wireless daemon derives every network's
+// private address from it (MobileGestalt WifiAddressData) and aborts a join without it.
+void publishMac() {
+    uint8_t m[6];
+    if (!boardMac(m)) return;
+    if (IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane)) {
+        if (!chosen->getProperty("mac-address-wifi0")) chosen->setProperty("mac-address-wifi0", m, sizeof m);
+        chosen->release();
+    }
+    if (IORegistryEntry *wlan = IORegistryEntry::fromPath("/arm-io/wlan", gIODTPlane)) {
+        if (!wlan->getProperty("local-mac-address")) wlan->setProperty("local-mac-address", m, sizeof m);
+        wlan->release();
+    }
 }
 int pFwGet(const char *path, const uint8_t **data, size_t *size) {
     const char *base = path;
@@ -1392,6 +1411,7 @@ void bringUp(Window &gcc, Window &tlmm) {
 
 void wifiThread(void *arg, wait_result_t) {
     thread_set_thread_name(current_thread(), "sheng-wifi");
+    publishMac();
     Window gcc = {}, tlmm = {}, parf = {}, dbi = {};
     if (!mapWindow(gcc, kGcc, 0x80000) || !mapWindow(tlmm, kTlmm, 0x60000)) {native_wifi_stats[0] = -1; release(gcc); release(tlmm); return;}
     native_wifi_stats[0] = 1;
