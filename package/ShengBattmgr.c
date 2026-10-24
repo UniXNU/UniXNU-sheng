@@ -1,32 +1,47 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 #include "ShengBattmgr.h"
 
-/* Battery properties: status 0, health 1, present 2, charge type 3, capacity 4 (hundredths of a percent), SOH 5, OCV 6, voltage now 7
- * (uV), voltage max 8, current now 9 (uA), charge control limit 10/11, temperature 12, technology 13, charge counter 14 (uAh), cycle
- * count 15, full design 16 (uAh), full 17 (uAh), model 18, time to full 19 (s), time to empty 20 (s). USB: online 0, voltage now 1
- * (uV), voltage max 2, current now 3 (uA), current max 4, input current limit 5, type 6. */
+/* Battery properties as this board's firmware numbers them (one more after charge control limit max than the common list): status 0,
+ * health 1, present 2, charge type 3, capacity 4 (hundredths of a percent), SOH 5, OCV 6, voltage now 7 (uV), voltage max 8, current
+ * now 9 (uA), thermal level 10, its max 11, charge current 12 (uA), temperature 13 (hundredths of a degree), technology 14, charge
+ * counter 15 (uAh), cycle count 16, full design 17 (uAh), full 18 (uAh), model 19 (a string), time to full 20 (s), time to empty 21 (s).
+ * USB: online 0, voltage now 1 (uV), voltage max 2, current now 3 (uA), current max 4, input current limit 5, type 6, adapter type 7.
+ * Board: battery authenticated 3, adapter type 7, PD adapter authenticated 0x18, input suspended 0x2a, adapter watts 0x33, the fuel
+ * gauges 0x8a/0x8b and 0xa6/0xa7, second cell authenticated 0xa5. */
 static const struct {uint8_t opcode, property, slow;} kFields[BmFields] = {
     [BmStatus] = {SHENG_BATTMGR_OP_BATTERY_GET, 0, 0},
     [BmPresent] = {SHENG_BATTMGR_OP_BATTERY_GET, 2, 0},
     [BmCapacity] = {SHENG_BATTMGR_OP_BATTERY_GET, 4, 0},
     [BmVoltage] = {SHENG_BATTMGR_OP_BATTERY_GET, 7, 0},
     [BmCurrent] = {SHENG_BATTMGR_OP_BATTERY_GET, 9, 0},
-    [BmTemperature] = {SHENG_BATTMGR_OP_BATTERY_GET, 12, 0},
-    [BmCharge] = {SHENG_BATTMGR_OP_BATTERY_GET, 14, 0},
+    [BmTemperature] = {SHENG_BATTMGR_OP_BATTERY_GET, 13, 0},
+    [BmCharge] = {SHENG_BATTMGR_OP_BATTERY_GET, 15, 0},
     [BmUsbOnline] = {SHENG_BATTMGR_OP_USB_GET, 0, 0},
     [BmUsbType] = {SHENG_BATTMGR_OP_USB_GET, 6, 0},
     [BmUsbVoltage] = {SHENG_BATTMGR_OP_USB_GET, 1, 0},
     [BmUsbCurrent] = {SHENG_BATTMGR_OP_USB_GET, 3, 0},
-    [BmTimeToEmpty] = {SHENG_BATTMGR_OP_BATTERY_GET, 20, 0},
-    [BmTimeToFull] = {SHENG_BATTMGR_OP_BATTERY_GET, 19, 0},
+    [BmTimeToEmpty] = {SHENG_BATTMGR_OP_BATTERY_GET, 21, 0},
+    [BmTimeToFull] = {SHENG_BATTMGR_OP_BATTERY_GET, 20, 0},
     /* the fuel gauges: remaining and full charge of each (mAh) */
     [BmGauge1Remaining] = {SHENG_BATTMGR_OP_BOARD_GET, 0x8a, 0},
     [BmGauge1Full] = {SHENG_BATTMGR_OP_BOARD_GET, 0x8b, 0},
     [BmGauge2Remaining] = {SHENG_BATTMGR_OP_BOARD_GET, 0xa6, 0},
     [BmGauge2Full] = {SHENG_BATTMGR_OP_BOARD_GET, 0xa7, 0},
-    [BmFull] = {SHENG_BATTMGR_OP_BATTERY_GET, 17, 1},
-    [BmDesign] = {SHENG_BATTMGR_OP_BATTERY_GET, 16, 1},
-    [BmCycles] = {SHENG_BATTMGR_OP_BATTERY_GET, 15, 1},
+    [BmFull] = {SHENG_BATTMGR_OP_BATTERY_GET, 18, 1},
+    [BmDesign] = {SHENG_BATTMGR_OP_BATTERY_GET, 17, 1},
+    [BmCycles] = {SHENG_BATTMGR_OP_BATTERY_GET, 16, 1},
+    [BmUsbAdapter] = {SHENG_BATTMGR_OP_USB_GET, 7, 0},
+    [BmUsbLimit] = {SHENG_BATTMGR_OP_USB_GET, 5, 0},
+    [BmUsbMax] = {SHENG_BATTMGR_OP_USB_GET, 4, 0},
+    [BmChargeType] = {SHENG_BATTMGR_OP_BATTERY_GET, 3, 0},
+    [BmThermalLevel] = {SHENG_BATTMGR_OP_BATTERY_GET, 10, 0},
+    [BmChargeCurrent] = {SHENG_BATTMGR_OP_BATTERY_GET, 12, 0},
+    [BmRealType] = {SHENG_BATTMGR_OP_BOARD_GET, 0x07, 0},
+    [BmPowerMax] = {SHENG_BATTMGR_OP_BOARD_GET, 0x33, 0},
+    [BmPdVerified] = {SHENG_BATTMGR_OP_BOARD_GET, 0x18, 0},
+    [BmAuthentic] = {SHENG_BATTMGR_OP_BOARD_GET, 0x03, 1},
+    [BmSlaveAuthentic] = {SHENG_BATTMGR_OP_BOARD_GET, 0xa5, 1},
+    [BmInputSuspend] = {SHENG_BATTMGR_OP_BOARD_GET, 0x2a, 0},
 };
 #define NO_CYCLE 0xff
 
@@ -44,6 +59,8 @@ void sheng_battmgr_init(ShengBattmgr *b)
     for (unsigned i = 0; i < sizeof *b; ++i) ((uint8_t *)b)[i] = 0;
     b->cursor = NO_CYCLE;
     b->last_timeout = -1;
+    b->sdp_limit_ua = 900000;  /* a configured USB 3 port's 900 mA; the firmware's current limiting backs off if the port sags */
+    b->limit_port = -1;
 }
 
 uint32_t sheng_battmgr_enable_request(uint8_t out[SHENG_BATTMGR_ENABLE_BYTES])
@@ -79,7 +96,18 @@ void sheng_battmgr_refresh(ShengBattmgr *b, int slow)
 
 uint32_t sheng_battmgr_next(ShengBattmgr *b, uint8_t out[SHENG_BATTMGR_REQUEST_BYTES])
 {
-    if (b->cursor == NO_CYCLE || b->in_flight || b->cursor >= BmFields) return 0;
+    if (b->in_flight || b->limit_in_flight) return 0;
+    if (b->limit_due) {
+        header(out, SHENG_BATTMGR_OP_USB_SET);
+        put32(out + 12, 0);
+        put32(out + 16, 5);  /* input current limit */
+        put32(out + 20, b->limit_due);
+        b->limit_in_flight = b->limit_due;
+        b->limit_due = 0;
+        b->limit_tries++;
+        return SHENG_BATTMGR_REQUEST_BYTES;
+    }
+    if (b->cursor == NO_CYCLE || b->cursor >= BmFields) return 0;
     header(out, kFields[b->cursor].opcode);
     put32(out + 12, 0);
     put32(out + 16, kFields[b->cursor].property);
@@ -88,12 +116,31 @@ uint32_t sheng_battmgr_next(ShengBattmgr *b, uint8_t out[SHENG_BATTMGR_REQUEST_B
     return SHENG_BATTMGR_REQUEST_BYTES;
 }
 
+/* The input current limit a port type gets from the host side: a standard port (SDP 1) the configured value, a charging downstream port
+ * (CDP 3) its 1.5 A; others (dedicated chargers, Type-C current, PD contracts) are the firmware's own. */
+static uint32_t wanted_limit(const ShengBattmgr *b, int port)
+{
+    return port == 1 ? b->sdp_limit_ua : port == 3 ? 1500000u : 0u;
+}
+
+/* After a cycle: a set is due when the port wants a higher limit than the firmware reports, at most three tries per port type. */
+static void check_limit(ShengBattmgr *b)
+{
+    const int port = (b->valid >> BmUsbAdapter) & 1 ? b->value[BmUsbAdapter] : (b->valid >> BmUsbType) & 1 ? b->value[BmUsbType] : 0;
+    if (port != b->limit_port) {b->limit_port = port; b->limit_tries = 0;}
+    const uint32_t want = wanted_limit(b, port);
+    if (!want || b->limit_tries >= 3) return;
+    if ((b->valid >> BmUsbLimit) & 1 && b->value[BmUsbLimit] >= (int32_t)want - 100000) return;  /* 100 mA under it: input limiting */
+    b->limit_due = want;
+}
+
 /* Ends the cycle when the cursor ran past the last field; starts the remembered one. Returns 1 when a cycle ended. */
 static int finish(ShengBattmgr *b)
 {
     if (b->cursor == NO_CYCLE || b->cursor < BmFields) return 0;
     b->cursor = NO_CYCLE;
     b->cycles_done++;
+    check_limit(b);
     if (b->refresh_wanted) {
         const int slow = b->refresh_wanted == 2;
         b->refresh_wanted = 0;
@@ -104,6 +151,7 @@ static int finish(ShengBattmgr *b)
 
 void sheng_battmgr_timeout(ShengBattmgr *b)
 {
+    if (b->limit_in_flight) {b->limit_in_flight = 0; b->limit_result = -60; b->timeouts++; return;}
     if (b->cursor == NO_CYCLE || !b->in_flight) return;
     b->timeouts++;
     b->last_timeout = b->cursor;
@@ -123,6 +171,14 @@ int sheng_battmgr_receive(ShengBattmgr *b, const uint8_t *data, uint32_t length)
     }
     if (type != SHENG_BATTMGR_TYPE_REQUEST) {b->ignored++; return BmIgnored;}
     if (opcode == SHENG_BATTMGR_OP_REQUEST_NOTIFICATION) {b->enabled = 1; return BmEnabled;}
+    if (opcode == SHENG_BATTMGR_OP_USB_SET) {
+        if (!b->limit_in_flight || length < 24) {b->ignored++; return BmIgnored;}
+        b->limit_result = (int32_t)le32(data + 20);
+        if (!b->limit_result) b->limit_sets++;
+        b->limit_in_flight = 0;
+        sheng_battmgr_refresh(b, 0);  /* read the limit back */
+        return BmAnswer;
+    }
     if (b->cursor == NO_CYCLE || b->cursor >= BmFields || !b->in_flight || length < 24) {b->ignored++; return BmIgnored;}
     const uint32_t property = le32(data + 12), value = le32(data + 16), result = le32(data + 20);
     if (opcode != kFields[b->cursor].opcode || property != kFields[b->cursor].property) {b->ignored++; return BmIgnored;}
