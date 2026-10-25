@@ -3,6 +3,9 @@
 [source."AvailabilityVersions"]
 commit = "933f9360f1b70dfbda5548386a3d65e0358b4f7d"
 
+[source."IOStorageFamily"]
+commit = "e45fbe30a7879e0b16e26dddb78538f1b00e0bff"
+
 [source."corecrypto-2023"]
 commit = "11fba65b12d8830630e248dfa8344caf8b065f26"
 
@@ -17,6 +20,9 @@ commit = "a00a4cc36da2110578bcf3b8eeeeb93dcc7f4e11"
 
 [source."libpthread"]
 commit = "c0e60fb5ecfc54cf379c261d3f9572cc22ded891"
+
+[source."sm8550"]
+commit = "23b2049fcd9e30356161def84231334fb55ecca9"
 
 [source."xnu"]
 commit = "d8b80295118ef25ac3a784134bcf95cd8e88109f"

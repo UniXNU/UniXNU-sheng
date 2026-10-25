@@ -19,7 +19,7 @@
 #define SHENG_AUDIO_OUT_CHANNELS 2u
 #define SHENG_AUDIO_IN_CHANNELS 1u
 #define SHENG_AUDIO_PERIOD_FRAMES 480u        /* 10 ms */
-#define SHENG_AUDIO_RING_FRAMES 16384u
+#define SHENG_AUDIO_RING_FRAMES 65536u        /* 1.37 s: room for the 300 ms lead and the audio server's late IO cycles */
 
 enum {ShengAudioMemoryControl = 0, ShengAudioMemoryOutput = 1, ShengAudioMemoryInput = 2};
 enum {ShengAudioStartOutput = 0, ShengAudioStopOutput = 1, ShengAudioStartInput = 2, ShengAudioStopInput = 3};
@@ -38,6 +38,7 @@ typedef struct {
     volatile uint64_t out_written;           /* the plug-in: the sample time after the last frame it wrote */
     volatile uint64_t in_written;            /* the service: the sample time after the last captured frame in the ring */
     volatile uint64_t out_written_host;      /* the plug-in: host time of its last write */
+    volatile uint32_t out_holes;             /* the service: written periods that held a run of 64 or more silent frames */
 } ShengAudioControl;
 
 /* Second half of the control page: the plug-in records what the audio server asked for and it does not answer (selector, object id
@@ -54,6 +55,19 @@ typedef struct {
      * least and most of each, and the frames of the last write. */
     volatile int32_t ahead_min, ahead_max, behind_min, behind_max;
     volatile uint32_t io_frames, writes;
+    /* Writes that began inside frames already written (another IO context of the audio server mixing into the same ring), and the most
+     * frames such a write went back. */
+    volatile uint32_t overlaps, overlap_max;
+    /* Every frame written; writes that began past the end of the one before (a skipped stretch) and the frames skipped; the time from
+     * one write to the next in buckets below 15, 25, 40, 80 and 160 ms and above (one IO cycle of 1024 frames is 21.3 ms). */
+    volatile uint32_t frames_total, gaps, gap_frames;
+    volatile uint32_t interval[6];
+    volatile uint64_t last_end, last_host;
+    volatile int32_t skew_min, skew_max;          /* the audio server's current sample time minus the timeline's, least and most */
+    /* The audio server's IO thread as the plug-in sees it: current and base priority, scheduling policy, whether it has a time constraint
+     * and that constraint's period, computation and constraint (host ticks); the lowest current priority seen. */
+    volatile int32_t io_pri, io_base, io_policy, io_tc, io_pri_min;
+    volatile uint32_t io_period, io_computation, io_constraint;
 } ShengAudioDiag;
 /* After it, every distinct property access in the order the audio server made it: selector, then object << 24 | scope's first byte << 16 |
  * kind (1 set, 0 get) | 2 if it failed. */

@@ -972,18 +972,23 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if (&native_audio_service && native_audio_service[0]) {
       const ShengAudioControl *ac = &sheng_audio_diag && sheng_audio_diag() ?
           (const ShengAudioControl *)((const uint8_t *)sheng_audio_diag() - SHENG_AUDIO_DIAG_OFFSET) : NULL;
-      snprintf(row, sizeof row, "[audio-service] st=%d opens=%d closes=%d requests=%d refused=%d maps=%d press=%d peak=%d/%d late=%u written=%llu",
+      snprintf(row, sizeof row, "[audio-service] st=%d opens=%d closes=%d requests=%d refused=%d maps=%d press=%d peak=%d/%d late=%u holes=%u written=%llu",
                native_audio_service[0], native_audio_service[1], native_audio_service[2], native_audio_service[3], native_audio_service[4],
                native_audio_service[5], native_audio_service[6], native_audio_service[7] & 0xffff, (native_audio_service[7] >> 16) & 0xffff,
-               ac ? ac->out_late : 0, ac ? (unsigned long long)ac->out_written : 0ull);
+               ac ? ac->out_late : 0, ac ? ac->out_holes : 0, ac ? (unsigned long long)ac->out_written : 0ull);
       at = put(out, at, cap, row, sizeof row);
     }
     // Where the audio server writes and reads relative to the play position (frames): write-ahead least..most, read-behind least..most,
     // frames of the last write, writes.
     if (&sheng_audio_diag && sheng_audio_diag()) {
       const ShengAudioDiag *d = sheng_audio_diag();
-      snprintf(row, sizeof row, "[audio-io] ahead=%d..%d behind=%d..%d frames=%u writes=%u", d->ahead_min, d->ahead_max, d->behind_min,
-               d->behind_max, d->io_frames, d->writes);
+      snprintf(row, sizeof row, "[audio-io] ahead=%d..%d behind=%d..%d frames=%u writes=%u overlap=%u/%u total=%u gaps=%u/%u int=%u/%u/%u/%u/%u/%u skew=%d..%d",
+               d->ahead_min, d->ahead_max, d->behind_min, d->behind_max, d->io_frames, d->writes, d->overlaps, d->overlap_max,
+               d->frames_total, d->gaps, d->gap_frames, d->interval[0], d->interval[1], d->interval[2], d->interval[3], d->interval[4],
+               d->interval[5], d->skew_min, d->skew_max);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[audio-thread] pri=%d base=%d min=%d policy=%d tc=%d period=%u comp=%u constraint=%u", d->io_pri, d->io_base,
+               d->io_pri_min, d->io_policy, d->io_tc, d->io_period, d->io_computation, d->io_constraint);
       at = put(out, at, cap, row, sizeof row);
     }
     // Playback and capture against the shared timeline (AudioProbe.cpp syncPlayback / syncCapture).
