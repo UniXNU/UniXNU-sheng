@@ -23,6 +23,9 @@
 
 enum {ShengAudioMemoryControl = 0, ShengAudioMemoryOutput = 1, ShengAudioMemoryInput = 2};
 enum {ShengAudioStartOutput = 0, ShengAudioStopOutput = 1, ShengAudioStartInput = 2, ShengAudioStopInput = 3};
+/* Scalar input: the address of CoreAudio's host clock frequency constant in the caller (24 MHz, the timer of Apple's chips); the service
+ * sets it to this board's timer frequency. */
+enum {ShengAudioSetHostClock = 4};
 enum {ShengAudioOutputRunning = 1u << 0, ShengAudioInputRunning = 1u << 1, ShengAudioOutputReady = 1u << 2, ShengAudioInputReady = 1u << 3};
 
 typedef struct {
@@ -68,6 +71,10 @@ typedef struct {
      * and that constraint's period, computation and constraint (host ticks); the lowest current priority seen. */
     volatile int32_t io_pri, io_base, io_policy, io_tc, io_pri_min;
     volatile uint32_t io_period, io_computation, io_constraint;
+    /* CoreAudio's host clock frequency (Hz) after the plug-in asked the service to set it, and that request's result (0 done, -1 the
+     * constant was not found, else the kernel's return). */
+    volatile uint32_t host_clock;
+    volatile int32_t host_clock_result;
 } ShengAudioDiag;
 /* After it, every distinct property access in the order the audio server made it: selector, then object << 24 | scope's first byte << 16 |
  * kind (1 set, 0 get) | 2 if it failed. */
