@@ -367,6 +367,7 @@ int ar_parse(const uint8_t *in, uint32_t length, ArAnswer *a)
     case AR_OP_READ_DONE:
         if (p.payload_bytes < 20) return ArBad;
         a->status = le32(d); a->address = le32(d + 4) | (uint64_t)le32(d + 8) << 32; a->handle = le32(d + 12); a->data_bytes = le32(d + 16);
+        a->offset = p.payload_bytes >= 24 ? le32(d + 20) : 0;   /* RD_SH_MEM_EP_DATA_BUFFER_DONE_V2: status, address, handle, size, offset */
         return ArReadDone;
     default:
         return ArUnknown;

@@ -111,6 +111,8 @@ extern volatile uint32_t native_audio_amps[6][4] __attribute__((weak_import));
 extern volatile int32_t native_adsp_audio[8] __attribute__((weak_import));
 extern volatile int32_t native_mic_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_audio_service[8] __attribute__((weak_import));
+extern volatile int32_t native_audio_sync[5] __attribute__((weak_import));
+extern volatile int32_t native_audio_passed __attribute__((weak_import));
 extern volatile uint32_t native_mic_regs[16] __attribute__((weak_import));
 extern volatile int32_t native_mic_capture[8] __attribute__((weak_import));
 #include "ShengAudioAbi.h"
@@ -956,8 +958,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     // What the plug-in could not answer: loads of the plug-in, then up to 16 'selector'@object/scope entries.
     if (&sheng_audio_diag && sheng_audio_diag()) {
       const ShengAudioDiag *d = sheng_audio_diag();
-      int n = snprintf(row, sizeof row, "[audio-props] loads=%u vol=%u sets=%u mix=%u unknown=%u", d->loads, d->volume_milli, d->volume_sets,
-                       d->mix_peak, d->count);
+      int n = snprintf(row, sizeof row, "[audio-props] loads=%u vol=%u sets=%u mix=%u inmiss=%u unknown=%u", d->loads, d->volume_milli, d->volume_sets,
+                       d->mix_peak, d->in_misses, d->count);
       for (unsigned i = 0; i < d->count && i < 16 && n > 0 && n < (int)sizeof row - 16; ++i) {
         const uint32_t s = d->selector[i], w = d->where[i];
         n += snprintf(row + n, sizeof row - (size_t)n, " %c%c%c%c@%u%c", (char)(s >> 24), (char)(s >> 16), (char)(s >> 8), (char)s, w >> 24,
@@ -974,6 +976,21 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                native_audio_service[0], native_audio_service[1], native_audio_service[2], native_audio_service[3], native_audio_service[4],
                native_audio_service[5], native_audio_service[6], native_audio_service[7] & 0xffff, (native_audio_service[7] >> 16) & 0xffff,
                ac ? ac->out_late : 0, ac ? (unsigned long long)ac->out_written : 0ull);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    // Where the audio server writes and reads relative to the play position (frames): write-ahead least..most, read-behind least..most,
+    // frames of the last write, writes.
+    if (&sheng_audio_diag && sheng_audio_diag()) {
+      const ShengAudioDiag *d = sheng_audio_diag();
+      snprintf(row, sizeof row, "[audio-io] ahead=%d..%d behind=%d..%d frames=%u writes=%u", d->ahead_min, d->ahead_max, d->behind_min,
+               d->behind_max, d->io_frames, d->writes);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    // Playback and capture against the shared timeline (AudioProbe.cpp syncPlayback / syncCapture).
+    if (&native_audio_sync) {
+      snprintf(row, sizeof row, "[audio-sync] play resync=%d drift=%d..%d lead=%d capture resync=%d short=%d passed=%d", native_audio_sync[0],
+               native_audio_sync[1], native_audio_sync[2], native_audio_sync[4], native_audio_sync[3] & 0xffff,
+               (native_audio_sync[3] >> 16) & 0xffff, &native_audio_passed ? native_audio_passed : -1);
       at = put(out, at, cap, row, sizeof row);
     }
     if (&native_audio_pa) {

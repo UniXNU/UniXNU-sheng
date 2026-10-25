@@ -50,6 +50,7 @@ extern "C" int sheng_adsp_send(ShengAdspChannel *, const void *, uint32_t) __att
 // [10] bus 0 engine (proto << 24 | clock config), [11] bus 1 engine, [12] last opcode received, [13] I2C failures,
 // [14] output starts | stops << 16, [15] ms from start to serving
 extern "C" {volatile int32_t native_audio_stats[16];}
+extern "C" {volatile int32_t native_audio_passed;}   // buffer answers command() passed on to handle()
 // Per amplifier: device id, revision, EINT1, EINT2 while playing.
 extern "C" {volatile uint32_t native_audio_amps[CS35_AMPS][4];}
 // The microphone path (sheng-audio bit 2, after the speaker graphs): [0] stage (positive progress, negative the step that failed), [1] last PRM
@@ -68,7 +69,8 @@ constexpr uint32_t kIntentSize = 512, kIntentCount = 20, kRing = 16, kMessage = 
 constexpr uint32_t kPort = 0x2001;                   // our GPR port; every answer comes back to it
 constexpr uint32_t kRate = SHENG_AUDIO_RATE, kChannels = SHENG_AUDIO_OUT_CHANNELS, kPeriodFrames = SHENG_AUDIO_PERIOD_FRAMES;
 constexpr uint32_t kPeriodBytes = kPeriodFrames * kChannels * 2, kSlots = 8, kBufferBytes = 64 * 1024, kRingFrames = SHENG_AUDIO_RING_FRAMES;
-constexpr uint32_t kInFlight = 4, kLeadFrames = (kInFlight + 1) * kPeriodFrames, kKeepMs = 5000;
+// kLeadFrames: the lead the plug-in starts with (100 ms); each playback run then publishes the lead it measured (syncPlayback).
+constexpr uint32_t kInFlight = 4, kLeadFrames = 10 * kPeriodFrames, kKeepMs = 5000;
 // Capture periods (mono) live in the second half of the DSP buffer; the microphone graphs start in this order and stop in reverse.
 constexpr uint32_t kCapBytes = kPeriodFrames * 2, kCapOffset = 32 * 1024, kCapSlots = 8;
 const uint32_t kMicUp[2] = {AR_SG_MIC, AR_SG_CAPTURE}, kMicDown[2] = {AR_SG_CAPTURE, AR_SG_MIC};
@@ -155,10 +157,11 @@ struct Audio {
     uint64_t stopAsked;                // ms when the plug-in stopped output; the path stays up kKeepMs longer
     uint32_t inFlight;
     // Capture for the plug-in's input stream, once the microphone test passed: periods read from the DSP land in the capture ring at
-    // capBase + n * kPeriodFrames, capBase being the playback position when capture started (both directions share one clock).
+    // capPos, which advances by the frames each one carries (both directions share one clock); syncCapture moves it when the DSP's clock
+    // drifts from the host's.
     int16_t *in;
     bool micReady, capturing;
-    uint64_t capNext, capDone, capBase;
+    uint64_t capNext, capDone, capPos;   // capture periods asked and returned; the timeline frame the next captured sample goes to
     uint32_t capInFlight;
 };
 Audio gAudio;
@@ -211,6 +214,10 @@ bool nextAnswer(ArAnswer &a, uint32_t ms) {
 }
 bool send(const uint8_t *packet, uint32_t length) {return length && sheng_adsp_send(gAudio.channel, packet, length) == 0;}
 // Sends an APM command and waits for its basic result (or, for the map, the handle).
+// Buffer answers that arrive while a command waits for its result belong to the running streams: once the service runs they go to handle()
+// ([audio-sync] passed=). Dropping them (until i537) left inFlight / capInFlight counting buffers the DSP had returned, so every graph
+// command during playback or capture shrank the DSP's queue until the stream starved: the stutter of playback and recordings.
+void handle(const ArAnswer &a);
 bool command(uint32_t length, const uint8_t *packet, uint32_t opcode) {
     if (!send(packet, length)) return false;
     ArAnswer a;
@@ -222,6 +229,10 @@ bool command(uint32_t length, const uint8_t *packet, uint32_t opcode) {
         if ((a.opcode == AR_OP_PRM_REQUEST_DONE && opcode == AR_OP_PRM_REQUEST) || (a.opcode == AR_OP_PRM_RELEASE_DONE && opcode == AR_OP_PRM_RELEASE)) {
             native_mic_stats[1] = (int32_t)a.status;
             return a.status == 0;
+        }
+        if (gAudio.serving && (a.opcode == AR_OP_WRITE_DONE || a.opcode == AR_OP_READ_DONE)) {
+            handle(a);
+            native_audio_passed = native_audio_passed + 1;
         }
     }
     native_audio_stats[1] = -60;
@@ -457,7 +468,9 @@ bool setupShared() {
     ShengAudioControl *c = gAudio.ctl;
     c->rate = kRate; c->out_channels = SHENG_AUDIO_OUT_CHANNELS; c->in_channels = SHENG_AUDIO_IN_CHANNELS;
     c->period_frames = kPeriodFrames; c->ring_frames = kRingFrames; c->lead_frames = kLeadFrames;
-    c->ticks_per_frame_q32 = ((uint64_t)1000000000ULL * tb.denom << 32) / ((uint64_t)kRate * tb.numer);
+    // 128-bit: with the 19.2 MHz timer (timebase 625/12) 1e9 * 12 << 32 overflows 64 bits, which made the shared timeline run 3.5 times
+    // too fast for the plug-in and the audio server (113.7 ticks per frame instead of 400): choppy playback and capture until i535.
+    c->ticks_per_frame_q32 = (uint64_t)(((__uint128_t)1000000000ULL * tb.denom << 32) / ((uint64_t)kRate * tb.numer));
     c->out_anchor_host = mach_absolute_time();
     c->in_anchor_host = c->out_anchor_host;
     c->version = SHENG_AUDIO_VERSION;
@@ -482,6 +495,47 @@ uint64_t framesNow() {
     return now > anchor ? (uint64_t)(((__uint128_t)(now - anchor) << 32) / gAudio.ctl->ticks_per_frame_q32) : 0;
 }
 
+// [audio-sync]: playback resyncs, the least and most drift of playback from its steady lead (frames), capture resyncs.
+extern "C" {volatile int32_t native_audio_sync[5] = {0, 0x7fffffff, -0x7fffffff, 0, 0};}
+// The DSP answers a buffer once it has copied it into its own queue, so the steady distance between the next period and the play position
+// is whatever the run settles at (i534: 200 to 870 frames, not kInFlight periods). Each run takes it once the queue has filled; when the
+// DSP's clock and the host's have drifted three periods from it, the next period is set back to it (one click).
+constexpr int64_t kDriftLimit = 3 * kPeriodFrames;
+int64_t gBaseLead, gBaseCapture;
+void syncPlayback() {
+    const uint64_t now = framesNow(), played = gAudio.done - gAudio.first;
+    const int64_t lead = (int64_t)(gAudio.next * kPeriodFrames) - (int64_t)now;
+    if (played < 2 * kInFlight) return;
+    if (played == 2 * kInFlight) {
+        // The DSP takes buffers into a queue of its own before it answers, so a period is taken about gBaseLead before it plays. The
+        // audio server must have written it by then: the published lead (the plug-in's latency and safety offset follow it) is that
+        // plus two periods (i537: with a fixed 3360-frame safety offset 2233 periods were taken before they were written).
+        gBaseLead = lead;
+        native_audio_sync[4] = (int32_t)lead;
+        const int64_t want = lead + 2 * (int64_t)kPeriodFrames;
+        gAudio.ctl->lead_frames = (uint32_t)(want < (int64_t)kLeadFrames ? kLeadFrames : want > 8000 ? 8000 : want);
+        return;
+    }
+    const int64_t drift = lead - gBaseLead;
+    if (drift < native_audio_sync[1]) native_audio_sync[1] = (int32_t)drift;
+    if (drift > native_audio_sync[2]) native_audio_sync[2] = (int32_t)drift;
+    if (drift > kDriftLimit || drift < -kDriftLimit) {
+        gAudio.next = (uint64_t)((int64_t)now + gBaseLead + kPeriodFrames / 2) / kPeriodFrames;
+        native_audio_sync[0] = native_audio_sync[0] + 1;
+    }
+}
+// The same for capture: the distance between the capture position and the play position settles once per run; capPos follows when it
+// drifts three periods from that.
+void syncCapture() {
+    const int64_t gap = (int64_t)framesNow() - (int64_t)gAudio.capPos;
+    if (gAudio.capDone < 2 * kInFlight) return;
+    if (gAudio.capDone == 2 * kInFlight) {gBaseCapture = gap; return;}
+    if (gap - gBaseCapture > kDriftLimit || gBaseCapture - gap > kDriftLimit) {
+        gAudio.capPos = (uint64_t)((int64_t)gAudio.capPos + gap - gBaseCapture);
+        native_audio_sync[3] = native_audio_sync[3] + 1;
+    }
+}
+
 // Sends period n (timeline frames n * kPeriodFrames on) from the playback ring through DSP slot n % kSlots. The ring is not a multiple
 // of the period, so a period can wrap; outside the test tone the frames taken are cleared, so a frame the plug-in did not write in time
 // plays as silence instead of what the ring held one turn earlier (i531: periods past the ring's end read beyond it).
@@ -495,7 +549,12 @@ bool submit(uint64_t n) {
     if (!gAudio.tone) {
         memset(gAudio.out + at * kChannels, 0, head * kChannels * 2);
         if (head < kPeriodFrames) memset(gAudio.out, 0, (kPeriodFrames - head) * kChannels * 2);
-        if (gAudio.ctl->out_written < (n + 1) * kPeriodFrames) gAudio.ctl->out_late = gAudio.ctl->out_late + 1;
+        // Late: the audio server is running and had not written the period yet (the five seconds kept after a stop do not count).
+        uint64_t recent = 0;
+        nanoseconds_to_absolutetime(100000000ULL, &recent);
+        if ((gAudio.want & ShengAudioOutputRunning) && mach_absolute_time() - gAudio.ctl->out_written_host < recent &&
+            gAudio.ctl->out_written < (n + 1) * kPeriodFrames)
+            gAudio.ctl->out_late = gAudio.ctl->out_late + 1;
         notePeak(dst, kPeriodFrames * kChannels, 0);
     }
     cacheClean(dst, kPeriodBytes);
@@ -524,9 +583,10 @@ void startOutput() {
     if (gAudio.running) return;
     powerUpAmps();
     if (!graphs(AR_OP_GRAPH_PREPARE) || !graphs(AR_OP_GRAPH_START)) {powerDownAmps(); return;}
-    // The first period is the one that plays kLeadFrames from now on the boot's timeline.
+    // The DSP plays the first period at once, so it is the period of the timeline that plays now; the ones queued behind it follow in
+    // order. (i533 labelled it kLeadFrames later, so every period was taken before the audio server wrote it: gaps, stutter and pops.)
     ShengAudioControl *c = gAudio.ctl;
-    gAudio.next = gAudio.done = gAudio.first = (framesNow() + kLeadFrames + kPeriodFrames - 1) / kPeriodFrames;
+    gAudio.next = gAudio.done = gAudio.first = (framesNow() + kPeriodFrames - 1) / kPeriodFrames;
     c->out_frames = 0;
     gAudio.inFlight = 0;
     gAudio.statusRead = false;
@@ -562,7 +622,8 @@ void startInput() {
     for (uint32_t sg : kMicUp)
         if (!command(ar_graph_command(b, sizeof b, kPort, ++gAudio.token, AR_OP_GRAPH_START, sg), b, AR_OP_GRAPH_START)) return;
     ShengAudioControl *c = gAudio.ctl;
-    gAudio.capBase = framesNow();
+    gAudio.capPos = framesNow();
+    c->in_written = gAudio.capPos;
     c->in_frames = 0;
     memset(gAudio.in, 0, kRingFrames * 2);
     gAudio.capNext = gAudio.capDone = 0;
@@ -582,16 +643,24 @@ void stopInput() {
     native_audio_stats[14] = native_audio_stats[14] + (1 << 24);
 }
 
-// A returned capture period goes to the capture ring at its place in the playback timeline.
+// A returned capture buffer goes to the capture ring at the capture position. The DSP fills a buffer with whole frames of its own and may
+// return fewer bytes than asked, from an offset into the buffer (i514: 956.6 bytes on average for 960); only those samples are taken, and
+// the position advances by them. Copying whole periods put a few stale samples into every short one: the clicks of the recordings.
 void captured(const ArAnswer &a) {
     if (gAudio.capInFlight) gAudio.capInFlight--;
     const uint32_t slot = (uint32_t)((a.address - (gAudio.dspAddr + kCapOffset)) / kCapBytes) % kCapSlots;
-    const int16_t *src = reinterpret_cast<const int16_t *>(gAudio.bufferVa + kCapOffset + slot * kCapBytes);
-    const uint64_t t = gAudio.capBase + gAudio.capDone * kPeriodFrames;
-    for (uint32_t i = 0; i < kPeriodFrames; ++i) gAudio.in[(t + i) % kRingFrames] = src[i];
-    notePeak(src, kPeriodFrames, 16);
+    const uint32_t offset = a.offset < kCapBytes ? a.offset & ~1u : 0, bytes = a.data_bytes < kCapBytes - offset ? a.data_bytes : kCapBytes - offset;
+    const int16_t *src = reinterpret_cast<const int16_t *>(gAudio.bufferVa + kCapOffset + slot * kCapBytes + offset);
+    const uint32_t count = bytes / 2;
+    syncCapture();
+    const uint64_t t = gAudio.capPos;
+    for (uint32_t i = 0; i < count; ++i) gAudio.in[(t + i) % kRingFrames] = src[i];
+    if (count) notePeak(src, count, 16);
+    gAudio.capPos = t + count;
+    gAudio.ctl->in_written = gAudio.capPos;
+    if (count < kPeriodFrames) native_audio_sync[3] = native_audio_sync[3] + (1 << 16);
     gAudio.capDone++;
-    gAudio.ctl->in_frames = gAudio.capDone * kPeriodFrames;
+    gAudio.ctl->in_frames = gAudio.ctl->in_frames + count;
     native_mic_capture[3] = native_mic_capture[3] + 1;
     if (gAudio.capturing) while (gAudio.capInFlight < kInFlight && askCapture(gAudio.capNext)) gAudio.capNext++;
 }
@@ -603,7 +672,10 @@ void handle(const ArAnswer &a) {
         if (gAudio.inFlight) gAudio.inFlight--;
         gAudio.done++;
         gAudio.ctl->out_frames = (gAudio.done - gAudio.first) * kPeriodFrames;
-        if (gAudio.running) while (gAudio.inFlight < kInFlight && submit(gAudio.next)) gAudio.next++;
+        if (gAudio.running) {
+            if (!gAudio.tone) syncPlayback();
+            while (gAudio.inFlight < kInFlight && submit(gAudio.next)) gAudio.next++;
+        }
         if (gAudio.running && !gAudio.statusRead && gAudio.done - gAudio.first == 10) {readAmpStatus(); gAudio.statusRead = true;}
     } else if (a.opcode == AR_OP_READ_DONE) {
         captured(a);
@@ -782,12 +854,13 @@ bool micStream(uint8_t dev, uintptr_t tx, uintptr_t m) {
     ok = ok && swrUpdate(dev, 0x308f, 0x01, 0);
     if (!ok) {capStage(-1); return false;}
     capStage(2);
-    // Micbias 3 at 2.75 V, then on; ADC2 from INP3 (AMIC3); the ADC clocks; ADC2 request in normal mode; ADC2 gain 10.
+    // Micbias 3 at 2.75 V, then on; ADC2 from INP3 (AMIC3); the ADC clocks; ADC2 request in normal mode; ADC2 gain 18 (of 20; recordings
+    // at 10 were quiet, i533).
     ok = swrUpdate(dev, 0x3025, 0x3f, 0x23) && swrUpdate(dev, 0x3409, 0xf0, 0xf0) && swrUpdate(dev, 0x3408, 0x10, 0x10) &&
          swrUpdate(dev, 0x3417, 0x01, 0x01) && swrUpdate(dev, 0x3025, 0xc0, 0x40) && swrUpdate(dev, 0x3127, 0x80, 0x80) &&
          swrUpdate(dev, 0x3408, 0x18, 0x18) && swrUpdate(dev, 0x3457, 0x03, 0x02) && swrUpdate(dev, 0x300f, 0x20, 0x20) &&
          swrUpdate(dev, 0x3410, 0xf0, 0x30) && swrUpdate(dev, 0x3409, 0x20, 0x20) && swrUpdate(dev, 0x300f, 0x20, 0) &&
-         swrUpdate(dev, 0x300f, 0x1f, 10);
+         swrUpdate(dev, 0x300f, 0x1f, 18);
     if (!ok) {capStage(-2); return false;}
     capStage(3);
     // Slave data port 1 (ADC1/ADC2), channel 2, both banks: isochronous normal mode, 1 bit per sample, sample interval 2, offsets 0,
