@@ -1119,8 +1119,12 @@ extern "C" IOBufferMemoryDescriptor *sheng_audio_memory(uint32_t type) {
     return m;
 }
 
+// [audio-requests]: the plug-in's last 16 requests, each ms since boot << 4 | selector, oldest first from [16] (the next slot).
+extern "C" {volatile uint64_t native_audio_requests[17];}
 extern "C" int sheng_audio_request(uint32_t selector) {
     if (!__atomic_load_n(&gAudio.serving, __ATOMIC_ACQUIRE)) return -1;
+    const uint64_t slot = __atomic_fetch_add(&native_audio_requests[16], 1, __ATOMIC_RELAXED) % 16;
+    native_audio_requests[slot] = nowMs() << 4 | (selector & 15);
     switch (selector) {
     case ShengAudioStartOutput: __atomic_or_fetch(&gAudio.want, ShengAudioOutputRunning, __ATOMIC_ACQ_REL); break;
     case ShengAudioStopOutput: __atomic_and_fetch(&gAudio.want, ~ShengAudioOutputRunning, __ATOMIC_ACQ_REL); break;

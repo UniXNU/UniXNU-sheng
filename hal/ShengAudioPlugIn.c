@@ -4,6 +4,7 @@
 // feeds the audio DSP. Objects: the plug-in (1), the device (2), the output stream (3), the input stream (4), the output volume (5).
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <dlfcn.h>
 #include <IOKit/IOKitLib.h>
 #include <mach/mach_time.h>
 #include <mach/mach.h>
@@ -21,9 +22,13 @@ enum {kPlugIn = kAudioObjectPlugInObject, kDevice = 2, kOutStream = 3, kInStream
 #define kDeviceUID "ShengAudioDevice"
 #define kModelUID "ShengAudioModel"
 static const Float64 kRate = SHENG_AUDIO_RATE;
-// The time stamp period: over the safety offset plus an IO cycle (the audio server runs no IO otherwise, i543: 8192), short enough that the
-// audio server's clock estimate settles in a few seconds.
-static const UInt32 kZeroPeriod = 32768;
+// The time stamp period. It must exceed the safety offset plus an IO cycle, or the audio server never runs IO (i543: 8192, no writes).
+static const UInt32 kZeroPeriod = SHENG_AUDIO_RING_FRAMES;
+// The time stamps start at the frame IO started on, as in Apple's sample driver, not on a grid from boot: the audio server took the first
+// stamp, up to a period old, for the start, and wrote that much late (least write-ahead -734 frames with a 16384 period, i539; about
+// -9700 with 65536, i540 to i542). Sample times stay those of the shared timeline. Playback is smooth this way (i544); i545 went back to
+// the grid with a 32768 period and SimpleIIR, and both directions stuttered.
+static uint64_t gZeroOrigin, gZeroSeed;
 
 static AudioServerPlugInHostRef gHost;
 static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
@@ -34,6 +39,7 @@ static int16_t *gOut, *gIn;
 static UInt32 gIoUsers;
 static Float32 gVolume = 1.0f;   // the volume control's scalar (slider position)
 static Float64 gHostTicksPerFrame;
+static void setHostClock(void);
 
 // ---- Kernel service ------------------------------------------------------------------------------------------------------------
 static int mapType(uint32_t type, void **out) {
@@ -58,9 +64,33 @@ static int connectService(void) {
     if (c->magic != SHENG_AUDIO_MAGIC || c->version != SHENG_AUDIO_VERSION) {IOServiceClose(gConnect); gConnect = 0; return -1;}
     gOut = out; gIn = in; gControl = c;
     gHostTicksPerFrame = (Float64)c->ticks_per_frame_q32 / 4294967296.0;
+    setHostClock();
     return 0;
 }
 static kern_return_t call(uint32_t selector) {return gConnect ? IOConnectCallScalarMethod(gConnect, selector, NULL, 0, NULL, NULL) : KERN_FAILURE;}
+
+// CoreAudio's host clock frequency is a constant of 24 MHz (Apple's timer) that its IO clock and IO thread read directly; this board's timer
+// runs at 19.2 MHz, so the audio server's IO cycles came 25 % late (i546), and each recording fell silent from about 1.0 to 1.8 s until its
+// clock caught up (i548 to i551; gone with the constant set, i552). AudioGetHostClockFrequency loads it with adrp and ldr d0: the address
+// is taken from those two instructions and the service sets the constant (on the shared page it cannot be written from here).
+static void setHostClock(void) {
+    ShengAudioDiag *diag = (ShengAudioDiag *)((uint8_t *)gControl + SHENG_AUDIO_DIAG_OFFSET);
+    // The audio server is arm64e: dlsym signs the pointer, and this arm64 code neither reads nor calls through the signature bits.
+    const uintptr_t symbol = (uintptr_t)dlsym(RTLD_DEFAULT, "AudioGetHostClockFrequency") & (((uintptr_t)1 << 47) - 1);
+    if (!symbol) {diag->host_clock_result = -1; return;}
+    Float64 (*frequency)(void) = (Float64 (*)(void))symbol;
+    const uint32_t *code = (const uint32_t *)symbol, adrp = code[0], ldr = code[1];
+    if ((adrp & 0x9f000000u) != 0x90000000u || (ldr & 0xffc00000u) != 0xfd400000u || ((ldr >> 5) & 31) != (adrp & 31)) {
+        diag->host_clock_result = -1;
+        return;
+    }
+    int64_t page = (int64_t)(((adrp >> 5) & 0x7ffffu) << 2 | ((adrp >> 29) & 3u));
+    if (page & (1 << 20)) page -= 1 << 21;
+    const uint64_t address = ((uintptr_t)code & ~(uintptr_t)0xfff) + (uint64_t)(page << 12) + ((ldr >> 10) & 0xfffu) * 8;
+    const kern_return_t r = IOConnectCallScalarMethod(gConnect, ShengAudioSetHostClock, &address, 1, NULL, NULL);
+    diag->host_clock_result = r;
+    diag->host_clock = (uint32_t)frequency();
+}
 
 // ---- Helpers ---------------------------------------------------------------------------------------------------------------------
 static AudioStreamBasicDescription format(UInt32 channels) {
@@ -262,9 +292,8 @@ static OSStatus propertyData(AudioObjectID o, const AudioObjectPropertyAddress *
         case kAudioDevicePropertyIsHidden: REPLY(UInt32, 0);
         case kAudioDevicePropertyZeroTimeStampPeriod: REPLY(UInt32, kZeroPeriod);
         case kAudioDevicePropertyClockIsStable: REPLY(UInt32, 1);
-        // Not Raw: with it the audio server's idea of now fell up to 26185 frames behind the timeline and it wrote late from i540 on
-        // (least write-ahead -734 frames in i539 before it, about -9700 after).
-        case kAudioDevicePropertyClockAlgorithm: REPLY(UInt32, kAudioDeviceClockAlgorithmSimpleIIR);
+        // Raw: the zero time stamps are exact (one host clock), so smoothing only delays the audio server's view of them.
+        case kAudioDevicePropertyClockAlgorithm: REPLY(UInt32, kAudioDeviceClockAlgorithmRaw);
         case kAudioDevicePropertyPreferredChannelsForStereo: {
             if (inDataSize < 2 * sizeof(UInt32)) return kAudioHardwareBadPropertySizeError;
             ((UInt32 *)outData)[0] = 1; ((UInt32 *)outData)[1] = a->mScope == kAudioObjectPropertyScopeInput ? 1 : 2;
@@ -495,8 +524,16 @@ static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 cl
     if (gIoUsers == 0) {
         if (connectService()) r = kAudioHardwareNotRunningError;
         else if (!gControl) r = kAudioHardwareNotRunningError;
-        else if (call(ShengAudioStartOutput) != KERN_SUCCESS) r = kAudioHardwareNotRunningError;
-        else call(ShengAudioStartInput);
+        else {
+            setHostClock();   // again: the shared page may have been read back from disk since
+            if (call(ShengAudioStartOutput) != KERN_SUCCESS) r = kAudioHardwareNotRunningError;
+            else {
+                call(ShengAudioStartInput);
+                const uint64_t host = mach_absolute_time(), anchor = gControl->out_anchor_host;
+                gZeroOrigin = host > anchor ? (uint64_t)((Float64)(host - anchor) / gHostTicksPerFrame) : 0;
+                gZeroSeed++;
+            }
+        }
     }
     if (!r) gIoUsers++;
     pthread_mutex_unlock(&gLock);
@@ -518,10 +555,11 @@ static OSStatus GetZeroTimeStamp(AudioServerPlugInDriverRef d, AudioObjectID o, 
     do {seq = gControl->out_seq; anchor = gControl->out_anchor_host;} while ((seq & 1) || seq != gControl->out_seq);
     const uint64_t now = mach_absolute_time();
     const Float64 period = gHostTicksPerFrame * kZeroPeriod;
-    const uint64_t wraps = now > anchor ? (uint64_t)((Float64)(now - anchor) / period) : 0;
-    *sampleTime = (Float64)(wraps * kZeroPeriod);
-    *hostTime = anchor + (uint64_t)((Float64)wraps * period);
-    *seed = 1 + seq / 2;
+    const uint64_t origin = anchor + (uint64_t)((Float64)gZeroOrigin * gHostTicksPerFrame);
+    const uint64_t wraps = now > origin ? (uint64_t)((Float64)(now - origin) / period) : 0;
+    *sampleTime = (Float64)(gZeroOrigin + wraps * kZeroPeriod);
+    *hostTime = origin + (uint64_t)((Float64)wraps * period);
+    *seed = 1 + seq / 2 + gZeroSeed;
     return 0;
 }
 static OSStatus WillDoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 client, UInt32 op, Boolean *will, Boolean *inPlace) {
