@@ -23,8 +23,15 @@
     };
 };
 
-&cpu1 { status = "disabled"; };
-&cpu2 { status = "disabled"; };
+// The scheduler runs the A510 cores as an E cluster and the others as a P cluster.
+&cpu0 { unixnu,cluster-type = "E"; };
+&cpu1 { unixnu,cluster-type = "E"; };
+&cpu2 { unixnu,cluster-type = "E"; };
+&cpu3 { unixnu,cluster-type = "P"; };
+&cpu4 { unixnu,cluster-type = "P"; };
+&cpu5 { unixnu,cluster-type = "P"; };
+&cpu6 { unixnu,cluster-type = "P"; };
+&cpu7 { unixnu,cluster-type = "P"; };
 &ufs { status = "okay"; };
 &ufsphy { status = "okay"; };
 &gpu { status = "okay"; };

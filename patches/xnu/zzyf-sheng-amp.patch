@@ -1,0 +1,95 @@
+diff --git a/pexpert/pexpert/arm64/BCM2837.h b/pexpert/pexpert/arm64/BCM2837.h
+--- a/pexpert/pexpert/arm64/BCM2837.h
++++ b/pexpert/pexpert/arm64/BCM2837.h
+@@ -18,6 +18,8 @@
+ #define __ARM_COHERENT_CACHE__    1
+ #define __ARM_DEBUG__             7
+ #define __ARM64_PMAP_SUBPAGE_L1__ 1
++/* sheng: the ADT marks A510 cores as an E cluster and the rest as a P cluster, scheduled by Edge. */
++#define __ARM_AMP__               1
+ 
+ /* Explicit native ARMv8.1+ bring-up; the original A53 target has no PAN. */
+ #if defined(XNU_NATIVE_PAN) && XNU_NATIVE_PAN
+diff --git a/pexpert/pexpert/arm64/board_config.h b/pexpert/pexpert/arm64/board_config.h
+--- a/pexpert/pexpert/arm64/board_config.h
++++ b/pexpert/pexpert/arm64/board_config.h
+@@ -135,7 +135,7 @@
+ 
+ #define MAX_L2_CLINE                   6
+ #define MAX_CPUS                       8 /* sheng: SM8550 has eight cores */
+-#define MAX_CPU_CLUSTERS               1
++#define MAX_CPU_CLUSTERS               2 /* sheng: E (A510) and P (A715, A710, X3) */
+ 
+ #define CORE_NCTRS                     8 /* Placeholder; KPC is not enabled for this target */
+ #endif  /* ARM64_BOARD_CONFIG_BCM2837 */
+diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
+--- a/osfmk/kern/sched_clutch.c
++++ b/osfmk/kern/sched_clutch.c
+@@ -1110,7 +1110,28 @@
+ 	priority_queue_init(&clutch_bucket->scb_clutchpri_prioq);
+ 	priority_queue_init(&clutch_bucket->scb_thread_runq);
+ 	queue_init(&clutch_bucket->scb_thread_timeshare_queue);
++}
++
++#if CONFIG_SCHED_EDGE
++/*
++ * sheng: no performance controller recommends clusters here, so a thread group starts with its fixed priority
++ * to default buckets on the first P cluster and its utility and background buckets on the boot cluster.
++ */
++static uint32_t
++sched_edge_default_preferred_cluster(sched_bucket_t bucket)
++{
++	if (bucket >= TH_BUCKET_SHARE_UT) {
++		return pset0.pset_cluster_id;
++	}
++	const ml_topology_info_t *topology = ml_get_topology_info();
++	for (unsigned int i = 0; i < topology->num_clusters; i++) {
++		if (topology->clusters[i].cluster_type == CLUSTER_TYPE_P) {
++			return topology->clusters[i].cluster_id;
++		}
++	}
++	return pset0.pset_cluster_id;
+ }
++#endif /* CONFIG_SCHED_EDGE */
+ 
+ /*
+  * sched_clutch_bucket_group_init()
+@@ -1135,7 +1156,11 @@
+ 
+ 	os_atomic_store(&clutch_bucket_group->scbg_timeshare_tick, 0, relaxed);
+ 	os_atomic_store(&clutch_bucket_group->scbg_pri_shift, INT8_MAX, relaxed);
++#if CONFIG_SCHED_EDGE
++	os_atomic_store(&clutch_bucket_group->scbg_preferred_cluster, sched_edge_default_preferred_cluster(bucket), relaxed);
++#else /* CONFIG_SCHED_EDGE */
+ 	os_atomic_store(&clutch_bucket_group->scbg_preferred_cluster, pset0.pset_cluster_id, relaxed);
++#endif /* CONFIG_SCHED_EDGE */
+ 	/*
+ 	 * All thread groups should be initialized to be interactive; this allows the newly launched
+ 	 * thread groups to fairly compete with already running thread groups.
+@@ -1207,7 +1232,12 @@
+ static uint32_t
+ sched_edge_clutch_bucket_group_preferred_cluster(sched_clutch_bucket_group_t clutch_bucket_group)
+ {
+-	return os_atomic_load(&clutch_bucket_group->scbg_preferred_cluster, relaxed);
++	uint32_t cluster_id = os_atomic_load(&clutch_bucket_group->scbg_preferred_cluster, relaxed);
++	/* sheng: the P cluster's pset exists only once its first core registers; until then threads run on the boot cluster */
++	if (os_atomic_load(&pset_array[cluster_id], acquire) == PROCESSOR_SET_NULL) {
++		return pset0.pset_cluster_id;
++	}
++	return cluster_id;
+ }
+ 
+ static uint32_t
+@@ -4870,10 +4900,10 @@
+ 				bitmap_clear(src_pset->native_psets, dst_cluster_id);
+ 				sched_edge_config_set(src_cluster_id, dst_cluster_id, (sched_clutch_edge){.sce_migration_weight = 64, .sce_migration_allowed = 1, .sce_steal_allowed = 1});
+ 			} else {
+-				/* E->P edge config */
++				/* E->P edge config; sheng: an idle P core may steal E work, as no controller moves thread groups */
+ 				bitmap_set(src_pset->foreign_psets, dst_cluster_id);
+ 				bitmap_clear(src_pset->native_psets, dst_cluster_id);
+-				sched_edge_config_set(src_cluster_id, dst_cluster_id, (sched_clutch_edge){.sce_migration_weight = 0, .sce_migration_allowed = 0, .sce_steal_allowed = 0});
++				sched_edge_config_set(src_cluster_id, dst_cluster_id, (sched_clutch_edge){.sce_migration_weight = 0, .sce_migration_allowed = 0, .sce_steal_allowed = 1});
+ 			}
+ 			bool clusters_local = (ml_get_die_id(src_cluster_id) == ml_get_die_id(dst_cluster_id));
+ 			if (clusters_local) {
