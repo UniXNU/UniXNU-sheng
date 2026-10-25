@@ -625,7 +625,7 @@ struct Swr {Region r; uint8_t id;};
 Swr gSwr;
 uint32_t swrPack(uint8_t data, uint8_t dev, uint8_t id, uint16_t reg) {return reg | (uint32_t)id << 16 | (uint32_t)dev << 20 | (uint32_t)data << 24;}
 uint8_t nextId() {gSwr.id = gSwr.id < 14 ? gSwr.id + 1 : 0; return gSwr.id;}
-__attribute__((unused)) bool swrWrite(uint8_t dev, uint16_t reg, uint8_t value) {
+bool swrWrite(uint8_t dev, uint16_t reg, uint8_t value) {
     for (unsigned i = 0; i < 100 && ((rd32(gSwr.r.va, 0x5050) >> 8) & 0x1f) >= 8; ++i) IODelay(50);
     wr32(gSwr.r.va, 0x5020, swrPack(value, dev, nextId(), reg));
     return true;
@@ -644,6 +644,121 @@ bool swrRead(uint8_t dev, uint16_t reg, uint8_t *value) {
     }
     native_mic_stats[14] = native_mic_stats[14] + 1;
     return false;
+}
+
+// The capture stream of one microphone (the board's "Mic1" route: AMIC3 on micbias 3 into ADC2, slave data port 1 channel 2, master
+// port 2, TX decimator 0 from SWR_MIC1, codec DMA TX3) for sheng-audio bit 2, run for about two seconds: [0] stage (positive progress,
+// negative the failing step), [1] last DSP status, [2] periods asked, [3] periods returned, [4] bytes, [5] peak, [6] mean absolute value,
+// [7] non-zero samples
+extern "C" {volatile int32_t native_mic_capture[8];}
+bool swrUpdate(uint8_t dev, uint16_t reg, uint8_t mask, uint8_t value) {
+    uint8_t v = 0;
+    if (!swrRead(dev, reg, &v)) return false;
+    return swrWrite(dev, reg, (uint8_t)((v & ~mask) | (value & mask)));
+}
+void capStage(int s) {native_mic_capture[0] = s;}
+bool micStream(uint8_t dev, uintptr_t tx, uintptr_t m) {
+    capStage(1);
+    // Codec start (the codec driver's io_init), with the hardware's 1 ms and 10 ms waits.
+    bool ok = swrUpdate(dev, 0x3103, 0x0e, 0x0e) && swrUpdate(dev, 0x3103, 0x80, 0x80);
+    IOSleep(1);
+    ok = ok && swrUpdate(dev, 0x3103, 0x40, 0x40);
+    IOSleep(1);
+    ok = ok && swrUpdate(dev, 0x312a, 0x10, 0) && swrUpdate(dev, 0x3029, 0xf0, 0x80) && swrUpdate(dev, 0x3001, 0x80, 0x80) &&
+         swrUpdate(dev, 0x3001, 0x40, 0x40);
+    IOSleep(10);
+    ok = ok && swrUpdate(dev, 0x3001, 0x40, 0) && swrUpdate(dev, 0x345b, 0x02, 0x02) && swrUpdate(dev, 0x31e1, 0xff, 0x14) &&
+         swrUpdate(dev, 0x31df, 0x1f, 0x08);
+    static const uint8_t fb[5] = {0x55, 0x44, 0x11, 0, 0};
+    for (unsigned i = 0; i < 5 && ok; ++i) ok = swrWrite(dev, (uint16_t)(0x34d0 + i), fb[i]);
+    for (uint16_t r : (const uint16_t[]){0x306b, 0x306e, 0x3071, 0x3074}) ok = ok && swrUpdate(dev, r, 0xe0, 0xe0);
+    ok = ok && swrUpdate(dev, 0x308f, 0x01, 0);
+    if (!ok) {capStage(-1); return false;}
+    capStage(2);
+    // Micbias 3 at 2.75 V, then on; ADC2 from INP3 (AMIC3); the ADC clocks; ADC2 request in normal mode; ADC2 gain 10.
+    ok = swrUpdate(dev, 0x3025, 0x3f, 0x23) && swrUpdate(dev, 0x3409, 0xf0, 0xf0) && swrUpdate(dev, 0x3408, 0x10, 0x10) &&
+         swrUpdate(dev, 0x3417, 0x01, 0x01) && swrUpdate(dev, 0x3025, 0xc0, 0x40) && swrUpdate(dev, 0x3127, 0x80, 0x80) &&
+         swrUpdate(dev, 0x3408, 0x18, 0x18) && swrUpdate(dev, 0x3457, 0x03, 0x02) && swrUpdate(dev, 0x300f, 0x20, 0x20) &&
+         swrUpdate(dev, 0x3410, 0xf0, 0x30) && swrUpdate(dev, 0x3409, 0x20, 0x20) && swrUpdate(dev, 0x300f, 0x20, 0) &&
+         swrUpdate(dev, 0x300f, 0x1f, 10);
+    if (!ok) {capStage(-2); return false;}
+    capStage(3);
+    // Slave data port 1 (ADC1/ADC2), channel 2, both banks: isochronous normal mode, 1 bit per sample, sample interval 2, offsets 0,
+    // horizontal start and stop 15, lane 2; then prepare and enable the channel.
+    for (uint16_t bank = 0; bank <= 0x10 && ok; bank += 0x10)
+        ok = swrWrite(dev, (uint16_t)(0x122 + bank), 1) && swrWrite(dev, (uint16_t)(0x123 + bank), 0) && swrWrite(dev, (uint16_t)(0x124 + bank), 0) &&
+             swrWrite(dev, (uint16_t)(0x125 + bank), 0) && swrWrite(dev, (uint16_t)(0x126 + bank), 0xff) && swrWrite(dev, (uint16_t)(0x128 + bank), 2);
+    ok = ok && swrWrite(dev, 0x102, 0) && swrWrite(dev, 0x103, 0) && swrWrite(dev, 0x105, 0x02);
+    for (uint16_t bank = 0; bank <= 0x10 && ok; bank += 0x10) ok = swrWrite(dev, (uint16_t)(0x120 + bank), 0x02);
+    if (!ok) {capStage(-3); return false;}
+    // Master data port 2 in both banks: sample interval 1 (the device tree's value), offsets 0, lane 2, horizontal 0 to 15, word length 1,
+    // channel 2 enabled.
+    for (uint32_t bank = 0; bank < 2; ++bank) {
+        wr32(m, 0x1224 + 0x40 * bank, 0x01u | 0x02u << 24);
+        wr32(m, 0x1228 + 0x40 * bank, 0x02);
+        wr32(m, 0x1234 + 0x40 * bank, 0xf0);
+    }
+    wr32(m, 0x122c, 0);
+    capStage(4);
+    // TX macro decimator 0: SWR_MIC1 through SWR_MIC, 48 kHz, 150 Hz high-pass, clock on, muted until the analog path settles.
+    wr32(tx, 0x100, (rd32(tx, 0x100) & ~0xfu) | 2);
+    wr32(tx, 0x104, (rd32(tx, 0x104) & ~3u) | 1);
+    wr32(tx, 0x404, (rd32(tx, 0x404) & ~(3u << 5 | 3u << 1)) | 2u << 5);
+    wr32(tx, 0x400, (rd32(tx, 0x400) & ~0x3fu) | 4 | 0x10);
+    wr32(tx, 0x400, rd32(tx, 0x400) | 0x20);
+    capStage(5);
+    // The DSP's capture graphs.
+    uint8_t b[GPR_MAX_PACKET];
+    const ArFormat f = {kRate, 16, 1};
+    if (!command(ar_open_mic_device(b, sizeof b, kPort, ++gAudio.token), b, AR_OP_GRAPH_OPEN)) {capStage(-6); return false;}
+    if (!command(ar_config_mic_device(b, sizeof b, kPort, ++gAudio.token, &f, 1), b, AR_OP_SET_CFG)) {capStage(-7); return false;}
+    if (!command(ar_open_capture_stream(b, sizeof b, kPort, ++gAudio.token), b, AR_OP_GRAPH_OPEN)) {capStage(-8); return false;}
+    if (!command(ar_config_capture_stream(b, sizeof b, kPort, ++gAudio.token, &f), b, AR_OP_SET_CFG)) {capStage(-9); return false;}
+    static const uint32_t up[2] = {AR_SG_MIC, AR_SG_CAPTURE}, down[2] = {AR_SG_CAPTURE, AR_SG_MIC};
+    for (uint32_t sg : up)
+        if (!command(ar_graph_command(b, sizeof b, kPort, ++gAudio.token, AR_OP_GRAPH_PREPARE, sg), b, AR_OP_GRAPH_PREPARE)) {capStage(-10); return false;}
+    for (uint32_t sg : up)
+        if (!command(ar_graph_command(b, sizeof b, kPort, ++gAudio.token, AR_OP_GRAPH_START, sg), b, AR_OP_GRAPH_START)) {capStage(-11); return false;}
+    capStage(6);
+    IOSleep(300);
+    wr32(tx, 0x400, rd32(tx, 0x400) & ~0x10u);   // unmute after the analog path's settling time
+    // Read 200 periods (2 s) through four buffers in the second half of the DSP buffer.
+    constexpr uint32_t kCapBytes = kPeriodFrames * 2, kCapOffset = 32 * 1024, kCapSlots = 8;
+    uint64_t sum = 0, samples = 0;
+    int32_t peak = 0, nonzero = 0;
+    uint32_t asked = 0, back = 0;
+    auto ask = [&](uint32_t n) {
+        const uint32_t slot = n % kCapSlots;
+        if (send(b, ar_read(b, sizeof b, kPort, n, gAudio.dspAddr + kCapOffset + slot * kCapBytes, gAudio.handle, kCapBytes))) {++asked; native_mic_capture[2] = (int32_t)asked;}
+    };
+    for (uint32_t n = 0; n < 4; ++n) ask(n);
+    while (back < 200) {
+        ArAnswer a;
+        if (!nextAnswer(a, 1000)) {capStage(-12); break;}
+        if (a.opcode == AR_OP_READ_DONE) {
+            native_mic_capture[1] = (int32_t)a.status;
+            const uint32_t slot = (uint32_t)((a.address - (gAudio.dspAddr + kCapOffset)) / kCapBytes) % kCapSlots;
+            const int16_t *p = reinterpret_cast<const int16_t *>(gAudio.bufferVa + kCapOffset + slot * kCapBytes);
+            const uint32_t count = (a.data_bytes ? a.data_bytes : kCapBytes) / 2;
+            for (uint32_t i = 0; i < count && i < kPeriodFrames; ++i) {
+                const int32_t v = p[i] < 0 ? -p[i] : p[i];
+                sum += (uint32_t)v; ++samples;
+                if (v > peak) peak = v;
+                if (v) ++nonzero;
+            }
+            native_mic_capture[3] = (int32_t)++back;
+            native_mic_capture[4] = native_mic_capture[4] + (int32_t)a.data_bytes;
+            native_mic_capture[5] = peak;
+            native_mic_capture[6] = samples ? (int32_t)(sum / samples) : 0;
+            native_mic_capture[7] = nonzero;
+            if (asked < 200) ask(asked);
+        } else if (a.opcode == GPR_OP_BASIC_RESULT && a.status) {
+            native_mic_capture[1] = (int32_t)a.status;
+        }
+    }
+    for (uint32_t sg : down) command(ar_graph_command(b, sizeof b, kPort, ++gAudio.token, AR_OP_GRAPH_STOP, sg), b, AR_OP_GRAPH_STOP);
+    if (native_mic_capture[0] > 0) capStage(7);
+    return native_mic_capture[0] == 7;
 }
 
 bool micBringUp() {
@@ -742,6 +857,7 @@ bool micBringUp() {
     if (swrRead((uint8_t)dev, 0x50, &id0) && swrRead((uint8_t)dev, 0x51, &id1)) native_mic_stats[9] = id0 | id1 << 8;   // SCP_DevId_0/1
     native_mic_stats[15] = (int32_t)(nowMs() - t0);
     micStage(9);
+    micStream((uint8_t)dev, tx.va, m);
     return true;
 }
 
