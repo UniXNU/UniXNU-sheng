@@ -152,6 +152,7 @@ extern volatile uint32_t native_adreno_coherent_skips[4] __attribute__((weak_imp
 extern volatile uint32_t native_adreno_io_coherent __attribute__((weak_import));
 extern char native_cpufreq_row[120] __attribute__((weak_import));
 extern uint32_t native_gpu_perf_vote[2] __attribute__((weak_import));
+extern volatile uint32_t native_gpu_dcvs[13] __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_gov[9] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_status __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_wc __attribute__((weak_import));
@@ -645,6 +646,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       snprintf(row, sizeof row, "[cpu gov] d0 changes=%u mhz=%u busy=%u%% | d1 changes=%u mhz=%u busy=%u%% | d2 changes=%u mhz=%u busy=%u%%",
                native_cpufreq_gov[0], native_cpufreq_gov[1], native_cpufreq_gov[2], native_cpufreq_gov[3], native_cpufreq_gov[4],
                native_cpufreq_gov[5], native_cpufreq_gov[6], native_cpufreq_gov[7], native_cpufreq_gov[8]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    if (&native_gpu_dcvs && native_gpu_dcvs[0]) {
+      snprintf(row, sizeof row, "[gpu dcvs] level=%u changes=%u failed=%u busy=%u%% at 220:%u 295:%u 348:%u 401:%u 475:%u 550:%u 615:%u 680:%u",
+               native_gpu_dcvs[1], native_gpu_dcvs[2], native_gpu_dcvs[3], native_gpu_dcvs[4], native_gpu_dcvs[5], native_gpu_dcvs[6],
+               native_gpu_dcvs[7], native_gpu_dcvs[8], native_gpu_dcvs[9], native_gpu_dcvs[10], native_gpu_dcvs[11], native_gpu_dcvs[12]);
       at = put(out, at, cap, row, sizeof row);
     }
   }
