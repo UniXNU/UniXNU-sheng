@@ -28,8 +28,9 @@ static const char lite_jobs[]=
  "com.apple.ndoagent,com.apple.biomesyncd,com.apple.email.maild,com.apple.amsengagementd,com.apple.adid,com.apple.eyereliefd,"
  // Crash or respawn loops seen on hardware (int-176): fairplayd.A2 is KeepAlive and exits at once (22 launches in 6 minutes), passd crashes,
  // obliteration is a data-wipe daemon with nothing to do here. iconservicesagent also dies in CI::GLContext::init, but disabling it leaves
- // the icons missing (seen on hardware), so it stays enabled.
- "com.apple.fairplayd.A2,com.apple.passd,com.apple.mobile.obliteration";
+ // the icons missing (seen on hardware), so it stays enabled. coreduetd keeps one thread above 50 % of a core for the whole boot
+ // (the kernel's "burning CPU" report in i480 to i556), holding a big core and the P domain at its top clock.
+ "com.apple.fairplayd.A2,com.apple.passd,com.apple.mobile.obliteration,com.apple.coreduetd";
 static char policy[2048],jobs[200];
 volatile int sheng_watchdog_policy_status=-1;
 

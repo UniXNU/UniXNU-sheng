@@ -25,7 +25,7 @@ diff --git a/pexpert/pexpert/arm64/board_config.h b/pexpert/pexpert/arm64/board_
 diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
 --- a/osfmk/kern/sched_clutch.c
 +++ b/osfmk/kern/sched_clutch.c
-@@ -1110,7 +1110,28 @@
+@@ -1110,9 +1110,41 @@
  	priority_queue_init(&clutch_bucket->scb_clutchpri_prioq);
  	priority_queue_init(&clutch_bucket->scb_thread_runq);
  	queue_init(&clutch_bucket->scb_thread_timeshare_queue);
@@ -50,11 +50,24 @@ diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
 +	}
 +	return pset0.pset_cluster_id;
  }
-+#endif /* CONFIG_SCHED_EDGE */
  
  /*
++ * sheng: fixed priority, UI and user-initiated threads that prefer the P cluster neither migrate nor get stolen to the E cluster.
++ * The A510 cores run at a fraction of the P cores' speed and no performance controller raises their clock for a frame, so
++ * such a thread waits for (or preempts lower work on) a P core instead.
++ */
++static bool
++sched_edge_ui_bucket_stays_on_p(cluster_type_t from, cluster_type_t to, sched_bucket_t bucket)
++{
++	return from == CLUSTER_TYPE_P && to == CLUSTER_TYPE_E && bucket < TH_BUCKET_SHARE_DF;
++}
++#endif /* CONFIG_SCHED_EDGE */
++
++/*
   * sched_clutch_bucket_group_init()
-@@ -1135,7 +1156,11 @@
+  *
+  * Initializer for clutch bucket groups.
+@@ -1135,7 +1167,11 @@
  
  	os_atomic_store(&clutch_bucket_group->scbg_timeshare_tick, 0, relaxed);
  	os_atomic_store(&clutch_bucket_group->scbg_pri_shift, INT8_MAX, relaxed);
@@ -66,7 +79,7 @@ diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
  	/*
  	 * All thread groups should be initialized to be interactive; this allows the newly launched
  	 * thread groups to fairly compete with already running thread groups.
-@@ -1207,7 +1232,12 @@
+@@ -1207,7 +1243,12 @@
  static uint32_t
  sched_edge_clutch_bucket_group_preferred_cluster(sched_clutch_bucket_group_t clutch_bucket_group)
  {
@@ -80,7 +93,27 @@ diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
  }
  
  static uint32_t
-@@ -4870,10 +4900,10 @@
+@@ -3927,6 +3968,9 @@
+ 		/* Always allow stealing from homogeneous clusters */
+ 		return true;
+ 	} else {
++		if (sched_edge_ui_bucket_stays_on_p(candidate_pset->pset_type, idle_pset->pset_type, (sched_bucket_t)highest_runnable_bucket)) {
++			return false;
++		}
+ 		/* Use the load metrics for highest runnable bucket since that would be stolen next */
+ 		int32_t candidate_load = sched_edge_cluster_load_metric(candidate_pset, (sched_bucket_t)highest_runnable_bucket);
+ 		return candidate_load > 0;
+@@ -4172,6 +4216,9 @@
+ 
+ 	sched_clutch_edge *edge = preferred_pset->sched_edges;
+ 	if (edge[cluster_id].sce_migration_allowed == false) {
++		return false;
++	}
++	if (sched_edge_ui_bucket_stays_on_p(preferred_cluster_type, pset_type_for_id(cluster_id), thread->th_sched_bucket)) {
+ 		return false;
+ 	}
+ 	uint32_t dst_load = shared_rsrc_thread ? (uint32_t)sched_pset_cluster_shared_rsrc_load(dst_pset, shared_rsrc_type) : sched_edge_cluster_load_metric(dst_pset, thread->th_sched_bucket);
+@@ -4870,10 +4917,10 @@
  				bitmap_clear(src_pset->native_psets, dst_cluster_id);
  				sched_edge_config_set(src_cluster_id, dst_cluster_id, (sched_clutch_edge){.sce_migration_weight = 64, .sce_migration_allowed = 1, .sce_steal_allowed = 1});
  			} else {
