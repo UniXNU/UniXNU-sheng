@@ -76,6 +76,7 @@ extern volatile uint32_t native_adreno_fence_wait[8] __attribute__((weak_import)
 extern volatile uint32_t native_adreno_stall[24] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_stall_mem[59] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_unstick[15] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_fence_pending[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wptr_fence[4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_wait_outer[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_export_stats[4] __attribute__((weak_import));
@@ -1119,6 +1120,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_adreno_unstick[0], native_adreno_unstick[1], native_adreno_unstick[2], native_adreno_unstick[4],
              native_adreno_unstick[5], native_adreno_unstick[6], native_adreno_unstick[9], native_adreno_unstick[10],
              native_adreno_unstick[11], native_adreno_unstick[12], native_adreno_unstick[13]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  if (&native_adreno_fence_pending) {
+    char row[160];
+    // Fences by how long they stayed pending after their first timed-out wait: under 1, 2, 4, 8, 16, 32, 64 ms, then 64 ms or more.
+    snprintf(row, sizeof row, "[gpu pending] <1=%u <2=%u <4=%u <8=%u <16=%u <32=%u <64=%u more=%u", native_adreno_fence_pending[0],
+             native_adreno_fence_pending[1], native_adreno_fence_pending[2], native_adreno_fence_pending[3], native_adreno_fence_pending[4],
+             native_adreno_fence_pending[5], native_adreno_fence_pending[6], native_adreno_fence_pending[7]);
     at = put(out, at, cap, row, sizeof row);
   }
   if (&native_adreno_stall && native_adreno_stall[0]) {
