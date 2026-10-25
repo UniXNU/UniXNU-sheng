@@ -113,6 +113,8 @@ extern volatile int32_t native_mic_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_audio_service[8] __attribute__((weak_import));
 extern volatile uint32_t native_mic_regs[16] __attribute__((weak_import));
 extern volatile int32_t native_mic_capture[8] __attribute__((weak_import));
+#include "ShengAudioAbi.h"
+extern const ShengAudioDiag *sheng_audio_diag(void) __attribute__((weak_import));
 extern volatile uint64_t native_audio_pa __attribute__((weak_import));
 extern char native_adsp_text[96] __attribute__((weak_import));
 extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
@@ -934,10 +936,39 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                native_adsp_audio[5], native_adsp_audio[6], native_adsp_audio[7]);
       at = put(out, at, cap, row, sizeof row);
     }
-    // The audio service (ShengAudioService.cpp): state, opens, closes, requests, refused requests, memory maps.
+    // Every distinct property access of the audio server, in order: selector, object, scope letter, g/s (get/set), upper case if it failed.
+    if (&sheng_audio_diag && sheng_audio_diag()) {
+      const ShengAudioTrace *tr = (const ShengAudioTrace *)((const uint8_t *)sheng_audio_diag() - SHENG_AUDIO_DIAG_OFFSET + SHENG_AUDIO_TRACE_OFFSET);
+      const unsigned total = tr->count < SHENG_AUDIO_TRACE_SLOTS ? tr->count : SHENG_AUDIO_TRACE_SLOTS;
+      for (unsigned first = 0; first < total; first += 20) {
+        int n = snprintf(row, sizeof row, "[audio-trace %u/%u]", first, total);
+        for (unsigned i = first; i < total && i < first + 20 && n > 0 && n < (int)sizeof row - 12; ++i) {
+          const uint32_t s = tr->entry[i][0], w = tr->entry[i][1];
+          // Kind 8: a throw in the audio server's routing layer at offset s; kind 4: a failing call of that layer.
+          if (w & 8) {n += snprintf(row + n, sizeof row - (size_t)n, " throw@%x", s); continue;}
+          const char kind = (char)((w & 4) ? 'V' : (w & 1) ? ((w & 2) ? 'S' : 's') : ((w & 2) ? 'G' : 'g'));
+          n += snprintf(row + n, sizeof row - (size_t)n, " %c%c%c%c%u%c%c", (char)(s >> 24), (char)(s >> 16), (char)(s >> 8), (char)s, w >> 24,
+                        (char)((w >> 16) & 0xff), kind);
+        }
+        at = put(out, at, cap, row, sizeof row);
+      }
+    }
+    // What the plug-in could not answer: loads of the plug-in, then up to 16 'selector'@object/scope entries.
+    if (&sheng_audio_diag && sheng_audio_diag()) {
+      const ShengAudioDiag *d = sheng_audio_diag();
+      int n = snprintf(row, sizeof row, "[audio-props] loads=%u unknown=%u", d->loads, d->count);
+      for (unsigned i = 0; i < d->count && i < 16 && n > 0 && n < (int)sizeof row - 16; ++i) {
+        const uint32_t s = d->selector[i], w = d->where[i];
+        n += snprintf(row + n, sizeof row - (size_t)n, " %c%c%c%c@%u%c", (char)(s >> 24), (char)(s >> 16), (char)(s >> 8), (char)s, w >> 24,
+                      (char)(w & 0xff));
+      }
+      at = put(out, at, cap, row, sizeof row);
+    }
+    // The audio service (ShengAudioService.cpp): state, opens, closes, requests, refused requests, memory maps, the lock sound press.
     if (&native_audio_service && native_audio_service[0]) {
-      snprintf(row, sizeof row, "[audio-service] st=%d opens=%d closes=%d requests=%d refused=%d maps=%d", native_audio_service[0],
-               native_audio_service[1], native_audio_service[2], native_audio_service[3], native_audio_service[4], native_audio_service[5]);
+      snprintf(row, sizeof row, "[audio-service] st=%d opens=%d closes=%d requests=%d refused=%d maps=%d press=%d", native_audio_service[0],
+               native_audio_service[1], native_audio_service[2], native_audio_service[3], native_audio_service[4], native_audio_service[5],
+               native_audio_service[6]);
       at = put(out, at, cap, row, sizeof row);
     }
     if (&native_audio_pa) {

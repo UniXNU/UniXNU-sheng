@@ -36,4 +36,21 @@ typedef struct {
     volatile uint32_t out_seq, in_seq;       /* incremented around anchor updates (odd while writing) */
 } ShengAudioControl;
 
+/* Second half of the control page: the plug-in records what the audio server asked for and it does not answer (selector, object id
+ * << 24 | scope fourcc's first byte), so the kernel log names them without the unified log. */
+#define SHENG_AUDIO_DIAG_OFFSET 2048u
+#define SHENG_AUDIO_DIAG_SLOTS 32u
+typedef struct {
+    volatile uint32_t count, loads;
+    volatile uint32_t selector[SHENG_AUDIO_DIAG_SLOTS], where[SHENG_AUDIO_DIAG_SLOTS];
+} ShengAudioDiag;
+/* After it, every distinct property access in the order the audio server made it: selector, then object << 24 | scope's first byte << 16 |
+ * kind (1 set, 0 get) | 2 if it failed. */
+#define SHENG_AUDIO_TRACE_OFFSET 2560u
+#define SHENG_AUDIO_TRACE_SLOTS 128u
+typedef struct {
+    volatile uint32_t count;
+    volatile uint32_t entry[SHENG_AUDIO_TRACE_SLOTS][2];
+} ShengAudioTrace;
+
 #endif

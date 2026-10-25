@@ -11,6 +11,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <string.h>
+#include <os/log.h>
 #include "ShengAudioAbi.h"
 
 enum {kPlugIn = kAudioObjectPlugInObject, kDevice = 2, kOutStream = 3, kInStream = 4, kVolume = 5};
@@ -80,8 +81,10 @@ static OSStatus Initialize(AudioServerPlugInDriverRef d, AudioServerPlugInHostRe
     (void)d;
     gHost = host;
     pthread_mutex_lock(&gLock);
-    (void)connectService();
+    const int connected = connectService();
     pthread_mutex_unlock(&gLock);
+    os_log_error(OS_LOG_DEFAULT, "ShengAudio: loaded, service %{public}s", connected ? "not connected" : "connected");
+    if (gControl) ((ShengAudioDiag *)((uint8_t *)gControl + SHENG_AUDIO_DIAG_OFFSET))->loads += 1;
     return 0;
 }
 static OSStatus CreateDevice(AudioServerPlugInDriverRef d, CFDictionaryRef desc, const AudioServerPlugInClientInfo *c, AudioObjectID *o) {(void)d; (void)desc; (void)c; (void)o; return kAudioHardwareUnsupportedOperationError;}
@@ -98,6 +101,15 @@ static OSStatus GetPropertyDataSize(AudioServerPlugInDriverRef d, AudioObjectID 
 static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, pid_t pid, const AudioObjectPropertyAddress *a, UInt32 qs,
                                 const void *q, UInt32 inDataSize, UInt32 *outDataSize, void *outData);
 
+static void trace(AudioObjectID o, const AudioObjectPropertyAddress *a, UInt32 kind, OSStatus r) {
+    if (!gControl) return;
+    ShengAudioTrace *tr = (ShengAudioTrace *)((uint8_t *)gControl + SHENG_AUDIO_TRACE_OFFSET);
+    const UInt32 info = (UInt32)o << 24 | (a->mScope >> 24) << 16 | kind | (r ? 2u : 0u);
+    const UInt32 n = tr->count < SHENG_AUDIO_TRACE_SLOTS ? tr->count : SHENG_AUDIO_TRACE_SLOTS;
+    for (UInt32 i = 0; i < n; ++i) if (tr->entry[i][0] == a->mSelector && tr->entry[i][1] == info) return;
+    if (n < SHENG_AUDIO_TRACE_SLOTS) {tr->entry[n][0] = a->mSelector; tr->entry[n][1] = info; tr->count = n + 1;}
+}
+
 static OSStatus IsPropertySettable(AudioServerPlugInDriverRef d, AudioObjectID o, pid_t pid, const AudioObjectPropertyAddress *a, Boolean *out) {
     (void)d; (void)pid;
     *out = (o == kVolume && (a->mSelector == kAudioLevelControlPropertyScalarValue || a->mSelector == kAudioLevelControlPropertyDecibelValue)) ||
@@ -108,9 +120,7 @@ static OSStatus IsPropertySettable(AudioServerPlugInDriverRef d, AudioObjectID o
 
 static Float32 toDb(Float32 scalar) {return scalar <= 0.0001f ? -96.0f : 20.0f * log10f(scalar);}
 
-static OSStatus SetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, pid_t pid, const AudioObjectPropertyAddress *a, UInt32 qs,
-                                const void *q, UInt32 size, const void *data) {
-    (void)d; (void)pid; (void)qs; (void)q;
+static OSStatus setProperty(AudioObjectID o, const AudioObjectPropertyAddress *a, UInt32 size, const void *data) {
     if (o == kVolume && size >= sizeof(Float32)) {
         Float32 v = *(const Float32 *)data;
         if (a->mSelector == kAudioLevelControlPropertyDecibelValue) v = v <= -96.0f ? 0.0f : powf(10.0f, v / 20.0f);
@@ -128,6 +138,14 @@ static OSStatus SetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
     if (o == kDevice && a->mSelector == kAudioDevicePropertyNominalSampleRate)
         return size >= sizeof(Float64) && *(const Float64 *)data == kRate ? 0 : kAudioDeviceUnsupportedFormatError;
     return kAudioHardwareUnknownPropertyError;
+}
+
+static OSStatus SetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, pid_t pid, const AudioObjectPropertyAddress *a, UInt32 qs,
+                                const void *q, UInt32 size, const void *data) {
+    (void)d; (void)pid; (void)qs; (void)q;
+    const OSStatus r = setProperty(o, a, size, data);
+    trace(o, a, 1, r);
+    return r;
 }
 
 static Boolean HasProperty(AudioServerPlugInDriverRef d, AudioObjectID o, pid_t pid, const AudioObjectPropertyAddress *a) {
@@ -155,10 +173,16 @@ static UInt32 objects(AudioObjectID o, AudioObjectPropertyScope scope, AudioObje
     return n;
 }
 
-static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, pid_t pid, const AudioObjectPropertyAddress *a, UInt32 qs,
-                                const void *q, UInt32 inDataSize, UInt32 *outDataSize, void *outData) {
-    (void)d; (void)pid;
+static OSStatus propertyData(AudioObjectID o, const AudioObjectPropertyAddress *a, UInt32 qs, const void *q, UInt32 inDataSize,
+                             UInt32 *outDataSize, void *outData) {
     const AudioObjectPropertySelector s = a->mSelector;
+    // Lists every object answers, empty here: custom properties ('cust'), and on the plug-in its boxes and clock devices. The audio
+    // server's device manager reads them for each new device and drops a device whose answer is an unknown-property error (i525).
+    if (o <= kVolume && (s == kAudioObjectPropertyCustomPropertyInfoList || ((s == kAudioPlugInPropertyBoxList ||
+        s == kAudioPlugInPropertyClockDeviceList) && o == kPlugIn) || ((s == 'taps') && (o == kOutStream || o == kInStream)))) {
+        *outDataSize = 0;
+        return 0;
+    }
     switch (o) {
     case kPlugIn:
         switch (s) {
@@ -187,7 +211,19 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
         case kAudioObjectPropertyManufacturer: REPLY_STR("UniXNU");
         case kAudioDevicePropertyDeviceUID: REPLY_STR(kDeviceUID);
         case kAudioDevicePropertyModelUID: REPLY_STR(kModelUID);
-        case kAudioDevicePropertyTransportType: REPLY(UInt32, kAudioDeviceTransportTypeBuiltIn);
+        case kAudioObjectPropertyModelName: REPLY_STR("Speaker");
+        case kAudioObjectPropertySerialNumber: REPLY_STR("0001");
+        case kAudioObjectPropertyFirmwareVersion: REPLY_STR("1.0");
+        case kAudioObjectPropertyIdentify: REPLY(UInt32, 0);
+        // Private device properties the audio server reads for each new device (i526: 'accs' and 'auto' were its last unanswered ones).
+        case 'accs': REPLY(UInt32, 0);
+        case 'auto': REPLY(UInt32, 0);
+        case kAudioObjectPropertyElementName: REPLY_STR("");
+        case kAudioDevicePropertyConfigurationApplication: REPLY_STR("com.apple.Preferences");
+        // Thunderbolt: the audio server's routing layer makes a device of this transport a driver device with one output and one input
+        // port of its own. Built-in devices are only used through Apple's port descriptions, and a USB device must carry a USB location
+        // ('lcID') that the HAL does not take from a plug-in (i529).
+        case kAudioDevicePropertyTransportType: REPLY(UInt32, kAudioDeviceTransportTypeThunderbolt);
         case kAudioDevicePropertyRelatedDevices: REPLY(AudioObjectID, kDevice);
         case kAudioDevicePropertyClockDomain: REPLY(UInt32, 0);
         case kAudioDevicePropertyDeviceIsAlive: REPLY(UInt32, 1);
@@ -281,6 +317,147 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
         return kAudioHardwareBadObjectError;
     }
 }
+
+// Every property the audio server asks for and the plug-in does not answer is logged once (object, selector, scope), so a client that
+// drops the device after an unknown-property error names what it wanted.
+static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, pid_t pid, const AudioObjectPropertyAddress *a, UInt32 qs,
+                                const void *q, UInt32 inDataSize, UInt32 *outDataSize, void *outData) {
+    (void)d;
+    const OSStatus r = propertyData(o, a, qs, q, inDataSize, outDataSize, outData);
+    trace(o, a, 0, r);
+    if (r == kAudioHardwareUnknownPropertyError) {
+        static UInt64 seen[128];
+        static atomic_uint count;
+        const UInt64 key = (UInt64)o << 56 ^ (UInt64)a->mSelector << 24 ^ a->mScope;
+        unsigned n = atomic_load(&count);
+        for (unsigned i = 0; i < n && i < 128; ++i) if (seen[i] == key) return r;
+        n = atomic_fetch_add(&count, 1);
+        if (n < 128) seen[n] = key;
+        const UInt32 v = a->mSelector, sc = a->mScope;
+        if (gControl && n < SHENG_AUDIO_DIAG_SLOTS) {
+            ShengAudioDiag *diag = (ShengAudioDiag *)((uint8_t *)gControl + SHENG_AUDIO_DIAG_OFFSET);
+            diag->selector[n] = v;
+            diag->where[n] = (UInt32)o << 24 | (sc >> 24);
+            diag->count = n + 1;
+        }
+        os_log_error(OS_LOG_DEFAULT, "ShengAudio: unknown property object %u selector '%c%c%c%c' scope '%c%c%c%c' element %u pid %d", o,
+               (char)(v >> 24), (char)(v >> 16), (char)(v >> 8), (char)v, (char)(sc >> 24), (char)(sc >> 16), (char)(sc >> 8), (char)sc,
+               a->mElement, pid);
+    }
+    return r;
+}
+
+// ---- The audio server's view of the device ---------------------------------------------------------------------------------------
+// The routing layer of the audio server (VirtualAudio.plugin, in the same process) drops the device after a 'who?' error that never
+// reaches this plug-in (i528). Its HAL calls and C++ throws are rebound here through its symbol pointers: every failing call (object,
+// selector, scope, status) and every throw (the thrower's offset in the image, the exception's first word) is logged once and added to the
+// trace with kind 4 (call) or 8 (throw, the offset in place of the selector).
+#include <dlfcn.h>
+#include <mach/mach.h>
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+#include <mach-o/nlist.h>
+#include <sys/mman.h>
+static OSStatus (*gRealGet)(AudioObjectID, const AudioObjectPropertyAddress *, UInt32, const void *, UInt32 *, void *);
+static OSStatus (*gRealGetSize)(AudioObjectID, const AudioObjectPropertyAddress *, UInt32, const void *, UInt32 *);
+static Boolean (*gRealHas)(AudioObjectID, const AudioObjectPropertyAddress *);
+static void (*gRealThrow)(void *, void *, void (*)(void *));
+static uintptr_t gVaBase;
+
+static void noteCall(AudioObjectID o, const AudioObjectPropertyAddress *a, OSStatus r, const char *what) {
+    const AudioObjectPropertyAddress t = {a->mSelector, a->mScope, 0};
+    if (!gControl) return;
+    ShengAudioTrace *tr = (ShengAudioTrace *)((uint8_t *)gControl + SHENG_AUDIO_TRACE_OFFSET);
+    const UInt32 before = tr->count;
+    trace(o & 0xff, &t, 4, r ? r : 1);
+    if (tr->count == before) return;
+    const UInt32 v = a->mSelector, sc = a->mScope;
+    os_log_error(OS_LOG_DEFAULT, "ShengAudio: va %{public}s object %u '%c%c%c%c' scope '%c%c%c%c' element %u status %d", what, o,
+                 (char)(v >> 24), (char)(v >> 16), (char)(v >> 8), (char)v, (char)(sc >> 24), (char)(sc >> 16), (char)(sc >> 8), (char)sc,
+                 a->mElement, (int)r);
+}
+static OSStatus hookGet(AudioObjectID o, const AudioObjectPropertyAddress *a, UInt32 qs, const void *q, UInt32 *size, void *data) {
+    const OSStatus r = gRealGet(o, a, qs, q, size, data);
+    if (r && o) noteCall(o, a, r, "get");
+    return r;
+}
+static OSStatus hookGetSize(AudioObjectID o, const AudioObjectPropertyAddress *a, UInt32 qs, const void *q, UInt32 *size) {
+    const OSStatus r = gRealGetSize(o, a, qs, q, size);
+    if (r && o) noteCall(o, a, r, "size");
+    return r;
+}
+static Boolean hookHas(AudioObjectID o, const AudioObjectPropertyAddress *a) {
+    const Boolean r = gRealHas(o, a);
+    if (!r && o) noteCall(o, a, 0, "has");
+    return r;
+}
+static void hookThrow(void *thrown, void *type, void (*destroy)(void *)) {
+    const uintptr_t at = (uintptr_t)__builtin_return_address(0) - gVaBase;
+    const UInt32 first = thrown ? *(const UInt32 *)thrown : 0;
+    const char *name = type ? ((const char *const *)type)[1] : "";
+    if (gControl) {
+        const AudioObjectPropertyAddress t = {(UInt32)at, kAudioObjectPropertyScopeGlobal, 0};
+        trace(0, &t, 8, (OSStatus)(first | 1));
+    }
+    os_log_error(OS_LOG_DEFAULT, "ShengAudio: va throw at 0x%lx type %{public}s first 0x%08x", (unsigned long)at, name, first);
+    __attribute__((musttail)) return gRealThrow(thrown, type, destroy);
+}
+
+// Rebinds the named imports of one image: its non-lazy and lazy symbol pointer sections, through the indirect symbol table.
+static void rebind(const struct mach_header_64 *h, intptr_t slide) {
+    const struct load_command *lc = (const void *)(h + 1);
+    const struct segment_command_64 *linkedit = NULL;
+    const struct symtab_command *symtab = NULL;
+    const struct dysymtab_command *dysymtab = NULL;
+    for (uint32_t i = 0; i < h->ncmds; ++i, lc = (const void *)((const uint8_t *)lc + lc->cmdsize)) {
+        if (lc->cmd == LC_SEGMENT_64 && !strcmp(((const struct segment_command_64 *)lc)->segname, SEG_LINKEDIT)) linkedit = (const void *)lc;
+        else if (lc->cmd == LC_SYMTAB) symtab = (const void *)lc;
+        else if (lc->cmd == LC_DYSYMTAB) dysymtab = (const void *)lc;
+    }
+    if (!linkedit || !symtab || !dysymtab) return;
+    const uintptr_t base = (uintptr_t)slide + linkedit->vmaddr - linkedit->fileoff;
+    const struct nlist_64 *syms = (const void *)(base + symtab->symoff);
+    const char *strs = (const char *)(base + symtab->stroff);
+    const uint32_t *indirect = (const void *)(base + dysymtab->indirectsymoff);
+    static const char *const names[] = {"_AudioObjectGetPropertyData", "_AudioObjectGetPropertyDataSize", "_AudioObjectHasProperty", "___cxa_throw"};
+    void *const hooks[] = {(void *)hookGet, (void *)hookGetSize, (void *)hookHas, (void *)hookThrow};
+    void **const reals[] = {(void **)&gRealGet, (void **)&gRealGetSize, (void **)&gRealHas, (void **)&gRealThrow};
+    lc = (const void *)(h + 1);
+    for (uint32_t i = 0; i < h->ncmds; ++i, lc = (const void *)((const uint8_t *)lc + lc->cmdsize)) {
+        if (lc->cmd != LC_SEGMENT_64) continue;
+        const struct segment_command_64 *seg = (const void *)lc;
+        const struct section_64 *sect = (const void *)(seg + 1);
+        for (uint32_t s = 0; s < seg->nsects; ++s, ++sect) {
+            const uint32_t type = sect->flags & SECTION_TYPE;
+            if (type != S_NON_LAZY_SYMBOL_POINTERS && type != S_LAZY_SYMBOL_POINTERS) continue;
+            void **slots = (void **)((uintptr_t)slide + sect->addr);
+            for (uint64_t k = 0; k < sect->size / sizeof(void *); ++k) {
+                const uint32_t index = indirect[sect->reserved1 + k];
+                if (index & (INDIRECT_SYMBOL_ABS | INDIRECT_SYMBOL_LOCAL)) continue;
+                const char *name = strs + syms[index].n_un.n_strx;
+                for (unsigned n = 0; n < 4; ++n) {
+                    if (strcmp(name, names[n]) || slots[k] == hooks[n]) continue;
+                    const uintptr_t page = (uintptr_t)&slots[k] & ~(uintptr_t)(getpagesize() - 1);
+                    if (mprotect((void *)page, (size_t)getpagesize(), PROT_READ | PROT_WRITE) &&
+                        vm_protect(mach_task_self(), page, (vm_size_t)getpagesize(), false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY)) {
+                        os_log_error(OS_LOG_DEFAULT, "ShengAudio: va rebind %{public}s failed", name);
+                        continue;
+                    }
+                    if (!*reals[n]) *reals[n] = slots[k];
+                    slots[k] = hooks[n];
+                    os_log_error(OS_LOG_DEFAULT, "ShengAudio: va rebind %{public}s", name);
+                }
+            }
+        }
+    }
+}
+static void imageAdded(const struct mach_header *h, intptr_t slide) {
+    Dl_info info;
+    if (h->magic != MH_MAGIC_64 || !dladdr(h, &info) || !info.dli_fname || !strstr(info.dli_fname, "VirtualAudio.plugin/")) return;
+    gVaBase = (uintptr_t)h;
+    rebind((const struct mach_header_64 *)h, slide);
+}
+__attribute__((constructor)) static void watchAudioServer(void) {_dyld_register_func_for_add_image(imageAdded);}
 
 // ---- IO ----------------------------------------------------------------------------------------------------------------------------
 static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 client) {
