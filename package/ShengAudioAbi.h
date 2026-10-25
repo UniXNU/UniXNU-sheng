@@ -36,6 +36,8 @@ typedef struct {
     volatile uint32_t out_late, in_late;     /* periods the service had to send or deliver without fresh data */
     volatile uint32_t out_seq, in_seq;       /* incremented around anchor updates (odd while writing) */
     volatile uint64_t out_written;           /* the plug-in: the sample time after the last frame it wrote */
+    volatile uint64_t in_written;            /* the service: the sample time after the last captured frame in the ring */
+    volatile uint64_t out_written_host;      /* the plug-in: host time of its last write */
 } ShengAudioControl;
 
 /* Second half of the control page: the plug-in records what the audio server asked for and it does not answer (selector, object id
@@ -47,6 +49,11 @@ typedef struct {
     volatile uint32_t selector[SHENG_AUDIO_DIAG_SLOTS], where[SHENG_AUDIO_DIAG_SLOTS];
     volatile uint32_t volume_milli, volume_sets;  /* the output volume (scalar x 1000) and how often the audio server set it */
     volatile uint32_t mix_peak;                   /* the largest output sample before the volume, x 32767 */
+    volatile uint32_t in_misses;                  /* input reads that asked for frames the service had not captured yet */
+    /* How far ahead of the play position the audio server writes (output time minus now, frames) and how far behind it reads, the
+     * least and most of each, and the frames of the last write. */
+    volatile int32_t ahead_min, ahead_max, behind_min, behind_max;
+    volatile uint32_t io_frames, writes;
 } ShengAudioDiag;
 /* After it, every distinct property access in the order the audio server made it: selector, then object << 24 | scope's first byte << 16 |
  * kind (1 set, 0 get) | 2 if it failed. */

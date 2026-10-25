@@ -123,11 +123,12 @@ static OSStatus IsPropertySettable(AudioServerPlugInDriverRef d, AudioObjectID o
     return HasProperty(d, o, pid, a) ? 0 : kAudioHardwareUnknownPropertyError;
 }
 
-// The output volume spans kMinDb..0 dB, linear in dB over the scalar; scalar 0 mutes. The audio server maps its user volume onto this
-// range, so a -96 dB floor made a third of full volume -56 dB, nearly silent (i532).
-static const Float32 kMinDb = -40.0f;
-static Float32 toDb(Float32 scalar) {return kMinDb * (1.0f - (scalar < 0 ? 0 : scalar > 1 ? 1 : scalar));}
-static Float32 toScalar(Float32 db) {return db <= kMinDb ? 0.0f : db >= 0 ? 1.0f : 1.0f - db / kMinDb;}
+// The output volume spans kMinDb..0 dB on a squared curve over the scalar (loud in the middle, fine steps near the bottom); scalar 0
+// mutes. The audio server maps its user volume onto this range: a -96 dB floor made a third of full volume -56 dB (i532), a linear
+// -40 dB range still -26 dB (i533, quiet); now it is -16 dB.
+static const Float32 kMinDb = -36.0f;
+static Float32 toDb(Float32 scalar) {const Float32 r = 1.0f - (scalar < 0 ? 0 : scalar > 1 ? 1 : scalar); return kMinDb * r * r;}
+static Float32 toScalar(Float32 db) {return db <= kMinDb ? 0.0f : db >= 0 ? 1.0f : 1.0f - sqrtf(db / kMinDb);}
 static Float32 gain(void) {return gVolume <= 0.0f ? 0.0f : powf(10.0f, toDb(gVolume) / 20.0f);}
 
 static OSStatus setProperty(AudioObjectID o, const AudioObjectPropertyAddress *a, UInt32 size, const void *data) {
@@ -248,7 +249,8 @@ static OSStatus propertyData(AudioObjectID o, const AudioObjectPropertyAddress *
         case kAudioDevicePropertyDeviceCanBeDefaultDevice: REPLY(UInt32, 1);
         case kAudioDevicePropertyDeviceCanBeDefaultSystemDevice: REPLY(UInt32, 1);
         case kAudioDevicePropertyLatency: REPLY(UInt32, latencyFrames());
-        // The service takes a period four periods before it plays (the DSP's queue), so the audio server must have written it by then.
+        // The service takes a period lead_frames before it plays (its own queue and the DSP's); the service measures and publishes it, so
+        // the audio server writes each frame at least that early.
         case kAudioDevicePropertySafetyOffset: REPLY(UInt32, latencyFrames() + 2 * SHENG_AUDIO_PERIOD_FRAMES);
         case kAudioDevicePropertyNominalSampleRate: REPLY(Float64, kRate);
         case kAudioDevicePropertyAvailableNominalSampleRates: REPLY(AudioValueRange, ((AudioValueRange){kRate, kRate}));
@@ -528,13 +530,21 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
                               const AudioServerPlugInIOCycleInfo *info, void *main, void *secondary) {
     (void)d; (void)o; (void)client; (void)secondary;
     if (!gControl) return 0;
+    // The play position now, on the timeline GetZeroTimeStamp gives the audio server.
+    const uint64_t host = mach_absolute_time(), anchor = gControl->out_anchor_host;
+    const int64_t nowFrames = host > anchor ? (int64_t)((Float64)(host - anchor) / gHostTicksPerFrame) : 0;
+    ShengAudioDiag *diag = (ShengAudioDiag *)((uint8_t *)gControl + SHENG_AUDIO_DIAG_OFFSET);
     if (op == kAudioServerPlugInIOOperationWriteMix && stream == kOutStream) {
+        const int32_t ahead = (int32_t)((int64_t)info->mOutputTime.mSampleTime - nowFrames);
+        if (!diag->writes || ahead < diag->ahead_min) diag->ahead_min = ahead;
+        if (!diag->writes || ahead > diag->ahead_max) diag->ahead_max = ahead;
+        diag->io_frames = frames;
+        diag->writes += 1;
         const Float32 *src = main;
         uint64_t t = (uint64_t)info->mOutputTime.mSampleTime;
         const Float32 g = gain();
         Float32 peak = 0;
         for (UInt32 i = 0; i < 2 * frames; ++i) {const Float32 v = fabsf(src[i]); if (v > peak) peak = v;}
-        ShengAudioDiag *diag = (ShengAudioDiag *)((uint8_t *)gControl + SHENG_AUDIO_DIAG_OFFSET);
         const UInt32 p = (UInt32)(fminf(peak, 1.0f) * 32767.0f);
         if (p > diag->mix_peak) diag->mix_peak = p;
         for (UInt32 i = 0; i < frames; ++i, ++t) {
@@ -543,10 +553,17 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
             dst[1] = toS16(src[2 * i + 1] * g);
         }
         if (t > gControl->out_written) gControl->out_written = t;
+        gControl->out_written_host = host;
     } else if (op == kAudioServerPlugInIOOperationReadInput && stream == kInStream) {
+        // Frames the service has not captured yet read as silence, not as what the ring held one turn earlier; such reads are counted.
+        const int32_t behind = (int32_t)(nowFrames - (int64_t)info->mInputTime.mSampleTime);
+        if (!diag->behind_max || behind < diag->behind_min) diag->behind_min = behind;
+        if (behind > diag->behind_max) diag->behind_max = behind;
         Float32 *dst = main;
         uint64_t t = (uint64_t)info->mInputTime.mSampleTime;
-        for (UInt32 i = 0; i < frames; ++i, ++t) dst[i] = gIn[t % SHENG_AUDIO_RING_FRAMES] / 32768.0f;
+        const uint64_t written = gControl->in_written;
+        if (t + frames > written) diag->in_misses += 1;
+        for (UInt32 i = 0; i < frames; ++i, ++t) dst[i] = t < written ? gIn[t % SHENG_AUDIO_RING_FRAMES] / 32768.0f : 0.0f;
     }
     return 0;
 }
