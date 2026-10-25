@@ -71,7 +71,7 @@
 "dram_size" = "0x80000000"
 "skip_setup_tool" = "scripts/seed-data-skip-setup.py"
 "panic_screen" = true
-"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-hid-home=1", "offline-hid-input=1", "offline-legacy-phase=4", "offline-mobile-graphics-client=1", "offline-mobile-graphics-load=1", "offline-apfs-load=1", "boot-progress=2", "-apfs_shared_datavolume", "offline-key-events=1", "native-ufs-root=1", "sheng-pmgr=2", "sheng-disable-watchdogd=1", "sheng-lite=1", "boot-ui-focus4=SpringBoard", "sheng-smp=1", "sheng-cpufreq=3", "sheng-touch=4", "sheng-aks=1", "sheng-gpu-power=9", "sheng-gpu-metal=1", "sheng-fb-gpu=1", "sheng-banner=0", "sheng-gpu-perf=8", "sheng-gpu-addon=1", "armcpu-spi-ipi=1", "-no_slto_panic", "ml-timeout-lock-panic-scale=40", "sheng-touch-hid=1", "sheng-data-persist=2", "sheng-staged-apps=1", "sheng-buttons=1", "sheng-backlight=1", "sheng-vsync=120"]
+"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-hid-home=1", "offline-hid-input=1", "offline-legacy-phase=4", "offline-mobile-graphics-client=1", "offline-mobile-graphics-load=1", "offline-apfs-load=1", "boot-progress=2", "-apfs_shared_datavolume", "offline-key-events=1", "native-ufs-root=1", "sheng-pmgr=2", "sheng-disable-watchdogd=1", "sheng-lite=1", "boot-ui-focus4=SpringBoard", "sheng-smp=1", "sheng-cpufreq=4", "sheng-touch=4", "sheng-aks=1", "sheng-gpu-power=9", "sheng-gpu-metal=1", "sheng-fb-gpu=1", "sheng-banner=0", "sheng-gpu-dcvs=1", "sheng-gpu-addon=1", "armcpu-spi-ipi=1", "-no_slto_panic", "ml-timeout-lock-panic-scale=40", "sheng-touch-hid=1", "sheng-data-persist=2", "sheng-staged-apps=1", "sheng-buttons=1", "sheng-backlight=1", "sheng-vsync=120"]
 
 ["payload"."install"]
 "title" = "Install and boot"
@@ -108,7 +108,7 @@
 ["adt"."product"]
 
 ["adt"."product"."string"]
-"model" = "xiaomi,sheng"
+"model" = "J120AP"
 "artwork-display-gamut" = "sRGB"
 
 
