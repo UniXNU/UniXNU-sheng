@@ -31,6 +31,9 @@ def distribution(values, budget_us=None):
 
 
 def analyze(text):
+    # Byte-decoded snapshots retain CRLF; normalize only the parser's text so the
+    # CLI continues to hash the original input bytes.
+    text = text.replace('\r\n', '\n')
     # Each snapshot reprints the rings. Last observation wins, including a later callback
     # replacing an initially zero completion time. Never count the reprints as new work.
     commands, swaps = {}, {}
