@@ -111,7 +111,9 @@ extern volatile uint32_t native_audio_amps[6][4] __attribute__((weak_import));
 extern volatile int32_t native_adsp_audio[8] __attribute__((weak_import));
 extern volatile int32_t native_mic_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_audio_service[8] __attribute__((weak_import));
+extern volatile uint64_t native_audio_clock[4] __attribute__((weak_import));
 extern volatile int32_t native_audio_sync[5] __attribute__((weak_import));
+extern volatile uint64_t native_audio_requests[17] __attribute__((weak_import));
 extern volatile int32_t native_audio_passed __attribute__((weak_import));
 extern volatile uint32_t native_mic_regs[16] __attribute__((weak_import));
 extern volatile int32_t native_mic_capture[8] __attribute__((weak_import));
@@ -987,8 +989,24 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                d->frames_total, d->gaps, d->gap_frames, d->interval[0], d->interval[1], d->interval[2], d->interval[3], d->interval[4],
                d->interval[5], d->skew_min, d->skew_max);
       at = put(out, at, cap, row, sizeof row);
-      snprintf(row, sizeof row, "[audio-thread] pri=%d base=%d min=%d policy=%d tc=%d period=%u comp=%u constraint=%u", d->io_pri, d->io_base,
-               d->io_pri_min, d->io_policy, d->io_tc, d->io_period, d->io_computation, d->io_constraint);
+      snprintf(row, sizeof row, "[audio-thread] pri=%d base=%d min=%d policy=%d tc=%d period=%u comp=%u constraint=%u clock=%u/%d", d->io_pri,
+               d->io_base, d->io_pri_min, d->io_policy, d->io_tc, d->io_period, d->io_computation, d->io_constraint, d->host_clock,
+               d->host_clock_result);
+      at = put(out, at, cap, row, sizeof row);
+      if (&native_audio_clock) {
+        snprintf(row, sizeof row, "[audio-clock] step=%llu va=%llx pa=%llx value=%llx", native_audio_clock[0], native_audio_clock[1],
+                 native_audio_clock[2], native_audio_clock[3]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+    }
+    // The plug-in's last requests (AudioProbe.cpp sheng_audio_request): ms since boot and selector (0/1 output start/stop, 2/3 input).
+    if (&native_audio_requests && native_audio_requests[16]) {
+      int n = snprintf(row, sizeof row, "[audio-requests]");
+      const uint64_t next = native_audio_requests[16], first = next > 16 ? next - 16 : 0;
+      for (uint64_t i = first; i < next && n < (int)sizeof row - 16; ++i) {
+        const uint64_t e = native_audio_requests[i % 16];
+        n += snprintf(row + n, sizeof row - n, " %llu:%llu", e >> 4, e & 15);
+      }
       at = put(out, at, cap, row, sizeof row);
     }
     // Playback and capture against the shared timeline (AudioProbe.cpp syncPlayback / syncCapture).
