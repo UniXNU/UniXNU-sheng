@@ -4,7 +4,8 @@
  *
  * Memory type 0 is the control page; 1 the playback ring; 2 the capture ring. Rings hold 16-bit little-endian interleaved samples,
  * ring_frames frames each. Sample time t lives at frame t % ring_frames. Sample time 0 of a direction is the frame the DSP plays (or
- * captures) at host time anchor_host of that direction; one frame lasts ticks_per_frame_q32 / 2^32 host ticks. The service consumes
+ * captures) at host time anchor_host of that direction; one frame lasts ticks_per_frame_q32 / 2^32 host ticks. The anchors are set
+ * once, when the service starts, so one timeline holds for the whole boot; the service clears each playback period once it has taken it. The service consumes
  * playback frames lead_frames ahead of the play position and fills capture frames lead_frames behind it, so the plug-in writes at least
  * lead_frames ahead and reads at least lead_frames behind. */
 #ifndef SHENG_AUDIO_ABI_H
@@ -34,6 +35,7 @@ typedef struct {
     volatile uint64_t out_frames, in_frames; /* frames the service consumed / produced so far */
     volatile uint32_t out_late, in_late;     /* periods the service had to send or deliver without fresh data */
     volatile uint32_t out_seq, in_seq;       /* incremented around anchor updates (odd while writing) */
+    volatile uint64_t out_written;           /* the plug-in: the sample time after the last frame it wrote */
 } ShengAudioControl;
 
 /* Second half of the control page: the plug-in records what the audio server asked for and it does not answer (selector, object id
@@ -43,6 +45,8 @@ typedef struct {
 typedef struct {
     volatile uint32_t count, loads;
     volatile uint32_t selector[SHENG_AUDIO_DIAG_SLOTS], where[SHENG_AUDIO_DIAG_SLOTS];
+    volatile uint32_t volume_milli, volume_sets;  /* the output volume (scalar x 1000) and how often the audio server set it */
+    volatile uint32_t mix_peak;                   /* the largest output sample before the volume, x 32767 */
 } ShengAudioDiag;
 /* After it, every distinct property access in the order the audio server made it: selector, then object << 24 | scope's first byte << 16 |
  * kind (1 set, 0 get) | 2 if it failed. */

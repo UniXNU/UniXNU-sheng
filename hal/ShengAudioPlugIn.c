@@ -27,7 +27,7 @@ static io_connect_t gConnect;
 static ShengAudioControl *gControl;
 static int16_t *gOut, *gIn;
 static UInt32 gIoUsers;
-static Float32 gVolume = 1.0f;
+static Float32 gVolume = 1.0f;   // the volume control's scalar (slider position)
 static Float64 gHostTicksPerFrame;
 
 // ---- Kernel service ------------------------------------------------------------------------------------------------------------
@@ -84,7 +84,11 @@ static OSStatus Initialize(AudioServerPlugInDriverRef d, AudioServerPlugInHostRe
     const int connected = connectService();
     pthread_mutex_unlock(&gLock);
     os_log_error(OS_LOG_DEFAULT, "ShengAudio: loaded, service %{public}s", connected ? "not connected" : "connected");
-    if (gControl) ((ShengAudioDiag *)((uint8_t *)gControl + SHENG_AUDIO_DIAG_OFFSET))->loads += 1;
+    if (gControl) {
+        ShengAudioDiag *diag = (ShengAudioDiag *)((uint8_t *)gControl + SHENG_AUDIO_DIAG_OFFSET);
+        diag->loads += 1;
+        diag->volume_milli = (UInt32)(gVolume * 1000.0f);
+    }
     return 0;
 }
 static OSStatus CreateDevice(AudioServerPlugInDriverRef d, CFDictionaryRef desc, const AudioServerPlugInClientInfo *c, AudioObjectID *o) {(void)d; (void)desc; (void)c; (void)o; return kAudioHardwareUnsupportedOperationError;}
@@ -113,19 +117,30 @@ static void trace(AudioObjectID o, const AudioObjectPropertyAddress *a, UInt32 k
 static OSStatus IsPropertySettable(AudioServerPlugInDriverRef d, AudioObjectID o, pid_t pid, const AudioObjectPropertyAddress *a, Boolean *out) {
     (void)d; (void)pid;
     *out = (o == kVolume && (a->mSelector == kAudioLevelControlPropertyScalarValue || a->mSelector == kAudioLevelControlPropertyDecibelValue)) ||
-           ((o == kOutStream || o == kInStream) && (a->mSelector == kAudioStreamPropertyVirtualFormat || a->mSelector == kAudioStreamPropertyPhysicalFormat)) ||
+           ((o == kOutStream || o == kInStream) && (a->mSelector == kAudioStreamPropertyVirtualFormat || a->mSelector == kAudioStreamPropertyPhysicalFormat ||
+                                                     a->mSelector == kAudioStreamPropertyIsActive)) ||
            (o == kDevice && a->mSelector == kAudioDevicePropertyNominalSampleRate);
     return HasProperty(d, o, pid, a) ? 0 : kAudioHardwareUnknownPropertyError;
 }
 
-static Float32 toDb(Float32 scalar) {return scalar <= 0.0001f ? -96.0f : 20.0f * log10f(scalar);}
+// The output volume spans kMinDb..0 dB, linear in dB over the scalar; scalar 0 mutes. The audio server maps its user volume onto this
+// range, so a -96 dB floor made a third of full volume -56 dB, nearly silent (i532).
+static const Float32 kMinDb = -40.0f;
+static Float32 toDb(Float32 scalar) {return kMinDb * (1.0f - (scalar < 0 ? 0 : scalar > 1 ? 1 : scalar));}
+static Float32 toScalar(Float32 db) {return db <= kMinDb ? 0.0f : db >= 0 ? 1.0f : 1.0f - db / kMinDb;}
+static Float32 gain(void) {return gVolume <= 0.0f ? 0.0f : powf(10.0f, toDb(gVolume) / 20.0f);}
 
 static OSStatus setProperty(AudioObjectID o, const AudioObjectPropertyAddress *a, UInt32 size, const void *data) {
     if (o == kVolume && size >= sizeof(Float32)) {
         Float32 v = *(const Float32 *)data;
-        if (a->mSelector == kAudioLevelControlPropertyDecibelValue) v = v <= -96.0f ? 0.0f : powf(10.0f, v / 20.0f);
+        if (a->mSelector == kAudioLevelControlPropertyDecibelValue) v = toScalar(v);
         else if (a->mSelector != kAudioLevelControlPropertyScalarValue) return kAudioHardwareUnknownPropertyError;
         gVolume = v < 0 ? 0 : v > 1 ? 1 : v;
+        if (gControl) {
+            ShengAudioDiag *diag = (ShengAudioDiag *)((uint8_t *)gControl + SHENG_AUDIO_DIAG_OFFSET);
+            diag->volume_milli = (UInt32)(gVolume * 1000.0f);
+            diag->volume_sets += 1;
+        }
         AudioObjectPropertyAddress changed[2] = {{kAudioLevelControlPropertyScalarValue, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain},
                                                  {kAudioLevelControlPropertyDecibelValue, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain}};
         gHost->PropertiesChanged(gHost, kVolume, 2, changed);
@@ -137,6 +152,8 @@ static OSStatus setProperty(AudioObjectID o, const AudioObjectPropertyAddress *a
     }
     if (o == kDevice && a->mSelector == kAudioDevicePropertyNominalSampleRate)
         return size >= sizeof(Float64) && *(const Float64 *)data == kRate ? 0 : kAudioDeviceUnsupportedFormatError;
+    // The audio server turns streams it does not use off and on (i530); both streams stay running, so this only acknowledges it.
+    if ((o == kOutStream || o == kInStream) && a->mSelector == kAudioStreamPropertyIsActive) return size >= sizeof(UInt32) ? 0 : kAudioHardwareBadPropertySizeError;
     return kAudioHardwareUnknownPropertyError;
 }
 
@@ -231,7 +248,8 @@ static OSStatus propertyData(AudioObjectID o, const AudioObjectPropertyAddress *
         case kAudioDevicePropertyDeviceCanBeDefaultDevice: REPLY(UInt32, 1);
         case kAudioDevicePropertyDeviceCanBeDefaultSystemDevice: REPLY(UInt32, 1);
         case kAudioDevicePropertyLatency: REPLY(UInt32, latencyFrames());
-        case kAudioDevicePropertySafetyOffset: REPLY(UInt32, latencyFrames());
+        // The service takes a period four periods before it plays (the DSP's queue), so the audio server must have written it by then.
+        case kAudioDevicePropertySafetyOffset: REPLY(UInt32, latencyFrames() + 2 * SHENG_AUDIO_PERIOD_FRAMES);
         case kAudioDevicePropertyNominalSampleRate: REPLY(Float64, kRate);
         case kAudioDevicePropertyAvailableNominalSampleRates: REPLY(AudioValueRange, ((AudioValueRange){kRate, kRate}));
         case kAudioDevicePropertyIsHidden: REPLY(UInt32, 0);
@@ -304,13 +322,13 @@ static OSStatus propertyData(AudioObjectID o, const AudioObjectPropertyAddress *
         case kAudioControlPropertyElement: REPLY(AudioObjectPropertyElement, kAudioObjectPropertyElementMain);
         case kAudioLevelControlPropertyScalarValue: REPLY(Float32, gVolume);
         case kAudioLevelControlPropertyDecibelValue: REPLY(Float32, toDb(gVolume));
-        case kAudioLevelControlPropertyDecibelRange: REPLY(AudioValueRange, ((AudioValueRange){-96.0, 0.0}));
+        case kAudioLevelControlPropertyDecibelRange: REPLY(AudioValueRange, ((AudioValueRange){kMinDb, 0.0}));
         case kAudioLevelControlPropertyConvertScalarToDecibels:
             if (inDataSize < sizeof(Float32)) return kAudioHardwareBadPropertySizeError;
             *(Float32 *)outData = toDb(*(Float32 *)outData); *outDataSize = sizeof(Float32); return 0;
         case kAudioLevelControlPropertyConvertDecibelsToScalar:
             if (inDataSize < sizeof(Float32)) return kAudioHardwareBadPropertySizeError;
-            *(Float32 *)outData = *(Float32 *)outData <= -96.0f ? 0.0f : powf(10.0f, *(Float32 *)outData / 20.0f); *outDataSize = sizeof(Float32); return 0;
+            *(Float32 *)outData = toScalar(*(Float32 *)outData); *outDataSize = sizeof(Float32); return 0;
         default: return kAudioHardwareUnknownPropertyError;
         }
     default:
@@ -513,12 +531,18 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
     if (op == kAudioServerPlugInIOOperationWriteMix && stream == kOutStream) {
         const Float32 *src = main;
         uint64_t t = (uint64_t)info->mOutputTime.mSampleTime;
-        const Float32 gain = gVolume;
+        const Float32 g = gain();
+        Float32 peak = 0;
+        for (UInt32 i = 0; i < 2 * frames; ++i) {const Float32 v = fabsf(src[i]); if (v > peak) peak = v;}
+        ShengAudioDiag *diag = (ShengAudioDiag *)((uint8_t *)gControl + SHENG_AUDIO_DIAG_OFFSET);
+        const UInt32 p = (UInt32)(fminf(peak, 1.0f) * 32767.0f);
+        if (p > diag->mix_peak) diag->mix_peak = p;
         for (UInt32 i = 0; i < frames; ++i, ++t) {
             int16_t *dst = gOut + 2 * (t % SHENG_AUDIO_RING_FRAMES);
-            dst[0] = toS16(src[2 * i] * gain);
-            dst[1] = toS16(src[2 * i + 1] * gain);
+            dst[0] = toS16(src[2 * i] * g);
+            dst[1] = toS16(src[2 * i + 1] * g);
         }
+        if (t > gControl->out_written) gControl->out_written = t;
     } else if (op == kAudioServerPlugInIOOperationReadInput && stream == kInStream) {
         Float32 *dst = main;
         uint64_t t = (uint64_t)info->mInputTime.mSampleTime;

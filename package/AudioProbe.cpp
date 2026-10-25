@@ -68,7 +68,7 @@ constexpr uint32_t kIntentSize = 512, kIntentCount = 20, kRing = 16, kMessage = 
 constexpr uint32_t kPort = 0x2001;                   // our GPR port; every answer comes back to it
 constexpr uint32_t kRate = SHENG_AUDIO_RATE, kChannels = SHENG_AUDIO_OUT_CHANNELS, kPeriodFrames = SHENG_AUDIO_PERIOD_FRAMES;
 constexpr uint32_t kPeriodBytes = kPeriodFrames * kChannels * 2, kSlots = 8, kBufferBytes = 64 * 1024, kRingFrames = SHENG_AUDIO_RING_FRAMES;
-constexpr uint32_t kInFlight = 4, kLeadFrames = (kInFlight + 1) * kPeriodFrames;
+constexpr uint32_t kInFlight = 4, kLeadFrames = (kInFlight + 1) * kPeriodFrames, kKeepMs = 5000;
 // Capture periods (mono) live in the second half of the DSP buffer; the microphone graphs start in this order and stop in reverse.
 constexpr uint32_t kCapBytes = kPeriodFrames * 2, kCapOffset = 32 * 1024, kCapSlots = 8;
 const uint32_t kMicUp[2] = {AR_SG_MIC, AR_SG_CAPTURE}, kMicDown[2] = {AR_SG_CAPTURE, AR_SG_MIC};
@@ -150,8 +150,9 @@ struct Audio {
     int16_t *out;
     volatile uint32_t want;            // ShengAudioOutputRunning / ShengAudioInputRunning as the plug-in asks
     volatile uint32_t serving;         // the service accepts requests
-    bool running, statusRead;
-    uint64_t next, done;
+    bool running, statusRead, tone;
+    uint64_t next, done, first;        // playback periods: next to send, returned so far, the first of this run (all absolute)
+    uint64_t stopAsked;                // ms when the plug-in stopped output; the path stays up kKeepMs longer
     uint32_t inFlight;
     // Capture for the plug-in's input stream, once the microphone test passed: periods read from the DSP land in the capture ring at
     // capBase + n * kPeriodFrames, capBase being the playback position when capture started (both directions share one clock).
@@ -457,18 +458,46 @@ bool setupShared() {
     c->rate = kRate; c->out_channels = SHENG_AUDIO_OUT_CHANNELS; c->in_channels = SHENG_AUDIO_IN_CHANNELS;
     c->period_frames = kPeriodFrames; c->ring_frames = kRingFrames; c->lead_frames = kLeadFrames;
     c->ticks_per_frame_q32 = ((uint64_t)1000000000ULL * tb.denom << 32) / ((uint64_t)kRate * tb.numer);
+    c->out_anchor_host = mach_absolute_time();
+    c->in_anchor_host = c->out_anchor_host;
     c->version = SHENG_AUDIO_VERSION;
     __atomic_store_n(&c->magic, SHENG_AUDIO_MAGIC, __ATOMIC_RELEASE);
     return true;
 }
 
-// Sends period n from the playback ring through DSP slot n % kSlots.
+// [audio-service] peak=: the largest sample magnitude the plug-in's playback (low half) and capture (high half) carried; the boot's test
+// tone is not counted.
+extern "C" volatile int32_t native_audio_service[8];
+void notePeak(const int16_t *p, uint32_t count, unsigned shift) {
+    int32_t peak = 0;
+    for (uint32_t i = 0; i < count; ++i) {const int32_t v = p[i] < 0 ? -p[i] : p[i]; if (v > peak) peak = v;}
+    if (peak > 0x7fff) peak = 0x7fff;
+    const uint32_t now = (uint32_t)native_audio_service[7], mine = (now >> shift) & 0xffffu;
+    if ((uint32_t)peak > mine) native_audio_service[7] = (int32_t)((now & ~(0xffffu << shift)) | (uint32_t)peak << shift);
+}
+
+// The frame of the shared timeline that plays now.
+uint64_t framesNow() {
+    const uint64_t now = mach_absolute_time(), anchor = gAudio.ctl->out_anchor_host;
+    return now > anchor ? (uint64_t)(((__uint128_t)(now - anchor) << 32) / gAudio.ctl->ticks_per_frame_q32) : 0;
+}
+
+// Sends period n (timeline frames n * kPeriodFrames on) from the playback ring through DSP slot n % kSlots. The ring is not a multiple
+// of the period, so a period can wrap; outside the test tone the frames taken are cleared, so a frame the plug-in did not write in time
+// plays as silence instead of what the ring held one turn earlier (i531: periods past the ring's end read beyond it).
 bool submit(uint64_t n) {
     uint8_t b[GPR_MAX_PACKET];
     const uint32_t slot = (uint32_t)(n % kSlots);
     int16_t *dst = reinterpret_cast<int16_t *>(gAudio.bufferVa + slot * kPeriodBytes);
-    const uint32_t at = (uint32_t)((n * kPeriodFrames) % kRingFrames);
-    memcpy(dst, gAudio.out + at * kChannels, kPeriodBytes);   // kRingFrames is a multiple of kPeriodFrames' alignment step
+    const uint32_t at = (uint32_t)((n * kPeriodFrames) % kRingFrames), head = kRingFrames - at < kPeriodFrames ? kRingFrames - at : kPeriodFrames;
+    memcpy(dst, gAudio.out + at * kChannels, head * kChannels * 2);
+    if (head < kPeriodFrames) memcpy(dst + head * kChannels, gAudio.out, (kPeriodFrames - head) * kChannels * 2);
+    if (!gAudio.tone) {
+        memset(gAudio.out + at * kChannels, 0, head * kChannels * 2);
+        if (head < kPeriodFrames) memset(gAudio.out, 0, (kPeriodFrames - head) * kChannels * 2);
+        if (gAudio.ctl->out_written < (n + 1) * kPeriodFrames) gAudio.ctl->out_late = gAudio.ctl->out_late + 1;
+        notePeak(dst, kPeriodFrames * kChannels, 0);
+    }
     cacheClean(dst, kPeriodBytes);
     if (!send(b, ar_write(b, sizeof b, kPort, (uint32_t)n, gAudio.dspAddr + slot * kPeriodBytes, gAudio.handle, kPeriodBytes))) return false;
     native_audio_stats[4] = native_audio_stats[4] + 1;
@@ -495,14 +524,10 @@ void startOutput() {
     if (gAudio.running) return;
     powerUpAmps();
     if (!graphs(AR_OP_GRAPH_PREPARE) || !graphs(AR_OP_GRAPH_START)) {powerDownAmps(); return;}
+    // The first period is the one that plays kLeadFrames from now on the boot's timeline.
     ShengAudioControl *c = gAudio.ctl;
-    uint64_t lead;
-    nanoseconds_to_absolutetime((uint64_t)kLeadFrames * 1000000000ULL / kRate, &lead);
-    __atomic_add_fetch(&c->out_seq, 1, __ATOMIC_ACQ_REL);
-    c->out_anchor_host = mach_absolute_time() + lead;
+    gAudio.next = gAudio.done = gAudio.first = (framesNow() + kLeadFrames + kPeriodFrames - 1) / kPeriodFrames;
     c->out_frames = 0;
-    __atomic_add_fetch(&c->out_seq, 1, __ATOMIC_ACQ_REL);
-    gAudio.next = gAudio.done = 0;
     gAudio.inFlight = 0;
     gAudio.statusRead = false;
     gAudio.running = true;
@@ -537,13 +562,8 @@ void startInput() {
     for (uint32_t sg : kMicUp)
         if (!command(ar_graph_command(b, sizeof b, kPort, ++gAudio.token, AR_OP_GRAPH_START, sg), b, AR_OP_GRAPH_START)) return;
     ShengAudioControl *c = gAudio.ctl;
-    const uint64_t now = mach_absolute_time(), anchor = c->out_anchor_host;
-    const double ticks = (double)c->ticks_per_frame_q32 / 4294967296.0;
-    gAudio.capBase = gAudio.running && now > anchor ? (uint64_t)((double)(now - anchor) / ticks) : 0;
-    __atomic_add_fetch(&c->in_seq, 1, __ATOMIC_ACQ_REL);
-    c->in_anchor_host = anchor;
+    gAudio.capBase = framesNow();
     c->in_frames = 0;
-    __atomic_add_fetch(&c->in_seq, 1, __ATOMIC_ACQ_REL);
     memset(gAudio.in, 0, kRingFrames * 2);
     gAudio.capNext = gAudio.capDone = 0;
     gAudio.capInFlight = 0;
@@ -569,6 +589,7 @@ void captured(const ArAnswer &a) {
     const int16_t *src = reinterpret_cast<const int16_t *>(gAudio.bufferVa + kCapOffset + slot * kCapBytes);
     const uint64_t t = gAudio.capBase + gAudio.capDone * kPeriodFrames;
     for (uint32_t i = 0; i < kPeriodFrames; ++i) gAudio.in[(t + i) % kRingFrames] = src[i];
+    notePeak(src, kPeriodFrames, 16);
     gAudio.capDone++;
     gAudio.ctl->in_frames = gAudio.capDone * kPeriodFrames;
     native_mic_capture[3] = native_mic_capture[3] + 1;
@@ -581,9 +602,9 @@ void handle(const ArAnswer &a) {
         if (a.status) native_audio_stats[1] = (int32_t)a.status;
         if (gAudio.inFlight) gAudio.inFlight--;
         gAudio.done++;
-        gAudio.ctl->out_frames = gAudio.done * kPeriodFrames;
+        gAudio.ctl->out_frames = (gAudio.done - gAudio.first) * kPeriodFrames;
         if (gAudio.running) while (gAudio.inFlight < kInFlight && submit(gAudio.next)) gAudio.next++;
-        if (gAudio.running && !gAudio.statusRead && gAudio.done == 10) {readAmpStatus(); gAudio.statusRead = true;}
+        if (gAudio.running && !gAudio.statusRead && gAudio.done - gAudio.first == 10) {readAmpStatus(); gAudio.statusRead = true;}
     } else if (a.opcode == AR_OP_READ_DONE) {
         captured(a);
     } else if (a.opcode == GPR_OP_BASIC_RESULT && a.status) {
@@ -597,8 +618,10 @@ void serve(uint32_t ms) {
     for (;;) {
         const uint32_t want = __atomic_load_n(&gAudio.want, __ATOMIC_ACQUIRE);
         if (!ms) {
-            if ((want & ShengAudioOutputRunning) && !gAudio.running) startOutput();
-            if (!(want & ShengAudioOutputRunning) && gAudio.running) stopOutput();
+            // The path stays up kKeepMs after the plug-in stops: the amplifiers' power-up would cut the start of the next sound.
+            if (want & ShengAudioOutputRunning) {gAudio.stopAsked = 0; if (!gAudio.running) startOutput();}
+            else if (gAudio.running && !gAudio.stopAsked) gAudio.stopAsked = nowMs();
+            else if (gAudio.running && nowMs() - gAudio.stopAsked >= kKeepMs) {gAudio.stopAsked = 0; stopOutput();}
             if ((want & ShengAudioInputRunning) && !gAudio.capturing) startInput();
             if (!(want & ShengAudioInputRunning) && gAudio.capturing) stopInput();
         }
@@ -611,17 +634,19 @@ void serve(uint32_t ms) {
 void playTone() {
     const unsigned shift = gAudio.atten / 6 > 15 ? 15 : gAudio.atten / 6;
     for (uint32_t i = 0; i < kRingFrames; ++i) gAudio.out[2 * i] = gAudio.out[2 * i + 1] = (int16_t)(kSine[i % 64] >> shift);
+    gAudio.tone = true;
     startOutput();
     serve(gAudio.toneMs);
     stopOutput();
+    gAudio.tone = false;
     memset(gAudio.out, 0, kRingFrames * kChannels * 2);
+    native_audio_service[7] = 0;
     stage(57);
 }
 
 // sheng-audio bit 8: an unattended check of the iOS output path. At 150 s of uptime one synthetic power button press locks the screen,
 // and SpringBoard plays its lock sound through the audio server, the plug-in and this service; [audio-service] then counts the requests.
 extern "C" bool sheng_buttons_press(uint32_t mask, uint32_t ms) __attribute__((weak_import));
-extern "C" volatile int32_t native_audio_service[8];
 void lockSoundThread(void *, wait_result_t) {
     uint64_t up = 0;
     absolutetime_to_nanoseconds(mach_absolute_time(), &up);
