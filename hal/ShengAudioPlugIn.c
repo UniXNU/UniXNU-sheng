@@ -75,7 +75,15 @@ static HRESULT QueryInterface(void *self, REFIID uuid, LPVOID *out);
 static ULONG AddRef(void *self) {(void)self; return atomic_fetch_add(&gRefs, 1) + 1;}
 static ULONG Release(void *self) {(void)self; UInt32 r = atomic_load(&gRefs); if (r) r = atomic_fetch_sub(&gRefs, 1) - 1; return r;}
 
-static OSStatus Initialize(AudioServerPlugInDriverRef d, AudioServerPlugInHostRef host) {(void)d; gHost = host; return 0;}
+// Connects at once, so the service sees the audio server load the plug-in; a failure here is retried at the first StartIO.
+static OSStatus Initialize(AudioServerPlugInDriverRef d, AudioServerPlugInHostRef host) {
+    (void)d;
+    gHost = host;
+    pthread_mutex_lock(&gLock);
+    (void)connectService();
+    pthread_mutex_unlock(&gLock);
+    return 0;
+}
 static OSStatus CreateDevice(AudioServerPlugInDriverRef d, CFDictionaryRef desc, const AudioServerPlugInClientInfo *c, AudioObjectID *o) {(void)d; (void)desc; (void)c; (void)o; return kAudioHardwareUnsupportedOperationError;}
 static OSStatus DestroyDevice(AudioServerPlugInDriverRef d, AudioObjectID o) {(void)d; (void)o; return kAudioHardwareUnsupportedOperationError;}
 static OSStatus AddDeviceClient(AudioServerPlugInDriverRef d, AudioObjectID o, const AudioServerPlugInClientInfo *c) {(void)d; (void)o; (void)c; return 0;}

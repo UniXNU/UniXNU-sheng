@@ -110,6 +110,7 @@ extern volatile int32_t native_audio_stats[16] __attribute__((weak_import));
 extern volatile uint32_t native_audio_amps[6][4] __attribute__((weak_import));
 extern volatile int32_t native_adsp_audio[8] __attribute__((weak_import));
 extern volatile int32_t native_mic_stats[16] __attribute__((weak_import));
+extern volatile int32_t native_audio_service[8] __attribute__((weak_import));
 extern volatile uint32_t native_mic_regs[16] __attribute__((weak_import));
 extern volatile uint64_t native_audio_pa __attribute__((weak_import));
 extern char native_adsp_text[96] __attribute__((weak_import));
@@ -916,6 +917,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       snprintf(row, sizeof row, "[audio-glink] sent=%d deferred=%d refused=%d queued=%d asked=%d intents=%d largest=%d lastlen=%d",
                native_adsp_audio[0], native_adsp_audio[1], native_adsp_audio[2], native_adsp_audio[3], native_adsp_audio[4],
                native_adsp_audio[5], native_adsp_audio[6], native_adsp_audio[7]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    // The audio service (ShengAudioService.cpp): state, opens, closes, requests, refused requests, memory maps.
+    if (&native_audio_service && native_audio_service[0]) {
+      snprintf(row, sizeof row, "[audio-service] st=%d opens=%d closes=%d requests=%d refused=%d maps=%d", native_audio_service[0],
+               native_audio_service[1], native_audio_service[2], native_audio_service[3], native_audio_service[4], native_audio_service[5]);
       at = put(out, at, cap, row, sizeof row);
     }
     if (&native_audio_pa) {
