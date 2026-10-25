@@ -69,8 +69,10 @@ constexpr uint32_t kIntentSize = 512, kIntentCount = 20, kRing = 16, kMessage = 
 constexpr uint32_t kPort = 0x2001;                   // our GPR port; every answer comes back to it
 constexpr uint32_t kRate = SHENG_AUDIO_RATE, kChannels = SHENG_AUDIO_OUT_CHANNELS, kPeriodFrames = SHENG_AUDIO_PERIOD_FRAMES;
 constexpr uint32_t kPeriodBytes = kPeriodFrames * kChannels * 2, kSlots = 8, kBufferBytes = 64 * 1024, kRingFrames = SHENG_AUDIO_RING_FRAMES;
-// kLeadFrames: the lead the plug-in starts with (100 ms); each playback run then publishes the lead it measured (syncPlayback).
-constexpr uint32_t kInFlight = 4, kLeadFrames = 10 * kPeriodFrames, kKeepMs = 5000;
+// kLeadFrames: the least lead the plug-in is given (300 ms), so the audio server writes that far ahead. Its IO cycles come up to 157 ms
+// late (i539: write-ahead -734..6738 frames with a 120 ms safety offset), and each late cycle was a gap; a run raises it when the DSP's
+// queue needs more (syncPlayback).
+constexpr uint32_t kInFlight = 4, kLeadFrames = 30 * kPeriodFrames, kKeepMs = 5000;
 // Capture periods (mono) live in the second half of the DSP buffer; the microphone graphs start in this order and stop in reverse.
 constexpr uint32_t kCapBytes = kPeriodFrames * 2, kCapOffset = 32 * 1024, kCapSlots = 8;
 const uint32_t kMicUp[2] = {AR_SG_MIC, AR_SG_CAPTURE}, kMicDown[2] = {AR_SG_CAPTURE, AR_SG_MIC};
@@ -513,7 +515,7 @@ void syncPlayback() {
         gBaseLead = lead;
         native_audio_sync[4] = (int32_t)lead;
         const int64_t want = lead + 2 * (int64_t)kPeriodFrames;
-        gAudio.ctl->lead_frames = (uint32_t)(want < (int64_t)kLeadFrames ? kLeadFrames : want > 8000 ? 8000 : want);
+        gAudio.ctl->lead_frames = (uint32_t)(want < (int64_t)kLeadFrames ? kLeadFrames : want > 24000 ? 24000 : want);
         return;
     }
     const int64_t drift = lead - gBaseLead;
@@ -553,8 +555,20 @@ bool submit(uint64_t n) {
         uint64_t recent = 0;
         nanoseconds_to_absolutetime(100000000ULL, &recent);
         if ((gAudio.want & ShengAudioOutputRunning) && mach_absolute_time() - gAudio.ctl->out_written_host < recent &&
-            gAudio.ctl->out_written < (n + 1) * kPeriodFrames)
+            gAudio.ctl->out_written < (n + 1) * kPeriodFrames) {
             gAudio.ctl->out_late = gAudio.ctl->out_late + 1;
+        }
+        // A hole: a period the plug-in had written past that still holds 64 silent frames in a row while sound was playing.
+        else if ((gAudio.want & ShengAudioOutputRunning) && gAudio.ctl->out_written >= (n + 1) * kPeriodFrames) {
+            uint32_t run = 0, longest = 0, loud = 0;
+            for (uint32_t i = 0; i < kPeriodFrames; ++i) {
+                const bool quiet = dst[2 * i] == 0 && dst[2 * i + 1] == 0;
+                run = quiet ? run + 1 : 0;
+                if (run > longest) longest = run;
+                if (!quiet) loud++;
+            }
+            if (longest >= 64 && loud) gAudio.ctl->out_holes = gAudio.ctl->out_holes + 1;
+        }
         notePeak(dst, kPeriodFrames * kChannels, 0);
     }
     cacheClean(dst, kPeriodBytes);
@@ -586,6 +600,8 @@ void startOutput() {
     // The DSP plays the first period at once, so it is the period of the timeline that plays now; the ones queued behind it follow in
     // order. (i533 labelled it kLeadFrames later, so every period was taken before the audio server wrote it: gaps, stutter and pops.)
     ShengAudioControl *c = gAudio.ctl;
+    // The plug-in adds each IO context's mix to the ring, so frames left from the last run must not be in it.
+    if (!gAudio.tone) memset(gAudio.out, 0, kRingFrames * kChannels * 2);
     gAudio.next = gAudio.done = gAudio.first = (framesNow() + kPeriodFrames - 1) / kPeriodFrames;
     c->out_frames = 0;
     gAudio.inFlight = 0;
@@ -709,6 +725,9 @@ void playTone() {
     gAudio.tone = true;
     startOutput();
     serve(gAudio.toneMs);
+    // Silence through the DSP's queue before the amplifiers power down, so the tone does not end in a click.
+    memset(gAudio.out, 0, kRingFrames * kChannels * 2);
+    serve(80);
     stopOutput();
     gAudio.tone = false;
     memset(gAudio.out, 0, kRingFrames * kChannels * 2);
