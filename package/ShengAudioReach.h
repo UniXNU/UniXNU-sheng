@@ -84,11 +84,12 @@ uint32_t ar_read(uint8_t *out, uint32_t capacity, uint32_t port, uint32_t token,
 #define AR_OP_PRM_RELEASE 0x01001010u
 #define AR_OP_PRM_REQUEST_DONE 0x02001002u
 #define AR_OP_PRM_RELEASE_DONE 0x02001003u
-#define AR_CLK_TX_CORE_MCLK 57u
-#define AR_CLK_VA_CORE_MCLK 56u
+#define AR_CLK_TX_CORE_MCLK 0x30cu   /* PRM clock ids, not the device tree indices (57 was refused) */
+#define AR_CLK_VA_CORE_MCLK 0x307u
 #define AR_HW_MACRO 1u
 #define AR_HW_DCODEC 2u
 uint32_t ar_prm_clock(uint8_t *out, uint32_t capacity, uint32_t port, uint32_t token, uint32_t clock_id, uint32_t hz);
+uint32_t ar_prm_clock_attr(uint8_t *out, uint32_t capacity, uint32_t port, uint32_t token, uint32_t clock_id, uint32_t hz, uint32_t attribute);
 uint32_t ar_prm_vote(uint8_t *out, uint32_t capacity, uint32_t port, uint32_t token, uint32_t block, int enable);
 
 /* Answers. */

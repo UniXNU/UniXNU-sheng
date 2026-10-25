@@ -110,6 +110,7 @@ extern volatile int32_t native_audio_stats[16] __attribute__((weak_import));
 extern volatile uint32_t native_audio_amps[6][4] __attribute__((weak_import));
 extern volatile int32_t native_adsp_audio[8] __attribute__((weak_import));
 extern volatile int32_t native_mic_stats[16] __attribute__((weak_import));
+extern volatile uint32_t native_mic_regs[16] __attribute__((weak_import));
 extern volatile uint64_t native_audio_pa __attribute__((weak_import));
 extern char native_adsp_text[96] __attribute__((weak_import));
 extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
@@ -894,7 +895,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // last opcode, I2C failures, DFS level 0 kHz, ms to playing; then per amplifier: device id, revision, EINT1, EINT2.
   if (&native_audio_stats && native_audio_stats[0]) {
     char row[240];
-    snprintf(row, sizeof row, "[audio] st=%d status=%d ans=%d map=%x sent=%d done=%d amps=%x lock=%x err=%x smmu=%x bus=%x/%x op=%x i2cfail=%d dfs=%d play=%dms",
+    snprintf(row, sizeof row, "[audio] st=%d status=%d ans=%d map=%x sent=%d done=%d amps=%x lock=%x err=%x smmu=%x bus=%x/%x op=%x i2cfail=%d starts=%x serve=%dms",
              native_audio_stats[0], native_audio_stats[1], native_audio_stats[2], native_audio_stats[3], native_audio_stats[4], native_audio_stats[5],
              native_audio_stats[6], native_audio_stats[7], native_audio_stats[8], native_audio_stats[9], native_audio_stats[10], native_audio_stats[11],
              native_audio_stats[12], native_audio_stats[13], native_audio_stats[14], native_audio_stats[15]);
@@ -926,11 +927,17 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // codec efuse, codec SCP id, TX/VA MCLK control, interrupt status, component parameters, read timeouts, ms.
   if (&native_mic_stats && native_mic_stats[0]) {
     char row[220];
-    snprintf(row, sizeof row, "[mic] st=%d prm=%d rail=%d swr=%x link=%x slaves=%x id=%x/%x efuse=%x scp=%x txclk=%x vaclk=%x irq=%x params=%x rdto=%d ms=%d",
+    snprintf(row, sizeof row, "[mic] st=%d prm=%x rail=%d swr=%x link=%x slaves=%x id=%x/%x efuse=%x scp=%x txclk=%x vaclk=%x irq=%x params=%x rdto=%d ms=%d",
              native_mic_stats[0], native_mic_stats[1], native_mic_stats[2], native_mic_stats[3], native_mic_stats[4], native_mic_stats[5],
              native_mic_stats[6], native_mic_stats[7], native_mic_stats[8], native_mic_stats[9], native_mic_stats[10], native_mic_stats[11],
              native_mic_stats[12], native_mic_stats[13], native_mic_stats[14], native_mic_stats[15]);
     at = put(out, at, cap, row, sizeof row);
+    if (&native_mic_regs) {
+      snprintf(row, sizeof row, "[mic regs] tx %x %x %x %x va %x %x %x swr %x %x %x %x %x %x %x pin %x slew %x", native_mic_regs[0], native_mic_regs[1],
+               native_mic_regs[2], native_mic_regs[3], native_mic_regs[4], native_mic_regs[5], native_mic_regs[6], native_mic_regs[7], native_mic_regs[8],
+               native_mic_regs[9], native_mic_regs[10], native_mic_regs[11], native_mic_regs[12], native_mic_regs[13], native_mic_regs[14], native_mic_regs[15]);
+      at = put(out, at, cap, row, sizeof row);
+    }
   }
   // Touch strokes in panel pixels as the digitizer published them (y mirrored, 0 = the edge the UI calls top): where each finger came
   // down and lifted, how long and over how many frames, and the extent of every contact so far (edge gestures need the outer pixels).

@@ -148,9 +148,9 @@ int main(void)
     n = ar_prm_clock(b, sizeof b, 2, 20, AR_CLK_TX_CORE_MCLK, 19200000);
     CHECK(n && gpr_decode(b, n, &p) == GprOk && p.dst_port == AR_PRM_IID && p.opcode == AR_OP_PRM_REQUEST);
     CHECK(le32(b + 24 + 12) == 36 && le32(b + 40) == AR_PRM_IID && le32(b + 44) == 0x0800102C && le32(b + 48) == 20);
-    CHECK(le32(b + 56) == 1 && le32(b + 60) == 57 && le32(b + 64) == 19200000 && le32(b + 68) == 1 && le32(b + 72) == 0);
+    CHECK(le32(b + 56) == 1 && le32(b + 60) == 0x30c && le32(b + 64) == 19200000 && le32(b + 68) == 1 && le32(b + 72) == 0);
     n = ar_prm_clock(b, sizeof b, 2, 21, AR_CLK_TX_CORE_MCLK, 0);
-    CHECK(n && gpr_decode(b, n, &p) == GprOk && p.opcode == AR_OP_PRM_RELEASE && le32(b + 48) == 8 && le32(b + 60) == 57);
+    CHECK(n && gpr_decode(b, n, &p) == GprOk && p.opcode == AR_OP_PRM_RELEASE && le32(b + 48) == 8 && le32(b + 60) == 0x30c);
     n = ar_prm_vote(b, sizeof b, 2, 22, AR_HW_MACRO, 1);
     CHECK(n == 24 + 16 + 20 && le32(b + 44) == 0x08001032 && le32(b + 48) == 4 && le32(b + 56) == 1);
     r.opcode = AR_OP_PRM_REQUEST_DONE; words[0] = AR_OP_PRM_REQUEST; words[1] = 0;
