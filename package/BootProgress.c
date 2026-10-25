@@ -1183,9 +1183,9 @@ static void monitor(void *arg, wait_result_t result) {
     thread_block(THREAD_CONTINUE_NULL);
   }
 }
-// The boot core is a little A510, and the scheduler, which sees equal cores, hands it work first (lowest idle core number). A
-// lowest-priority thread bound to it keeps it busy so work goes to the big cores while any is idle, and still gives way to real work
-// when none is (sheng-cpu0-park=0 turns it off). Compositing frames ran 40 fps without it and 55 fps with it.
+// The boot core is a little A510. Without cluster types the scheduler sees equal cores and hands it work first (lowest idle core
+// number); a lowest-priority thread bound to it (sheng-cpu0-park=1) keeps it busy so work goes to the big cores while any is idle.
+// Compositing frames ran 40 fps without it and 55 fps with it. With E and P clusters the Edge scheduler places work, so it is off.
 static void cpu0_park(void *arg, wait_result_t result) {
   (void)arg;(void)result;
   thread_set_thread_name(current_thread(),"cpu0_park");
@@ -1209,7 +1209,7 @@ void boot_progress_start(void) {
     else __atomic_store_n(&process_worker_status,3,__ATOMIC_RELEASE);
   }
   if(kernel_thread_start_priority(touch_monitor,0,BASEPRI_KERNEL,&thread)==KERN_SUCCESS)thread_deallocate(thread);
-  {unsigned park=1;PE_parse_boot_argn("sheng-cpu0-park",&park,sizeof(park));
+  {unsigned park=0;PE_parse_boot_argn("sheng-cpu0-park",&park,sizeof(park));
    if(park==1 && kernel_thread_start_priority(cpu0_park,0,1,&thread)==KERN_SUCCESS)thread_deallocate(thread);}
   boot_progress_stage(state.continuous ?
     "monitor continuous: deadlines warn only; OS remains running" :

@@ -19,8 +19,8 @@
 // over recount), a domain's the share of its busiest CPU. The domain gets the lowest LUT level at or above 1.25 x busy x its current
 // frequency (schedutil's margin), the highest allowed level once a CPU is 90 % busy (a hispeed jump); it goes up at once and down only
 // after 4 windows in a row that asked for less. Levels stay between `sheng-cpufreq-min=<MHz>` (default 0) and mode 3's highest
-// non-turbo level (or the cap). The XNU CPU numbers per domain follow board.toml's cpu_regs order (0, 0x300 .. 0x700): cpu 0 is the
-// A510 boot core (domain 0), cpus 1-4 the A715/A710 cores (domain 1), cpu 5 the X3 (domain 2).
+// non-turbo level (or the cap). The XNU CPU numbers follow the DTS cpu order: cpus 0-2 are the A510 cores (domain 0, the E cluster),
+// cpus 3-6 the A715/A710 cores (domain 1), cpu 7 the X3 (domain 2).
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
@@ -137,7 +137,7 @@ void refreshRow() {
 }
 
 // Mode 4: the governor (see the header).
-constexpr int kCpuDomain[] = {0, 1, 1, 1, 1, 2};
+constexpr int kCpuDomain[] = {0, 0, 0, 1, 1, 1, 1, 2};
 constexpr unsigned kCpus = sizeof kCpuDomain / sizeof kCpuDomain[0];
 struct Levels {
     unsigned count;
