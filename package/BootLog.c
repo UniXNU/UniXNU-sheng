@@ -112,6 +112,7 @@ extern volatile int32_t native_adsp_audio[8] __attribute__((weak_import));
 extern volatile int32_t native_mic_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_audio_service[8] __attribute__((weak_import));
 extern volatile uint32_t native_mic_regs[16] __attribute__((weak_import));
+extern volatile int32_t native_mic_capture[8] __attribute__((weak_import));
 extern volatile uint64_t native_audio_pa __attribute__((weak_import));
 extern char native_adsp_text[96] __attribute__((weak_import));
 extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
@@ -939,6 +940,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_mic_stats[6], native_mic_stats[7], native_mic_stats[8], native_mic_stats[9], native_mic_stats[10], native_mic_stats[11],
              native_mic_stats[12], native_mic_stats[13], native_mic_stats[14], native_mic_stats[15]);
     at = put(out, at, cap, row, sizeof row);
+    if (&native_mic_capture && native_mic_capture[0]) {
+      snprintf(row, sizeof row, "[mic capture] st=%d status=%d asked=%d back=%d bytes=%d peak=%d mean=%d nonzero=%d", native_mic_capture[0],
+               native_mic_capture[1], native_mic_capture[2], native_mic_capture[3], native_mic_capture[4], native_mic_capture[5],
+               native_mic_capture[6], native_mic_capture[7]);
+      at = put(out, at, cap, row, sizeof row);
+    }
     if (&native_mic_regs) {
       snprintf(row, sizeof row, "[mic regs] tx %x %x %x %x va %x %x %x swr %x %x %x %x %x %x %x pin %x slew %x", native_mic_regs[0], native_mic_regs[1],
                native_mic_regs[2], native_mic_regs[3], native_mic_regs[4], native_mic_regs[5], native_mic_regs[6], native_mic_regs[7], native_mic_regs[8],
