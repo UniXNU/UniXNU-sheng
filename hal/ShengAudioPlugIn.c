@@ -6,6 +6,8 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
 #include <mach/mach_time.h>
+#include <mach/mach.h>
+#include <mach/thread_policy.h>
 #include <math.h>
 #include <stddef.h>
 #include <pthread.h>
@@ -19,6 +21,9 @@ enum {kPlugIn = kAudioObjectPlugInObject, kDevice = 2, kOutStream = 3, kInStream
 #define kDeviceUID "ShengAudioDevice"
 #define kModelUID "ShengAudioModel"
 static const Float64 kRate = SHENG_AUDIO_RATE;
+// The time stamp period: over the safety offset plus an IO cycle (the audio server runs no IO otherwise, i543: 8192), short enough that the
+// audio server's clock estimate settles in a few seconds.
+static const UInt32 kZeroPeriod = 32768;
 
 static AudioServerPlugInHostRef gHost;
 static pthread_mutex_t gLock = PTHREAD_MUTEX_INITIALIZER;
@@ -255,8 +260,10 @@ static OSStatus propertyData(AudioObjectID o, const AudioObjectPropertyAddress *
         case kAudioDevicePropertyNominalSampleRate: REPLY(Float64, kRate);
         case kAudioDevicePropertyAvailableNominalSampleRates: REPLY(AudioValueRange, ((AudioValueRange){kRate, kRate}));
         case kAudioDevicePropertyIsHidden: REPLY(UInt32, 0);
-        case kAudioDevicePropertyZeroTimeStampPeriod: REPLY(UInt32, SHENG_AUDIO_RING_FRAMES);
+        case kAudioDevicePropertyZeroTimeStampPeriod: REPLY(UInt32, kZeroPeriod);
         case kAudioDevicePropertyClockIsStable: REPLY(UInt32, 1);
+        // Not Raw: with it the audio server's idea of now fell up to 26185 frames behind the timeline and it wrote late from i540 on
+        // (least write-ahead -734 frames in i539 before it, about -9700 after).
         case kAudioDevicePropertyClockAlgorithm: REPLY(UInt32, kAudioDeviceClockAlgorithmSimpleIIR);
         case kAudioDevicePropertyPreferredChannelsForStereo: {
             if (inDataSize < 2 * sizeof(UInt32)) return kAudioHardwareBadPropertySizeError;
@@ -487,6 +494,7 @@ static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 cl
     OSStatus r = 0;
     if (gIoUsers == 0) {
         if (connectService()) r = kAudioHardwareNotRunningError;
+        else if (!gControl) r = kAudioHardwareNotRunningError;
         else if (call(ShengAudioStartOutput) != KERN_SUCCESS) r = kAudioHardwareNotRunningError;
         else call(ShengAudioStartInput);
     }
@@ -509,9 +517,9 @@ static OSStatus GetZeroTimeStamp(AudioServerPlugInDriverRef d, AudioObjectID o, 
     uint64_t anchor;
     do {seq = gControl->out_seq; anchor = gControl->out_anchor_host;} while ((seq & 1) || seq != gControl->out_seq);
     const uint64_t now = mach_absolute_time();
-    const Float64 period = gHostTicksPerFrame * SHENG_AUDIO_RING_FRAMES;
+    const Float64 period = gHostTicksPerFrame * kZeroPeriod;
     const uint64_t wraps = now > anchor ? (uint64_t)((Float64)(now - anchor) / period) : 0;
-    *sampleTime = (Float64)(wraps * SHENG_AUDIO_RING_FRAMES);
+    *sampleTime = (Float64)(wraps * kZeroPeriod);
     *hostTime = anchor + (uint64_t)((Float64)wraps * period);
     *seed = 1 + seq / 2;
     return 0;
@@ -525,6 +533,28 @@ static OSStatus WillDoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o,
 static OSStatus BeginIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 client, UInt32 op, UInt32 frames, const AudioServerPlugInIOCycleInfo *info) {
     (void)d; (void)o; (void)client; (void)op; (void)frames; (void)info; return 0;
 }
+// Records how the audio server schedules its IO thread (i545: 98 gaps of more than 160 ms between IO cycles).
+static void noteThread(ShengAudioDiag *diag) {
+    const thread_act_t self = mach_thread_self();
+    thread_extended_info_data_t info;
+    mach_msg_type_number_t count = THREAD_EXTENDED_INFO_COUNT;
+    if (thread_info(self, THREAD_EXTENDED_INFO, (thread_info_t)&info, &count) == KERN_SUCCESS) {
+        diag->io_pri = info.pth_curpri;
+        diag->io_base = info.pth_priority;
+        diag->io_policy = info.pth_policy;
+        if (!diag->io_pri_min || info.pth_curpri < diag->io_pri_min) diag->io_pri_min = info.pth_curpri;
+    }
+    thread_time_constraint_policy_data_t tc;
+    count = THREAD_TIME_CONSTRAINT_POLICY_COUNT;
+    boolean_t def = false;
+    if (thread_policy_get(self, THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&tc, &count, &def) == KERN_SUCCESS) {
+        diag->io_tc = def ? 0 : 1;
+        diag->io_period = tc.period;
+        diag->io_computation = tc.computation;
+        diag->io_constraint = tc.constraint;
+    } else diag->io_tc = -1;
+    mach_port_deallocate(mach_task_self(), self);
+}
 static inline int16_t toS16(Float32 v) {v *= 32767.0f; return (int16_t)(v > 32767.0f ? 32767 : v < -32768.0f ? -32768 : v);}
 static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, AudioObjectID stream, UInt32 client, UInt32 op, UInt32 frames,
                               const AudioServerPlugInIOCycleInfo *info, void *main, void *secondary) {
@@ -536,9 +566,14 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
     ShengAudioDiag *diag = (ShengAudioDiag *)((uint8_t *)gControl + SHENG_AUDIO_DIAG_OFFSET);
     if (op == kAudioServerPlugInIOOperationWriteMix && stream == kOutStream) {
         const int32_t ahead = (int32_t)((int64_t)info->mOutputTime.mSampleTime - nowFrames);
+        // Where the audio server places now, against the timeline.
+        const int32_t skew = (int32_t)((int64_t)info->mCurrentTime.mSampleTime - nowFrames);
+        if (!diag->writes || skew < diag->skew_min) diag->skew_min = skew;
+        if (!diag->writes || skew > diag->skew_max) diag->skew_max = skew;
         if (!diag->writes || ahead < diag->ahead_min) diag->ahead_min = ahead;
         if (!diag->writes || ahead > diag->ahead_max) diag->ahead_max = ahead;
         diag->io_frames = frames;
+        if (diag->writes % 256 == 0) noteThread(diag);
         diag->writes += 1;
         const Float32 *src = main;
         uint64_t t = (uint64_t)info->mOutputTime.mSampleTime;
@@ -547,10 +582,26 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
         for (UInt32 i = 0; i < 2 * frames; ++i) {const Float32 v = fabsf(src[i]); if (v > peak) peak = v;}
         const UInt32 p = (UInt32)(fminf(peak, 1.0f) * 32767.0f);
         if (p > diag->mix_peak) diag->mix_peak = p;
+        // The audio server runs more than one IO context on the device (i539: 65291 writes of 1024 frames in a 600 s run, 2.3 times the
+        // frames that played), each with its own mix. Each is added to what the ring holds, so a context writing silence does not replace
+        // another one's sound; the service clears every period it takes.
+        if (diag->last_host) {
+            const Float64 ms = (Float64)(host - diag->last_host) / gHostTicksPerFrame / (kRate / 1000.0);
+            diag->interval[ms < 15 ? 0 : ms < 25 ? 1 : ms < 40 ? 2 : ms < 80 ? 3 : ms < 160 ? 4 : 5] += 1;
+            if (ms < 160 && t > diag->last_end) {diag->gaps += 1; diag->gap_frames += (uint32_t)(t - diag->last_end);}
+        }
+        diag->last_host = host;
+        diag->last_end = t + frames;
+        diag->frames_total += frames;
+        const uint64_t written = gControl->out_written;
+        if (t < written) {
+            diag->overlaps += 1;
+            if (written - t > diag->overlap_max) diag->overlap_max = (uint32_t)(written - t);
+        }
         for (UInt32 i = 0; i < frames; ++i, ++t) {
             int16_t *dst = gOut + 2 * (t % SHENG_AUDIO_RING_FRAMES);
-            dst[0] = toS16(src[2 * i] * g);
-            dst[1] = toS16(src[2 * i + 1] * g);
+            dst[0] = toS16(dst[0] / 32767.0f + src[2 * i] * g);
+            dst[1] = toS16(dst[1] / 32767.0f + src[2 * i + 1] * g);
         }
         if (t > gControl->out_written) gControl->out_written = t;
         gControl->out_written_host = host;
