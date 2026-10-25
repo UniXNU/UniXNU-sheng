@@ -106,6 +106,13 @@ extern volatile uint32_t native_touch_hold[14] __attribute__((weak_import));
 extern char native_lookup_log[160][112] __attribute__((weak_import));
 extern volatile unsigned native_lookup_count __attribute__((weak_import));
 extern volatile uint32_t native_dpu_pipes[54] __attribute__((weak_import));
+extern volatile uint32_t native_dpu_more[40] __attribute__((weak_import));
+extern volatile uint32_t native_ufs_dpu_smmu[24] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_surfaces[14] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_direct[9] __attribute__((weak_import));
+extern volatile uint32_t native_ufs_dpu_state __attribute__((weak_import));
+extern volatile uint32_t native_ufs_dpu_check[8] __attribute__((weak_import));
+extern uint32_t native_ufs_dpu_live(unsigned reg) __attribute__((weak_import));
 extern volatile int32_t native_adsp_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_audio_stats[16] __attribute__((weak_import));
 extern volatile uint32_t native_audio_amps[6][4] __attribute__((weak_import));
@@ -131,6 +138,7 @@ extern volatile uint32_t native_swipe_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_vm_phase_us[2][8] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_vm_kind_us[5][3] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wc_audit[6] __attribute__((weak_import));
@@ -154,13 +162,17 @@ extern char native_gpu_coherence_row[120] __attribute__((weak_import));
 extern size_t boot_progress_profile_rows(char *, size_t) __attribute__((weak_import));
 extern size_t boot_progress_spawn_rows(char *, size_t) __attribute__((weak_import));
 extern volatile uint64_t native_gpu_idle_sleeps __attribute__((weak_import));
+extern volatile uint64_t native_gpu_idle_timeouts __attribute__((weak_import));
 extern volatile uint64_t native_gpu_idle_spins __attribute__((weak_import));
 extern volatile uint32_t native_adreno_coherent_skips[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_io_coherent __attribute__((weak_import));
 extern char native_cpufreq_row[120] __attribute__((weak_import));
 extern uint32_t native_gpu_perf_vote[2] __attribute__((weak_import));
-extern volatile uint32_t native_gpu_dcvs[13] __attribute__((weak_import));
+extern volatile uint32_t native_gpu_dcvs[15] __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_gov[9] __attribute__((weak_import));
+extern volatile uint32_t native_cpufreq_boosts __attribute__((weak_import));
+extern volatile uint32_t native_cpufreq_frame[2] __attribute__((weak_import));
+extern volatile uint32_t native_cpufreq_throttle[9] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_status __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_wc __attribute__((weak_import));
 extern volatile uint64_t native_adreno_fence_phys __attribute__((weak_import));
@@ -554,6 +566,19 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       at = put(out, at, cap, row, sizeof row);
     }
   }
+  // Per kind of VM change (NativeAdrenoVm.cpp native_adreno_vm_kind_us): count/total us/spans for owned maps, imports on the fast and
+  // full alias path, unmaps by page TLBI and by ASID.
+  if (&native_adreno_vm_kind_us) {
+    static const char *const kinds[5] = {"owned", "import fast", "import full", "unmap page", "unmap asid"};
+    char row[300];
+    int n = snprintf(row, sizeof row, "[vm kinds]");
+    for (unsigned k = 0; k < 5; ++k) {
+      const volatile uint64_t *v = native_adreno_vm_kind_us[k];
+      n += snprintf(row + n, sizeof row - (size_t)n, " | %s %llu/%lluus/%llu", kinds[k], (unsigned long long)v[0], (unsigned long long)v[1],
+                    (unsigned long long)v[2]);
+    }
+    if (native_adreno_vm_kind_us[0][0] || native_adreno_vm_kind_us[1][0] || native_adreno_vm_kind_us[2][0]) at = put(out, at, cap, row, sizeof row);
+  }
   if (&native_adreno_pool_stats) {
     char row[200];
     snprintf(row, sizeof row, "[bo pool] %u MiB (last reserve status %x, wc %x): %u BOs from it, %u fell back, in use %u MiB (peak %u) | scattered: %u BOs %u spans | import spans %u",
@@ -600,13 +625,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // The IO-coherence proof (GpuPowerProbe coherenceProbe) and the maintenance passes it saved: map, unmap, submission, completion.
   if (&native_gpu_coherence_row && native_gpu_coherence_row[0]) {
-    char row[260];
-    snprintf(row, sizeof row, "[coherence] %.110s | on=%u skipped map=%u unmap=%u submit=%u complete=%u | fence pauses slept=%llu spun=%llu",
+    char row[300];
+    snprintf(row, sizeof row, "[coherence] %.110s | on=%u skipped map=%u unmap=%u submit=%u complete=%u | fence pauses slept=%llu spun=%llu timed out=%llu",
              native_gpu_coherence_row,
              &native_adreno_io_coherent ? native_adreno_io_coherent : 0, &native_adreno_coherent_skips ? native_adreno_coherent_skips[0] : 0,
              &native_adreno_coherent_skips ? native_adreno_coherent_skips[1] : 0, &native_adreno_coherent_skips ? native_adreno_coherent_skips[2] : 0,
              &native_adreno_coherent_skips ? native_adreno_coherent_skips[3] : 0,
-             (unsigned long long)(&native_gpu_idle_sleeps ? native_gpu_idle_sleeps : 0), (unsigned long long)(&native_gpu_idle_spins ? native_gpu_idle_spins : 0));
+             (unsigned long long)(&native_gpu_idle_sleeps ? native_gpu_idle_sleeps : 0), (unsigned long long)(&native_gpu_idle_spins ? native_gpu_idle_spins : 0),
+             (unsigned long long)(&native_gpu_idle_timeouts ? native_gpu_idle_timeouts : 0));
     at = put(out, at, cap, row, sizeof row);
   }
   // Edge contacts (drivers/ShengHidInput edge::): wrapper installed, contacts begun, of them from an edge, events skipped.
@@ -650,15 +676,24 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_gpu_perf_vote ? native_gpu_perf_vote[1] : 0);
     at = put(out, at, cap, row, sizeof row);
     if (&native_cpufreq_gov && (native_cpufreq_gov[1] || native_cpufreq_gov[4] || native_cpufreq_gov[7])) {
-      snprintf(row, sizeof row, "[cpu gov] d0 changes=%u mhz=%u busy=%u%% | d1 changes=%u mhz=%u busy=%u%% | d2 changes=%u mhz=%u busy=%u%%",
+      snprintf(row, sizeof row, "[cpu gov] d0 changes=%u mhz=%u busy=%u%% | d1 changes=%u mhz=%u busy=%u%% | d2 changes=%u mhz=%u busy=%u%% | boosts=%u frame=%u/%uw",
                native_cpufreq_gov[0], native_cpufreq_gov[1], native_cpufreq_gov[2], native_cpufreq_gov[3], native_cpufreq_gov[4],
-               native_cpufreq_gov[5], native_cpufreq_gov[6], native_cpufreq_gov[7], native_cpufreq_gov[8]);
+               native_cpufreq_gov[5], native_cpufreq_gov[6], native_cpufreq_gov[7], native_cpufreq_gov[8],
+               &native_cpufreq_boosts ? native_cpufreq_boosts : 0, &native_cpufreq_frame ? native_cpufreq_frame[0] : 0,
+               &native_cpufreq_frame ? native_cpufreq_frame[1] : 0);
       at = put(out, at, cap, row, sizeof row);
+      if (&native_cpufreq_throttle) {
+        const volatile uint32_t *th = native_cpufreq_throttle;
+        snprintf(row, sizeof row, "[cpu throttle] busy/throttled windows, lowest MHz: d0 %u/%u %u | d1 %u/%u %u | d2 %u/%u %u",
+                 th[0], th[1], th[2], th[3], th[4], th[5], th[6], th[7], th[8]);
+        at = put(out, at, cap, row, sizeof row);
+      }
     }
     if (&native_gpu_dcvs && native_gpu_dcvs[0]) {
-      snprintf(row, sizeof row, "[gpu dcvs] level=%u changes=%u failed=%u busy=%u%% at 220:%u 295:%u 348:%u 401:%u 475:%u 550:%u 615:%u 680:%u",
+      snprintf(row, sizeof row, "[gpu dcvs] level=%u changes=%u failed=%u busy=%u%% at 220:%u 295:%u 348:%u 401:%u 475:%u 550:%u 615:%u 680:%u boosts touch=%u wake=%u",
                native_gpu_dcvs[1], native_gpu_dcvs[2], native_gpu_dcvs[3], native_gpu_dcvs[4], native_gpu_dcvs[5], native_gpu_dcvs[6],
-               native_gpu_dcvs[7], native_gpu_dcvs[8], native_gpu_dcvs[9], native_gpu_dcvs[10], native_gpu_dcvs[11], native_gpu_dcvs[12]);
+               native_gpu_dcvs[7], native_gpu_dcvs[8], native_gpu_dcvs[9], native_gpu_dcvs[10], native_gpu_dcvs[11], native_gpu_dcvs[12],
+               native_gpu_dcvs[13], native_gpu_dcvs[14]);
       at = put(out, at, cap, row, sizeof row);
     }
   }
@@ -825,6 +860,51 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
     snprintf(row, sizeof row, "[dpu ctl] fb=%x%08x %x/%x/%x %x/%x/%x %x/%x/%x %x/%x/%x", p[41], p[40], p[42], p[43], p[44], p[45], p[46], p[47],
              p[48], p[49], p[50], p[51], p[52], p[53]);
+    at = put(out, at, cap, row, sizeof row);
+    // sheng-dpu=2 and 3 (DisplayTimingProbe.cpp native_dpu_more): VIG 0 and 1, CTL 0, the tear check of interfaces 1 and 2, the flush latch test.
+    if (&native_dpu_more && (native_dpu_more[0] | native_dpu_more[20] | native_dpu_more[31])) {
+      const volatile uint32_t *m = native_dpu_more;
+      for (int k = 0; k < 2; ++k) {
+        snprintf(row, sizeof row, "[dpu vig%d] xy=%x out=%x/%x src1=%x unpack=%x op=%x ubwc=%x fetch=%x sw=%x", k, m[10 * k], m[10 * k + 1],
+                 m[10 * k + 2], m[10 * k + 3], m[10 * k + 4], m[10 * k + 5], m[10 * k + 6], m[10 * k + 7], m[10 * k + 8]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+      snprintf(row, sizeof row, "[dpu ctl0] top=%x start=%x fetch=%x intf flush=%x pipes=%x layers=%x master=%x | tear i1 %x/%x i2 %x/%x"
+               " | flush test %x->%x %dus end %x frames %u..%u", m[20], m[21], m[22], m[23], m[24], m[25], m[26], m[27], m[28], m[29], m[30],
+               m[31], m[32], (int)m[33], m[34], m[35], m[36]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // The compositor's swapped surfaces (NativeLegacyDisplay.cpp): distinct, swaps, then per surface allocation KiB, physical segments, largest KiB.
+  if (&native_legacy_surfaces && native_legacy_surfaces[0]) {
+    char row[200];
+    const volatile uint32_t *v = native_legacy_surfaces;
+    snprintf(row, sizeof row, "[swap surfaces] %u seen, %u swaps | %uK %u segs max %uK | %uK %u segs max %uK | %uK %u segs max %uK | %uK %u segs max %uK",
+             v[0], v[1], v[2] >> 10, v[3], v[4], v[5] >> 10, v[6], v[7], v[8] >> 10, v[9], v[10], v[11] >> 10, v[12], v[13]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // Direct scanout (sheng-dpu-scanout): the display bank's stage 1 (NativeUfs), then the flips (NativeLegacyDisplay.cpp native_legacy_direct).
+  if (&native_ufs_dpu_state && native_ufs_dpu_state) {
+    char row[360];
+    const volatile uint32_t *c = native_ufs_dpu_check;
+    int n = snprintf(row, sizeof row, "[direct scanout] bank %x ttbr0=%x tcr=%x fsr %x->%x far=%x%08x fsynr0=%x watched %uus now sctlr=%x fsr=%x",
+                     native_ufs_dpu_state, c[0], c[1], c[2], c[3], c[5], c[4], c[6], c[7],
+                     native_ufs_dpu_live ? native_ufs_dpu_live(0) : 0xdead, native_ufs_dpu_live ? native_ufs_dpu_live(1) : 0xdead);
+    if (&native_legacy_direct) {
+      const volatile uint32_t *d = native_legacy_direct;
+      n += snprintf(row + n, sizeof row - (size_t)n, " | flips %u mapped %u mapfail %u latch>50ms %u max %uus mean %uus released %u copied %u to boot %u",
+                    d[0], d[1], d[2], d[3], d[4], d[0] ? d[5] / d[0] : 0, d[6], d[7], d[8]);
+    }
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // The display streams in the apps SMMU as the boot loader left them (NativeUfs, sheng-dpu=2): per stream group|bank, SMR, S2CR, CBAR,
+  // CBA2R, SCTLR, TTBR0, TCR, FSR.
+  if (&native_ufs_dpu_smmu && native_ufs_dpu_smmu[0]) {
+    char row[300];
+    const volatile uint32_t *u = native_ufs_dpu_smmu;
+    snprintf(row, sizeof row, "[dpu smmu] %x scr0=%x idr0=%x idr1=%x | 1c00 %x %x %x cbar=%x/%x sctlr=%x ttbr0=%x%08x tcr=%x fsr=%x"
+             " | 1c02 %x %x %x cbar=%x/%x sctlr=%x ttbr0=%x%08x tcr=%x fsr=%x", u[0], u[1], u[2], u[3],
+             u[4], u[5], u[6], u[7], u[8], u[9], u[11], u[10], u[12], u[22], u[13], u[14], u[15], u[16], u[17], u[18], u[20], u[19], u[21], u[23]);
     at = put(out, at, cap, row, sizeof row);
   }
   // Touch noise before the fuzz filter: resting or slow frames, mean step (x + y) and largest single-axis step, in 0.1 px.

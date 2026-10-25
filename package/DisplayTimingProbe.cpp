@@ -18,6 +18,13 @@ extern "C" {volatile uint32_t native_dpu_stats[20];}
 // Per pipe (VIG 0..3, DMA 0..5): source size, source address 0, stride 0, source format; [40] the boot framebuffer's physical address
 // (low 32 bits), [41] its high bits; per CTL 0..3 at [42 + 3 * n]: layer mixer 0 setting, flush, interface active.
 extern "C" {volatile uint32_t native_dpu_pipes[54];}
+// sheng-dpu=2: VIG 0 and 1 at [10 * k]: source x/y, output size, output x/y, source address 1, unpack pattern, operation mode, UBWC control,
+// fetch configuration, address status; CTL 0 at [20]: top, start, fetch pipes active, interface flush, pipes active, layers active, interface
+// master; interfaces 1 and 2 at [27 + 2 * i]: tear check enable, autorefresh configuration.
+// sheng-dpu=3 also writes each VIG pipe's current address back and flushes the two pipes on CTL 0 (the picture cannot change), to time the
+// latch: [31] flush before, [32] right after the write, [33] microseconds until the pipe bits clear (all ones: still set after 100 ms),
+// [34] flush at the end, [35] interface 1 frame count before, [36] after.
+extern "C" {volatile uint32_t native_dpu_more[40];}
 
 namespace {
 constexpr uint64_t kMdp = 0xae01000, kMdpBytes = 0x8f000;
@@ -27,6 +34,10 @@ constexpr uint32_t kTimingEnable = 0x6c, kConfig = 0x04, kCountEnable = 0xa8, kF
 constexpr uint32_t kPipes[10] = {0x4000, 0x6000, 0x8000, 0xa000, 0x24000, 0x26000, 0x28000, 0x2a000, 0x2c000, 0x2e000};
 constexpr uint32_t kSrcSize = 0x00, kSrc0 = 0x14, kStride0 = 0x24, kFormat = 0x30;
 constexpr uint32_t kCtl = 0x15000, kCtlStride = 0x1000, kCtlLayer0 = 0x00, kCtlFlush = 0x18, kCtlIntfActive = 0xf4;
+constexpr uint32_t kPipeMore[9] = {0x08, 0x0c, 0x10, 0x18, 0x34, 0x38, 0x44, 0x48, 0x70};
+constexpr uint32_t kCtlMore[7] = {0x14, 0x1c, 0xfc, 0x110, 0x12c, 0x130, 0x134};
+constexpr uint32_t kTearCheck = 0x284, kAutorefresh = 0x2b4;
+unsigned gLevel;
 
 void dpuThread(void *, wait_result_t) {
     thread_set_thread_name(current_thread(), "sheng-dpu");
@@ -36,7 +47,7 @@ void dpuThread(void *, wait_result_t) {
     IOMemoryMap *map = memory ? memory->map(kIOMapAnywhere | kIOMapInhibitCache) : nullptr;
     if (memory) memory->release();
     if (!map) {native_dpu_stats[0] = uint32_t(-1); return;}
-    const volatile uint32_t *mdp = reinterpret_cast<const volatile uint32_t *>(map->getVirtualAddress());
+    volatile uint32_t *mdp = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
     auto rd = [&](uint32_t offset) {return mdp[offset / 4];};
     native_dpu_stats[0] = 1;
     native_dpu_stats[1] = rd(0);
@@ -64,6 +75,37 @@ void dpuThread(void *, wait_result_t) {
         native_dpu_pipes[42 + 3 * c] = rd(b + kCtlLayer0); native_dpu_pipes[43 + 3 * c] = rd(b + kCtlFlush);
         native_dpu_pipes[44 + 3 * c] = rd(b + kCtlIntfActive);
     }
+    if (gLevel >= 2) {
+        for (unsigned k = 0; k < 2; ++k)
+            for (unsigned f = 0; f < 9; ++f) native_dpu_more[10 * k + f] = rd(kPipes[k] + kPipeMore[f]);
+        for (unsigned f = 0; f < 7; ++f) native_dpu_more[20 + f] = rd(kCtl + kCtlMore[f]);
+        for (unsigned i = 0; i < 2; ++i) {
+            native_dpu_more[27 + 2 * i] = rd(kIntf[i] + kTearCheck); native_dpu_more[28 + 2 * i] = rd(kIntf[i] + kAutorefresh);
+        }
+    }
+    if (gLevel >= 3) {
+        native_dpu_more[35] = rd(kIntf[0] + kFrameCount);
+        native_dpu_more[31] = rd(kCtl + kCtlFlush);
+        for (unsigned k = 0; k < 2; ++k) mdp[(kPipes[k] + kSrc0) / 4] = rd(kPipes[k] + kSrc0);
+        __asm__ volatile("dsb sy" ::: "memory");
+        mdp[(kCtl + kCtlFlush) / 4] = 0x3;
+        __asm__ volatile("dsb sy" ::: "memory");
+        const uint64_t start = mach_absolute_time();
+        native_dpu_more[32] = rd(kCtl + kCtlFlush);
+        uint32_t waited = 0xffffffffU;
+        for (unsigned spin = 0; spin < 2000; ++spin) {
+            if (!(rd(kCtl + kCtlFlush) & 0x3)) {
+                uint64_t ns = 0;
+                absolutetime_to_nanoseconds(mach_absolute_time() - start, &ns);
+                waited = uint32_t(ns / 1000);
+                break;
+            }
+            IODelay(50);
+        }
+        native_dpu_more[33] = waited;
+        native_dpu_more[34] = rd(kCtl + kCtlFlush);
+        native_dpu_more[36] = rd(kIntf[0] + kFrameCount);
+    }
     native_dpu_stats[0] = 3;
     map->release();
 }
@@ -71,7 +113,8 @@ void dpuThread(void *, wait_result_t) {
 
 extern "C" void sheng_dpu_probe(void) {
     unsigned enabled = 0;
-    if (!PE_parse_boot_argn("sheng-dpu", &enabled, sizeof enabled) || enabled != 1 || native_dpu_stats[0]) return;
+    if (!PE_parse_boot_argn("sheng-dpu", &enabled, sizeof enabled) || !enabled || enabled > 3 || native_dpu_stats[0]) return;
+    gLevel = enabled;
     thread_t thread = nullptr;
     if (kernel_thread_start(dpuThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
     else native_dpu_stats[0] = uint32_t(-7);
