@@ -3,6 +3,7 @@
 //   1  read-only: report each domain's enable bit, current/requested level and its highest LUT entry
 //   2  additionally request that highest non-turbo level in domain 0 (the boot CPU's cluster)
 //   3  the same in every domain once it reads enabled, and the highest L3 level
+//   4  mode 3's L3 vote, and a governor for the domains (below)
 // Optional `sheng-cpufreq-cap=<MHz>`: mode 3 requests the highest non-turbo level at or below it (domains and L3).
 // Register layout is the qcom-cpufreq-hw "epss" data of the pinned mainline tree (reg_enable 0x0, reg_domain_state 0x20,
 // reg_dcvs_ctrl 0xb0, reg_freq_lut 0x100 with 4-byte rows, reg_perf_state 0x320, per-core perf_state rows +4*i for the
@@ -14,14 +15,25 @@
 // A cluster whose cores are all off reads enable 0 and state 0 (int-143 read at 7 s, before the secondary cores ran), so the
 // probe maps the windows once and sheng_cpufreq_poll(), called every log round, votes each domain the first time it reads
 // enabled and refreshes the row. Nothing here is validated on the device until a boot has shown it.
+// Mode 4's governor runs every 16 ms: a CPU's busy share is 1 - its idle time over the window (sheng_cpu_idle_mach, a kernel helper
+// over recount), a domain's the share of its busiest CPU. The domain gets the lowest LUT level at or above 1.25 x busy x its current
+// frequency (schedutil's margin), the highest allowed level once a CPU is 90 % busy (a hispeed jump); it goes up at once and down only
+// after 4 windows in a row that asked for less. Levels stay between `sheng-cpufreq-min=<MHz>` (default 0) and mode 3's highest
+// non-turbo level (or the cap). The XNU CPU numbers per domain follow board.toml's cpu_regs order (0, 0x300 .. 0x700): cpu 0 is the
+// A510 boot core (domain 0), cpus 1-4 the A715/A710 cores (domain 1), cpu 5 the X3 (domain 2).
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <pexpert/pexpert.h>
+#include <kern/thread.h>
+#include <mach/mach_time.h>
 
 extern "C" {
 char native_cpufreq_row[120];
 volatile uint32_t native_cpufreq_stage;
+// Mode 4, per domain over the last 10 s: level changes, mean MHz, mean busy % of the busiest CPU
+volatile uint32_t native_cpufreq_gov[9];
+uint64_t sheng_cpu_idle_mach(int cpu);
 }
 
 namespace {
@@ -123,6 +135,112 @@ void refreshRow() {
         else snprintf(out + n, cap - n, " L3:e%u", rd32(gL3.va, kRegEnable) & 1);
     }
 }
+
+// Mode 4: the governor (see the header).
+constexpr int kCpuDomain[] = {0, 1, 1, 1, 1, 2};
+constexpr unsigned kCpus = sizeof kCpuDomain / sizeof kCpuDomain[0];
+struct Levels {
+    unsigned count;
+    uint8_t index[kLutEntries];   // LUT rows in ascending frequency, non-turbo, within the floor and the cap
+    uint32_t khz[kLutEntries];
+};
+Levels gLevels[3];
+uint32_t gFloorKHz;
+
+void buildLevels(unsigned d) {
+    Levels &l = gLevels[d];
+    l.count = 0;
+    uint32_t prev = 0;
+    for (unsigned i = 0; i < kLutEntries; ++i) {
+        const uint32_t row = rd32(gDomain[d].va, kRegFreqLut + i * 4), khz = lutKHz(row);
+        if (i > 0 && khz == prev) break;
+        prev = khz;
+        if (((row >> 16) & 7) == 1 || (gCapKHz && khz > gCapKHz)) continue;
+        unsigned at = l.count;
+        while (at > 0 && l.khz[at - 1] > khz) {l.khz[at] = l.khz[at - 1]; l.index[at] = l.index[at - 1]; --at;}
+        l.khz[at] = khz; l.index[at] = (uint8_t)i; ++l.count;
+    }
+    // Drop the levels under the floor, keeping at least the highest.
+    unsigned first = 0;
+    while (first + 1 < l.count && l.khz[first] < gFloorKHz) ++first;
+    for (unsigned i = first; i < l.count; ++i) {l.khz[i - first] = l.khz[i]; l.index[i - first] = l.index[i];}
+    l.count -= first;
+}
+
+void setLevel(unsigned d, unsigned at) {
+    Window &w = gDomain[d];
+    const uint32_t level = gLevels[d].index[at];
+    wr32(w.va, kRegPerfState, level);
+    if (rd32(w.va, kRegDcvsCtrl) & 1)
+        for (unsigned c = 1; c < kDomainCpus[d]; ++c) wr32(w.va, kRegPerfState + c * 4, level);
+    w.voted = (int)level;
+    w.votedKHz = gLevels[d].khz[at];
+}
+
+void governorThread(void *, wait_result_t) {
+    uint64_t lastIdle[kCpus] = {}, lastT = mach_absolute_time();
+    for (unsigned c = 0; c < kCpus; ++c) lastIdle[c] = sheng_cpu_idle_mach((int)c);
+    unsigned cur[3] = {}, down[3] = {};
+    bool ready[3] = {};
+    uint64_t winNs = 0, khzNs[3] = {}, busyNs[3] = {};
+    uint32_t changes[3] = {};
+    for (;;) {
+        IOSleep(16);
+        const uint64_t t = mach_absolute_time(), dt = t - lastT;
+        lastT = t;
+        if (!dt) continue;
+        uint64_t busy[3] = {};   // per mille of the busiest CPU
+        for (unsigned c = 0; c < kCpus; ++c) {
+            const uint64_t idle = sheng_cpu_idle_mach((int)c), di = idle - lastIdle[c];
+            lastIdle[c] = idle;
+            const uint64_t b = di >= dt ? 0 : (dt - di) * 1000 / dt;
+            const int d = kCpuDomain[c];
+            if (b > busy[d]) busy[d] = b;
+        }
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(dt, &ns);
+        winNs += ns;
+        IOLockLock(gLock);
+        for (unsigned d = 0; d < 3; ++d) {
+            Window &w = gDomain[d];
+            if (!w.va || !(rd32(w.va, kRegEnable) & 1)) continue;
+            Levels &l = gLevels[d];
+            if (!ready[d]) {
+                buildLevels(d);
+                if (!l.count) continue;
+                w.preKHz = (rd32(w.va, kRegDomainState) & 0xff) * kXoKHz;
+                cur[d] = l.count - 1;
+                setLevel(d, cur[d]);
+                ready[d] = true;
+            }
+            unsigned want = l.count - 1;
+            if (busy[d] < 900) {
+                const uint64_t need = l.khz[cur[d]] * busy[d] * 125 / 100000;
+                want = 0;
+                while (want + 1 < l.count && l.khz[want] < need) ++want;
+            }
+            if (want > cur[d]) {
+                cur[d] = want; down[d] = 0; setLevel(d, want); ++changes[d];
+            } else if (want < cur[d]) {
+                if (++down[d] >= 4) {cur[d] = want; down[d] = 0; setLevel(d, want); ++changes[d];}
+            } else {
+                down[d] = 0;
+            }
+            khzNs[d] += (uint64_t)l.khz[cur[d]] / 1000 * ns;
+            busyNs[d] += busy[d] * ns / 10;
+        }
+        IOLockUnlock(gLock);
+        if (winNs >= 10000000000ull) {
+            for (unsigned d = 0; d < 3; ++d) {
+                native_cpufreq_gov[d * 3] = changes[d];
+                native_cpufreq_gov[d * 3 + 1] = (uint32_t)(khzNs[d] / winNs);
+                native_cpufreq_gov[d * 3 + 2] = (uint32_t)(busyNs[d] / winNs);
+                changes[d] = 0; khzNs[d] = busyNs[d] = 0;
+            }
+            winNs = 0;
+        }
+    }
+}
 }
 
 extern "C" void sheng_cpufreq_poll(void) {
@@ -130,7 +248,7 @@ extern "C" void sheng_cpufreq_poll(void) {
     IOLockLock(gLock);
     for (unsigned d = 0; d < 3; ++d) {
         Window &w = gDomain[d];
-        bool wanted = gMode >= 3 || (gMode == 2 && d == 0);
+        bool wanted = gMode == 3 || (gMode == 2 && d == 0);
         if (w.va && wanted && w.voted < 0 && (rd32(w.va, kRegEnable) & 1)) voteDomain(d);
     }
     if (gL3.va && gMode >= 3 && gL3.voted < 0 && (rd32(gL3.va, kRegEnable) & 1)) voteL3();
@@ -140,9 +258,11 @@ extern "C" void sheng_cpufreq_poll(void) {
 }
 
 extern "C" void sheng_cpufreq_probe(void) {
-    unsigned mode = 0, capMHz = 0;
+    unsigned mode = 0, capMHz = 0, minMHz = 0;
     PE_parse_boot_argn("sheng-cpufreq", &mode, sizeof(mode));
     PE_parse_boot_argn("sheng-cpufreq-cap", &capMHz, sizeof(capMHz));
+    PE_parse_boot_argn("sheng-cpufreq-min", &minMHz, sizeof(minMHz));
+    gFloorKHz = minMHz * 1000;
     if (!mode || gLock) return;
     gLock = IOLockAlloc();
     if (!gLock) return;
@@ -152,4 +272,8 @@ extern "C" void sheng_cpufreq_probe(void) {
     if (mode >= 3) mapWindow(gL3, kL3Base);
     gMode = mode;
     sheng_cpufreq_poll();
+    if (mode >= 4) {
+        thread_t thread = nullptr;
+        if (kernel_thread_start(governorThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+    }
 }
