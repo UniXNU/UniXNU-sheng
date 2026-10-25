@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Speaker playback on the sheng board (boot argument sheng-audio, bits: 1 serve, 2 play a test tone first, 4 bring up the microphone
-// path; needs sheng-adsp=2). One kernel thread brings the path up in order:
+// path, 8 press the power button once at 150 s for the lock sound; needs sheng-adsp=2). One kernel thread brings the path up in order:
 //   1  pass-through stream mapping in the apps SMMU for the DSP's audio streams, and the DSP's period buffers
 //   2  pins: secondary MI2S to the LPASS function, the two amplifier I2C buses, the shared amplifier reset (low 2 ms, then high)
 //   3  QUP clocks and the two GENI I2C engines (QUP1 SE5, QUP2 SE0) at 400 kHz from the 19.2 MHz DFS level
@@ -11,8 +11,9 @@
 //      for sheng-audio-tone-ms (default 1500), attenuated by sheng-audio-atten dB (default 30)
 // Then the thread serves the plug-in: on start it powers the amplifiers up, prepares and starts both graphs and keeps four 10 ms
 // periods queued at the DSP, each copied from the shared playback ring (ShengAudioAbi.h) as the previous one returns; on stop it stops
-// the graphs and powers the amplifiers down. Waiting happens only on this thread: the DSP thread's callbacks copy each answer into a
-// ring and wake it.
+// the graphs and powers the amplifiers down. Once the microphone test passed, input requests start and stop the capture graphs the same
+// way, and each returned capture period is copied into the shared capture ring. Waiting happens only on this thread: the DSP thread's
+// callbacks copy each answer into a ring and wake it.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
@@ -68,6 +69,9 @@ constexpr uint32_t kPort = 0x2001;                   // our GPR port; every answ
 constexpr uint32_t kRate = SHENG_AUDIO_RATE, kChannels = SHENG_AUDIO_OUT_CHANNELS, kPeriodFrames = SHENG_AUDIO_PERIOD_FRAMES;
 constexpr uint32_t kPeriodBytes = kPeriodFrames * kChannels * 2, kSlots = 8, kBufferBytes = 64 * 1024, kRingFrames = SHENG_AUDIO_RING_FRAMES;
 constexpr uint32_t kInFlight = 4, kLeadFrames = (kInFlight + 1) * kPeriodFrames;
+// Capture periods (mono) live in the second half of the DSP buffer; the microphone graphs start in this order and stop in reverse.
+constexpr uint32_t kCapBytes = kPeriodFrames * 2, kCapOffset = 32 * 1024, kCapSlots = 8;
+const uint32_t kMicUp[2] = {AR_SG_MIC, AR_SG_CAPTURE}, kMicDown[2] = {AR_SG_CAPTURE, AR_SG_MIC};
 constexpr uint64_t kGcc = 0x00100000ULL, kTlmm = 0x0f100000ULL, kSmmu = 0x15000000ULL;
 constexpr uint64_t kSe[2] = {0x00a94000ULL, 0x00880000ULL};
 // GCC (gcc-sm8550.c): vote registers and bits, branch halt registers, the engines' DFS clock sources.
@@ -149,6 +153,12 @@ struct Audio {
     bool running, statusRead;
     uint64_t next, done;
     uint32_t inFlight;
+    // Capture for the plug-in's input stream, once the microphone test passed: periods read from the DSP land in the capture ring at
+    // capBase + n * kPeriodFrames, capBase being the playback position when capture started (both directions share one clock).
+    int16_t *in;
+    bool micReady, capturing;
+    uint64_t capNext, capDone, capBase;
+    uint32_t capInFlight;
 };
 Audio gAudio;
 
@@ -437,6 +447,7 @@ bool setupShared() {
     if (!gAudio.control || !gAudio.outRing || !gAudio.inRing) return false;
     gAudio.ctl = static_cast<ShengAudioControl *>(gAudio.control->getBytesNoCopy());
     gAudio.out = static_cast<int16_t *>(gAudio.outRing->getBytesNoCopy());
+    gAudio.in = static_cast<int16_t *>(gAudio.inRing->getBytesNoCopy());
     memset(gAudio.ctl, 0, 4096);
     memset(gAudio.out, 0, kRingFrames * SHENG_AUDIO_OUT_CHANNELS * 2);
     memset(gAudio.inRing->getBytesNoCopy(), 0, kRingFrames * SHENG_AUDIO_IN_CHANNELS * 2);
@@ -509,6 +520,61 @@ void stopOutput() {
     native_audio_stats[14] = native_audio_stats[14] + (1 << 16);
 }
 
+extern "C" {extern volatile int32_t native_mic_capture[8];}
+// Asks the DSP to fill capture period n.
+bool askCapture(uint64_t n) {
+    uint8_t b[GPR_MAX_PACKET];
+    const uint32_t slot = (uint32_t)(n % kCapSlots);
+    if (!send(b, ar_read(b, sizeof b, kPort, (uint32_t)n, gAudio.dspAddr + kCapOffset + slot * kCapBytes, gAudio.handle, kCapBytes))) return false;
+    gAudio.capInFlight++;
+    return true;
+}
+
+void startInput() {
+    if (gAudio.capturing || !gAudio.micReady) return;
+    uint8_t b[GPR_MAX_PACKET];
+    for (uint32_t sg : kMicUp) command(ar_graph_command(b, sizeof b, kPort, ++gAudio.token, AR_OP_GRAPH_PREPARE, sg), b, AR_OP_GRAPH_PREPARE);
+    for (uint32_t sg : kMicUp)
+        if (!command(ar_graph_command(b, sizeof b, kPort, ++gAudio.token, AR_OP_GRAPH_START, sg), b, AR_OP_GRAPH_START)) return;
+    ShengAudioControl *c = gAudio.ctl;
+    const uint64_t now = mach_absolute_time(), anchor = c->out_anchor_host;
+    const double ticks = (double)c->ticks_per_frame_q32 / 4294967296.0;
+    gAudio.capBase = gAudio.running && now > anchor ? (uint64_t)((double)(now - anchor) / ticks) : 0;
+    __atomic_add_fetch(&c->in_seq, 1, __ATOMIC_ACQ_REL);
+    c->in_anchor_host = anchor;
+    c->in_frames = 0;
+    __atomic_add_fetch(&c->in_seq, 1, __ATOMIC_ACQ_REL);
+    memset(gAudio.in, 0, kRingFrames * 2);
+    gAudio.capNext = gAudio.capDone = 0;
+    gAudio.capInFlight = 0;
+    gAudio.capturing = true;
+    while (gAudio.capInFlight < kInFlight && askCapture(gAudio.capNext)) gAudio.capNext++;
+    __atomic_or_fetch(&c->state, ShengAudioInputRunning, __ATOMIC_ACQ_REL);
+    native_audio_stats[14] = native_audio_stats[14] + (1 << 8);
+}
+
+void stopInput() {
+    if (!gAudio.capturing) return;
+    gAudio.capturing = false;
+    uint8_t b[GPR_MAX_PACKET];
+    for (uint32_t sg : kMicDown) command(ar_graph_command(b, sizeof b, kPort, ++gAudio.token, AR_OP_GRAPH_STOP, sg), b, AR_OP_GRAPH_STOP);
+    __atomic_and_fetch(&gAudio.ctl->state, ~ShengAudioInputRunning, __ATOMIC_ACQ_REL);
+    native_audio_stats[14] = native_audio_stats[14] + (1 << 24);
+}
+
+// A returned capture period goes to the capture ring at its place in the playback timeline.
+void captured(const ArAnswer &a) {
+    if (gAudio.capInFlight) gAudio.capInFlight--;
+    const uint32_t slot = (uint32_t)((a.address - (gAudio.dspAddr + kCapOffset)) / kCapBytes) % kCapSlots;
+    const int16_t *src = reinterpret_cast<const int16_t *>(gAudio.bufferVa + kCapOffset + slot * kCapBytes);
+    const uint64_t t = gAudio.capBase + gAudio.capDone * kPeriodFrames;
+    for (uint32_t i = 0; i < kPeriodFrames; ++i) gAudio.in[(t + i) % kRingFrames] = src[i];
+    gAudio.capDone++;
+    gAudio.ctl->in_frames = gAudio.capDone * kPeriodFrames;
+    native_mic_capture[3] = native_mic_capture[3] + 1;
+    if (gAudio.capturing) while (gAudio.capInFlight < kInFlight && askCapture(gAudio.capNext)) gAudio.capNext++;
+}
+
 void handle(const ArAnswer &a) {
     if (a.opcode == AR_OP_WRITE_DONE) {
         native_audio_stats[5] = native_audio_stats[5] + 1;
@@ -518,6 +584,8 @@ void handle(const ArAnswer &a) {
         gAudio.ctl->out_frames = gAudio.done * kPeriodFrames;
         if (gAudio.running) while (gAudio.inFlight < kInFlight && submit(gAudio.next)) gAudio.next++;
         if (gAudio.running && !gAudio.statusRead && gAudio.done == 10) {readAmpStatus(); gAudio.statusRead = true;}
+    } else if (a.opcode == AR_OP_READ_DONE) {
+        captured(a);
     } else if (a.opcode == GPR_OP_BASIC_RESULT && a.status) {
         native_audio_stats[1] = (int32_t)a.status;
     }
@@ -531,9 +599,11 @@ void serve(uint32_t ms) {
         if (!ms) {
             if ((want & ShengAudioOutputRunning) && !gAudio.running) startOutput();
             if (!(want & ShengAudioOutputRunning) && gAudio.running) stopOutput();
+            if ((want & ShengAudioInputRunning) && !gAudio.capturing) startInput();
+            if (!(want & ShengAudioInputRunning) && gAudio.capturing) stopInput();
         }
         ArAnswer a;
-        if (nextAnswer(a, gAudio.running ? 100 : 1000)) handle(a);
+        if (nextAnswer(a, gAudio.running || gAudio.capturing ? 100 : 1000)) handle(a);
         if (end && nowMs() >= end) return;
     }
 }
@@ -546,6 +616,18 @@ void playTone() {
     stopOutput();
     memset(gAudio.out, 0, kRingFrames * kChannels * 2);
     stage(57);
+}
+
+// sheng-audio bit 8: an unattended check of the iOS output path. At 150 s of uptime one synthetic power button press locks the screen,
+// and SpringBoard plays its lock sound through the audio server, the plug-in and this service; [audio-service] then counts the requests.
+extern "C" bool sheng_buttons_press(uint32_t mask, uint32_t ms) __attribute__((weak_import));
+extern "C" volatile int32_t native_audio_service[8];
+void lockSoundThread(void *, wait_result_t) {
+    uint64_t up = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time(), &up);
+    const uint64_t at = 150ull * 1000000000ull;
+    if (up < at) IOSleep((uint32_t)((at - up) / 1000000ull));
+    native_audio_service[6] = sheng_buttons_press && sheng_buttons_press(1u << 1, 150) ? 1 : -1;
 }
 
 bool openGraphs() {
@@ -714,16 +796,14 @@ bool micStream(uint8_t dev, uintptr_t tx, uintptr_t m) {
     if (!command(ar_config_mic_device(b, sizeof b, kPort, ++gAudio.token, &f, 1), b, AR_OP_SET_CFG)) {capStage(-7); return false;}
     if (!command(ar_open_capture_stream(b, sizeof b, kPort, ++gAudio.token), b, AR_OP_GRAPH_OPEN)) {capStage(-8); return false;}
     if (!command(ar_config_capture_stream(b, sizeof b, kPort, ++gAudio.token, &f), b, AR_OP_SET_CFG)) {capStage(-9); return false;}
-    static const uint32_t up[2] = {AR_SG_MIC, AR_SG_CAPTURE}, down[2] = {AR_SG_CAPTURE, AR_SG_MIC};
-    for (uint32_t sg : up)
+    for (uint32_t sg : kMicUp)
         if (!command(ar_graph_command(b, sizeof b, kPort, ++gAudio.token, AR_OP_GRAPH_PREPARE, sg), b, AR_OP_GRAPH_PREPARE)) {capStage(-10); return false;}
-    for (uint32_t sg : up)
+    for (uint32_t sg : kMicUp)
         if (!command(ar_graph_command(b, sizeof b, kPort, ++gAudio.token, AR_OP_GRAPH_START, sg), b, AR_OP_GRAPH_START)) {capStage(-11); return false;}
     capStage(6);
     IOSleep(300);
     wr32(tx, 0x400, rd32(tx, 0x400) & ~0x10u);   // unmute after the analog path's settling time
     // Read 200 periods (2 s) through four buffers in the second half of the DSP buffer.
-    constexpr uint32_t kCapBytes = kPeriodFrames * 2, kCapOffset = 32 * 1024, kCapSlots = 8;
     uint64_t sum = 0, samples = 0;
     int32_t peak = 0, nonzero = 0;
     uint32_t asked = 0, back = 0;
@@ -756,9 +836,10 @@ bool micStream(uint8_t dev, uintptr_t tx, uintptr_t m) {
             native_mic_capture[1] = (int32_t)a.status;
         }
     }
-    for (uint32_t sg : down) command(ar_graph_command(b, sizeof b, kPort, ++gAudio.token, AR_OP_GRAPH_STOP, sg), b, AR_OP_GRAPH_STOP);
+    for (uint32_t sg : kMicDown) command(ar_graph_command(b, sizeof b, kPort, ++gAudio.token, AR_OP_GRAPH_STOP, sg), b, AR_OP_GRAPH_STOP);
     if (native_mic_capture[0] > 0) capStage(7);
-    return native_mic_capture[0] == 7;
+    gAudio.micReady = native_mic_capture[0] == 7;
+    return gAudio.micReady;
 }
 
 bool micBringUp() {
@@ -900,9 +981,18 @@ void audioThread(void *, wait_result_t) {
     __atomic_store_n(&gAudio.serving, 1u, __ATOMIC_RELEASE);
     native_audio_stats[15] = (int32_t)(nowMs() - start);
     stage(60);
+    if (gAudio.mode & 8) {
+        thread_t thread;
+        if (kernel_thread_start(lockSoundThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+    }
     serve(0);
 }
 }  // namespace
+
+// The plug-in's record of unanswered properties (ShengAudioDiag in the control page), for the log.
+extern "C" const ShengAudioDiag *sheng_audio_diag(void) {
+    return gAudio.ctl ? reinterpret_cast<const ShengAudioDiag *>(reinterpret_cast<const uint8_t *>(gAudio.ctl) + SHENG_AUDIO_DIAG_OFFSET) : nullptr;
+}
 
 extern "C" IOBufferMemoryDescriptor *sheng_audio_memory(uint32_t type) {
     if (!__atomic_load_n(&gAudio.serving, __ATOMIC_ACQUIRE)) return nullptr;
@@ -927,7 +1017,7 @@ extern "C" int sheng_audio_request(uint32_t selector) {
 
 extern "C" void sheng_audio_probe(void) {
     unsigned mode = 0;
-    if (!PE_parse_boot_argn("sheng-audio", &mode, sizeof mode) || !mode || mode > 7 || native_audio_stats[0]) return;
+    if (!PE_parse_boot_argn("sheng-audio", &mode, sizeof mode) || !mode || mode > 15 || native_audio_stats[0]) return;
     gAudio.mode = mode;
     gAudio.toneMs = (mode & 2) ? 1500 : 0;
     gAudio.atten = 30;
