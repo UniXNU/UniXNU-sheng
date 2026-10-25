@@ -956,7 +956,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     // What the plug-in could not answer: loads of the plug-in, then up to 16 'selector'@object/scope entries.
     if (&sheng_audio_diag && sheng_audio_diag()) {
       const ShengAudioDiag *d = sheng_audio_diag();
-      int n = snprintf(row, sizeof row, "[audio-props] loads=%u unknown=%u", d->loads, d->count);
+      int n = snprintf(row, sizeof row, "[audio-props] loads=%u vol=%u sets=%u mix=%u unknown=%u", d->loads, d->volume_milli, d->volume_sets,
+                       d->mix_peak, d->count);
       for (unsigned i = 0; i < d->count && i < 16 && n > 0 && n < (int)sizeof row - 16; ++i) {
         const uint32_t s = d->selector[i], w = d->where[i];
         n += snprintf(row + n, sizeof row - (size_t)n, " %c%c%c%c@%u%c", (char)(s >> 24), (char)(s >> 16), (char)(s >> 8), (char)s, w >> 24,
@@ -964,11 +965,15 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       }
       at = put(out, at, cap, row, sizeof row);
     }
-    // The audio service (ShengAudioService.cpp): state, opens, closes, requests, refused requests, memory maps, the lock sound press.
+    // The audio service (ShengAudioService.cpp): state, opens, closes, requests, refused requests, memory maps, the lock sound press, the
+    // playback / capture peak, playback periods taken before the plug-in had written them, and the plug-in's write position (frames).
     if (&native_audio_service && native_audio_service[0]) {
-      snprintf(row, sizeof row, "[audio-service] st=%d opens=%d closes=%d requests=%d refused=%d maps=%d press=%d", native_audio_service[0],
-               native_audio_service[1], native_audio_service[2], native_audio_service[3], native_audio_service[4], native_audio_service[5],
-               native_audio_service[6]);
+      const ShengAudioControl *ac = &sheng_audio_diag && sheng_audio_diag() ?
+          (const ShengAudioControl *)((const uint8_t *)sheng_audio_diag() - SHENG_AUDIO_DIAG_OFFSET) : NULL;
+      snprintf(row, sizeof row, "[audio-service] st=%d opens=%d closes=%d requests=%d refused=%d maps=%d press=%d peak=%d/%d late=%u written=%llu",
+               native_audio_service[0], native_audio_service[1], native_audio_service[2], native_audio_service[3], native_audio_service[4],
+               native_audio_service[5], native_audio_service[6], native_audio_service[7] & 0xffff, (native_audio_service[7] >> 16) & 0xffff,
+               ac ? ac->out_late : 0, ac ? (unsigned long long)ac->out_written : 0ull);
       at = put(out, at, cap, row, sizeof row);
     }
     if (&native_audio_pa) {
