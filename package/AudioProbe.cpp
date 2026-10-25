@@ -57,6 +57,9 @@ extern "C" {volatile uint32_t native_audio_amps[CS35_AMPS][4];}
 // id registers, [10] TX macro MCLK control, [11] VA macro MCLK control, [12] master interrupt status, [13] component parameters,
 // [14] reads that timed out, [15] ms the stage took
 extern "C" {volatile int32_t native_mic_stats[16];}
+// After the TX master start: TX macro 0x0/0x4/0x8/0x90, VA macro 0x0/0x4/0x80, master 0x4/0x18/0x1044/0x104c/0x5060/0x5064/0x5000, the TX
+// SoundWire clock pin configuration, the slew register
+extern "C" {volatile uint32_t native_mic_regs[16];}
 extern "C" {volatile uint64_t native_audio_pa;}   // the DSP period buffer
 
 namespace {
@@ -332,7 +335,6 @@ bool setupBus(unsigned b) {
     for (unsigned l = 0; l < TB_DFS_LEVELS && level == 0xff; ++l) {
         const uint64_t hz = tb_dfs_level_hz(rd32(rcg, TB_RCG_PERF_CFG(l)), rd32(rcg, TB_RCG_PERF_M(l)), rd32(rcg, TB_RCG_PERF_N(l)));
         if (hz == 19200000ULL) level = l;
-        if (b == 0 && l == 0) native_audio_stats[14] = (int32_t)(hz / 1000);
     }
     const uint32_t proto = (rd32(se, GENI_FW_REVISION) >> 8) & 0xff;
     native_audio_stats[10 + b] = (int32_t)(proto << 24 | (rd32(se, GENI_CLK_CFG) & 0xffffff));
@@ -593,11 +595,29 @@ bool micRail() {
     return true;
 }
 
+// The PRM commands go out from the PRM's own port, as its client sends them (i504: from our port the first vote was refused with status 1).
+// [1] the three results: status of the macro vote | digital codec vote << 8 | clock request << 16 (0xff: no answer).
 bool micPrm() {
     uint8_t b[GPR_MAX_PACKET];
-    if (!command(ar_prm_vote(b, sizeof b, kPort, ++gAudio.token, AR_HW_MACRO, 1), b, AR_OP_PRM_REQUEST)) return false;
-    if (!command(ar_prm_vote(b, sizeof b, kPort, ++gAudio.token, AR_HW_DCODEC, 1), b, AR_OP_PRM_REQUEST)) return false;
-    return command(ar_prm_clock(b, sizeof b, kPort, ++gAudio.token, AR_CLK_TX_CORE_MCLK, 19200000), b, AR_OP_PRM_REQUEST);
+    uint32_t statuses = 0;
+    auto run = [&](uint32_t n) {
+        native_mic_stats[1] = -1;
+        const bool done = command(n, b, AR_OP_PRM_REQUEST);
+        return done ? 0u : native_mic_stats[1] == -1 ? 0xffu : ((uint32_t)native_mic_stats[1] & 0xffu ? (uint32_t)native_mic_stats[1] & 0xffu : 0xfeu);
+    };
+    statuses |= run(ar_prm_vote(b, sizeof b, AR_PRM_IID, ++gAudio.token, AR_HW_MACRO, 1));
+    statuses |= run(ar_prm_vote(b, sizeof b, AR_PRM_IID, ++gAudio.token, AR_HW_DCODEC, 1)) << 8;
+    // The TX core clock: 19.2 MHz "couple no" as the macro drivers ask, else 9.6 MHz, else attribute 0 (i505 refused the first with 1).
+    // [1] bits 31:24 say which one the DSP took (1 to 3, 0 none).
+    static const struct {uint32_t hz, attribute;} clocks[] = {{19200000, 1}, {9600000, 1}, {19200000, 0}};
+    uint32_t taken = 0, clock = 0;
+    for (unsigned i = 0; i < 3 && !taken; ++i) {
+        clock = run(ar_prm_clock_attr(b, sizeof b, AR_PRM_IID, ++gAudio.token, AR_CLK_TX_CORE_MCLK, clocks[i].hz, clocks[i].attribute));
+        if (!clock) taken = i + 1;
+    }
+    statuses |= clock << 16 | taken << 24;
+    native_mic_stats[1] = (int32_t)statuses;
+    return (statuses & 0xffffu) == 0;   // register access needs the two votes; the clock only drives the bus
 }
 
 // SoundWire command FIFO of the TX master (v2.0 layout).
@@ -659,6 +679,12 @@ bool micBringUp() {
     wr32(va.va, 0x4, rd32(va.va, 0x4) | 3);
     wr32(va.va, 0x4, (rd32(va.va, 0x4) & ~2u) | 1);
     wr32(va.va, 0x80, rd32(va.va, 0x80) | 2);
+    // On SM8550 the VA macro also gates the SoundWire master clock (its SWR control, reset pulse around the enable) and sets the mic
+    // clock dividers to 1; i508 started the master with only the TX macro's gate and the master took no writes.
+    for (uint32_t r = 0xd0; r <= 0xd8; r += 4) wr32(va.va, r, (rd32(va.va, r) & ~0xeeu) | 0xccu);
+    wr32(va.va, 0x8, rd32(va.va, 0x8) | 2);
+    wr32(va.va, 0x8, rd32(va.va, 0x8) | 1);
+    wr32(va.va, 0x8, rd32(va.va, 0x8) & ~2u);
     wr32(tx.va, 0x90, rd32(tx.va, 0x90) | 1);
     wr32(tx.va, 0x0, rd32(tx.va, 0x0) | 1);
     wr32(tx.va, 0x4, rd32(tx.va, 0x4) | 1);
@@ -674,6 +700,8 @@ bool micBringUp() {
     const uintptr_t m = gSwr.r.va;
     native_mic_stats[3] = (int32_t)rd32(m, 0x00);
     if ((rd32(m, 0x00) >> 24) != 2) {micFail(7); return false;}
+    wr32(m, 0x008, 1);          // soft reset, as the bus driver does before it starts the master again
+    IOSleep(1);
     wr32(m, 0x101c, 1u << 3 | 7u);
     wr32(m, 0x500, 1);
     wr32(m, 0x1048, (rd32(m, 0x1048) & ~(0x1fu << 17)) | 0x1fu << 17);
@@ -685,7 +713,16 @@ bool micBringUp() {
     wr32(m, 0x5008, 0xffffffffu);
     wr32(m, 0x5004, 0x1ffff);
     wr32(m, 0x004, 3);
-    for (unsigned i = 0; i < 100 && !(rd32(m, 0x5064) & 1); ++i) IOSleep(1);
+    for (unsigned i = 0; i < 500 && !(rd32(m, 0x5064) & 1); ++i) IOSleep(1);
+    {
+        const uint32_t txr[4] = {0x0, 0x4, 0x8, 0x90}, var[3] = {0x0, 0x8, 0x80}, mr[7] = {0x4, 0x18, 0x1044, 0x104c, 0x5060, 0x5064, 0x5000};
+        unsigned k = 0;
+        for (uint32_t r : txr) native_mic_regs[k++] = rd32(tx.va, r);
+        for (uint32_t r : var) native_mic_regs[k++] = rd32(va.va, r);
+        for (uint32_t r : mr) native_mic_regs[k++] = rd32(m, r);
+        native_mic_regs[k++] = rd32(lpi.va, 0);
+        native_mic_regs[k++] = rd32(slew.va, (uint32_t)(kLpassSlew & 0xfff));
+    }
     native_mic_stats[4] = (int32_t)rd32(m, 0x5064);
     native_mic_stats[13] = (int32_t)rd32(m, 0x100);
     micStage(7);

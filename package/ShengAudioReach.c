@@ -307,12 +307,17 @@ uint32_t ar_read(uint8_t *out, uint32_t capacity, uint32_t port, uint32_t token,
 
 uint32_t ar_prm_clock(uint8_t *out, uint32_t capacity, uint32_t port, uint32_t token, uint32_t clock_id, uint32_t hz)
 {
+    return ar_prm_clock_attr(out, capacity, port, token, clock_id, hz, 1);
+}
+
+uint32_t ar_prm_clock_attr(uint8_t *out, uint32_t capacity, uint32_t port, uint32_t token, uint32_t clock_id, uint32_t hz, uint32_t attribute)
+{
     W w;
     begin(&w, out, capacity, port, AR_PRM_IID, token, hz ? AR_OP_PRM_REQUEST : AR_OP_PRM_RELEASE);
     const uint32_t cmd = cmd_payload_start(&w);
     const uint32_t at = param_begin(&w, AR_PRM_IID, 0x0800102Cu);    /* audio hardware clock */
     put32(&w, 1); put32(&w, clock_id);
-    if (hz) {put32(&w, hz); put32(&w, 1); put32(&w, 0);}            /* frequency, attribute "couple no", default root */
+    if (hz) {put32(&w, hz); put32(&w, attribute); put32(&w, 0);}    /* frequency, attribute (1 "couple no"), default root */
     set32(&w, at + 8, w.n - at - PARAM_HEADER);                      /* exact size: the reference client does not pad these */
     cmd_payload_end(&w, cmd);
     return finish(&w);
