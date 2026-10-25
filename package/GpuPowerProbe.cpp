@@ -353,16 +353,19 @@ int ringPublish(void *, const volatile uint32_t *, size_t) {__asm__ volatile("ds
 int ringAcquire(void *, volatile uint32_t *, size_t) {__asm__ volatile("dsb sy" ::: "memory"); return 0;}
 uint64_t ringNow(void *) {uint64_t us = 0; coldNow(nullptr, &us); return us;}
 // The fence waits' pause. Once the GPU line is attached (irqAndTimer) a waiter that may block sleeps until the next GPU interrupt or
-// 100 us, whichever is first; before that, or where it may not block, it spins 20 us. int-143's waiters spun through every frame's
-// GPU time (35 ms a commit) on CPUs that were already the bottleneck.
+// `sheng-gpu-pause-us=<us>` (default 1000), whichever is first; before that, or where it may not block, it spins 20 us. int-143's
+// waiters spun through every frame's GPU time (35 ms a commit) on CPUs that were already the bottleneck. Every fence is a
+// CACHE_FLUSH_TS with its interrupt bit (unmasked in RBBM_INT_0_MASK), so the interrupt ends the sleep; i566's 100 us cap woke the
+// waiters 274105 times in 318 s, a context switch each, on cores that could otherwise idle.
 volatile bool gIrqAttached;
 volatile uint32_t gIrqCount;
-extern "C" {volatile uint64_t native_gpu_idle_sleeps, native_gpu_idle_spins;}
+unsigned gPauseUs = 1000;
+extern "C" {volatile uint64_t native_gpu_idle_sleeps, native_gpu_idle_spins, native_gpu_idle_timeouts;}
 extern "C" int get_preemption_level(void);
 int ringIdle(void *) {
     if (gIrqAttached && ml_get_interrupts_enabled() && !ml_at_interrupt_context() && get_preemption_level() == 0) {
-        assert_wait_timeout(event_t(&gIrqCount), THREAD_UNINT, 100, NSEC_PER_USEC);
-        thread_block(THREAD_CONTINUE_NULL);
+        assert_wait_timeout(event_t(&gIrqCount), THREAD_UNINT, gPauseUs, NSEC_PER_USEC);
+        if (thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT) native_gpu_idle_timeouts = native_gpu_idle_timeouts + 1;
         native_gpu_idle_sleeps = native_gpu_idle_sleeps + 1;
     } else {
         IODelay(20);
@@ -1574,11 +1577,17 @@ void gpuStart() {
 // level after 4 windows in a row (5 right after a step up) that would have needed at most 0.8 x the next lower level, and back to the
 // floor after 80 ms without work. `sheng-gpu-dcvs-min` is the floor level (default 3, 348 MHz). Each change is the same HFI
 // GX_BW_PERF_VOTE as the boot vote, with that level's bandwidth. OPP MHz in sheng-gmu's table order.
+// Two boosts, because the first frames of an animation are the ones a window-based governor serves at the floor (i560: the frames of an
+// app launch took 30-36 ms to finish at 348 MHz, the 10 s windows around them 348 MHz 94-100 % of the time): work after the idle drop
+// starts at the lowest level at or above max(2 x now, 578 MHz) for 50 ms, and a touch report holds the top level until
+// `sheng-gpu-dcvs-boost-ms` (default 1000, 0 = off) after the last one. [13] counts the touch boosts started.
 constexpr uint32_t kGpuMHz[9] = {0, 220, 295, 348, 401, 475, 550, 615, 680};
 constexpr unsigned kGpuTop = 8;
 extern "C" {
-// [0] 1 running, [1] level now, [2] changes, [3] failed votes, [4] busy % over the last 10 s, [5..12] % of those 10 s at levels 1..8
-volatile uint32_t native_gpu_dcvs[13];
+// [0] 1 running, [1] level now, [2] changes, [3] failed votes, [4] busy % over the last 10 s, [5..12] % of those 10 s at levels 1..8,
+// [13] touch boosts, [14] wake boosts
+volatile uint32_t native_gpu_dcvs[15];
+extern volatile uint32_t native_hid_input_events[8] __attribute__((weak_import));
 }
 uint64_t gpuBusyTicks() {
     ShengGmuIo &io = gColdDevice.io;
@@ -1620,6 +1629,11 @@ void gpuDcvsThread(void *, wait_result_t) {
     uint64_t lastBusy = gpuBusyTicks(), lastT = mach_absolute_time(), idleSince = lastT;
     uint64_t runNs = 0, winBusy = 0, winNs = 0, atLevel[kGpuTop + 1] = {};
     unsigned down = 0, hold = 0;
+    uint64_t boostAbs = 0, touchEnd = 0, wakeEnd = 0, wakeAbs = 0;
+    nanoseconds_to_absolutetime((uint64_t)bootArg("sheng-gpu-dcvs-boost-ms", 1000) * 1000000, &boostAbs);
+    nanoseconds_to_absolutetime(50000000ull, &wakeAbs);
+    uint32_t touches = &native_hid_input_events ? native_hid_input_events[6] : 0;
+    bool idle = false;
     for (;;) {
         IOSleep(16);
         const uint64_t busy = gpuBusyTicks(), t = mach_absolute_time();
@@ -1650,6 +1664,20 @@ void gpuDcvsThread(void *, wait_result_t) {
             if (idle >= 80000000ull) want = floor;
         }
         if (active) idleSince = t;
+        if (!active && want == floor) idle = true;
+        if (active && idle) {
+            idle = false; wakeEnd = t + wakeAbs; native_gpu_dcvs[14] = native_gpu_dcvs[14] + 1;
+        }
+        if (boostAbs && &native_hid_input_events && native_hid_input_events[6] != touches) {
+            touches = native_hid_input_events[6];
+            if (t >= touchEnd) native_gpu_dcvs[13] = native_gpu_dcvs[13] + 1;
+            touchEnd = t + boostAbs;
+        }
+        if (t < touchEnd) want = kGpuTop;
+        else if (t < wakeEnd) {
+            const unsigned wake = gpuLevelFor(kGpuMHz[cur] * 2 > 578 ? kGpuMHz[cur] * 2 : 578);
+            if (want < wake) want = wake;
+        }
         if (want < floor) want = floor;
         if (want != cur) {
             if (gpuVote(want)) {hold = want > cur; cur = want; native_gpu_dcvs[1] = cur; native_gpu_dcvs[2] = native_gpu_dcvs[2] + 1;}
@@ -1977,6 +2005,7 @@ void probeThread(void *, wait_result_t) {
     registerExecObserver();
     unsigned mode = 0;
     PE_parse_boot_argn("sheng-gpu-power", &mode, sizeof mode);
+    {unsigned us = 0; if (PE_parse_boot_argn("sheng-gpu-pause-us", &us, sizeof us) && us >= 20 && us <= 100000) gPauseUs = us;}
     if (mode > 9) mode = 9;
     IOSleep(10000);
     native_gpu_power_stage = 1;

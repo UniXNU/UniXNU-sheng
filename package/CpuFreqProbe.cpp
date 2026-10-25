@@ -21,6 +21,17 @@
 // after 4 windows in a row that asked for less. Levels stay between `sheng-cpufreq-min=<MHz>` (default 0) and mode 3's highest
 // non-turbo level (or the cap). The XNU CPU numbers follow the DTS cpu order: cpus 0-2 are the A510 cores (domain 0, the E cluster),
 // cpus 3-6 the A715/A710 cores (domain 1), cpu 7 the X3 (domain 2).
+// Touch boost: when the touch report count moves, the P domains (1, 2) hold their highest allowed level until
+// `sheng-cpufreq-boost-ms=<ms>` (default 1000, 0 = off) after the last report, so an app launch or a scroll starts at full speed
+// instead of ramping by 1.25x per window. Outside a boost the P domains stop at the lowest level at or above half their highest
+// one, and go lower only after 12 windows in a row under 10 % busy.
+// Frame floor: GPU submits (NativeAdreno's submit count) in 2 of the last 4 windows keep every domain at or above
+// `sheng-cpufreq-frame-pct=<n>` (default 60) % of its highest level for `sheng-cpufreq-frame-ms=<ms>` (default 300, 0 = off), the E
+// domain included: the render server also runs on the A510 cores (i566 profile: 23 % of backboardd's samples on cpus 0-2) and they
+// sat at 307 MHz. i565 held the P domains at the top during frames and counted a domain's busy share as the sum of its CPUs: d1 then
+// never left 2803 MHz (99 % busy), so both are gone; a touch still holds the P domains at the top.
+// Throttle count: in a window where a domain's busiest CPU was at least half busy, its domain state (the frequency the hardware
+// runs, which also drops while the whole cluster idles) under 80 % of the vote counts as a throttled window, with the lowest seen.
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
@@ -33,6 +44,14 @@ char native_cpufreq_row[120];
 volatile uint32_t native_cpufreq_stage;
 // Mode 4, per domain over the last 10 s: level changes, mean MHz, mean busy % of the busiest CPU
 volatile uint32_t native_cpufreq_gov[9];
+// Mode 4: touch boosts started since boot
+volatile uint32_t native_cpufreq_boosts;
+// Mode 4: frame floors started, 16 ms windows spent in one
+volatile uint32_t native_cpufreq_frame[2];
+// Mode 4, per domain: busy windows (busiest CPU >= 50 %), throttled ones among them, lowest domain state (MHz) in a throttled one
+volatile uint32_t native_cpufreq_throttle[9];
+extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
+extern volatile uint32_t native_hid_input_events[8] __attribute__((weak_import));
 uint64_t sheng_cpu_idle_mach(int cpu);
 }
 
@@ -146,6 +165,7 @@ struct Levels {
 };
 Levels gLevels[3];
 uint32_t gFloorKHz;
+unsigned gBoostMs, gFrameMs, gFramePct;
 
 void buildLevels(unsigned d) {
     Levels &l = gLevels[d];
@@ -180,8 +200,14 @@ void setLevel(unsigned d, unsigned at) {
 void governorThread(void *, wait_result_t) {
     uint64_t lastIdle[kCpus] = {}, lastT = mach_absolute_time();
     for (unsigned c = 0; c < kCpus; ++c) lastIdle[c] = sheng_cpu_idle_mach((int)c);
-    unsigned cur[3] = {}, down[3] = {};
+    unsigned cur[3] = {}, down[3] = {}, quiet[3] = {};
     bool ready[3] = {};
+    uint64_t boostAbs = 0, boostEnd = 0;
+    nanoseconds_to_absolutetime((uint64_t)gBoostMs * 1000000, &boostAbs);
+    uint32_t touches = &native_hid_input_events ? native_hid_input_events[6] : 0;
+    uint64_t frameAbs = 0, frameEnd = 0;
+    nanoseconds_to_absolutetime((uint64_t)gFrameMs * 1000000, &frameAbs);
+    uint32_t submits = &native_adreno_method_stats ? native_adreno_method_stats[5][0] : 0, recent = 0;
     uint64_t winNs = 0, khzNs[3] = {}, busyNs[3] = {};
     uint32_t changes[3] = {};
     for (;;) {
@@ -189,6 +215,23 @@ void governorThread(void *, wait_result_t) {
         const uint64_t t = mach_absolute_time(), dt = t - lastT;
         lastT = t;
         if (!dt) continue;
+        if (boostAbs && &native_hid_input_events && native_hid_input_events[6] != touches) {
+            touches = native_hid_input_events[6];
+            if (t >= boostEnd) native_cpufreq_boosts = native_cpufreq_boosts + 1;
+            boostEnd = t + boostAbs;
+        }
+        if (frameAbs && &native_adreno_method_stats) {
+            const uint32_t now = native_adreno_method_stats[5][0];
+            recent = ((recent << 1) | (now != submits)) & 15;
+            submits = now;
+            if (__builtin_popcount(recent) >= 2) {
+                if (t >= frameEnd) native_cpufreq_frame[0] = native_cpufreq_frame[0] + 1;
+                frameEnd = t + frameAbs;
+            }
+        }
+        const bool framing = t < frameEnd;
+        if (framing) native_cpufreq_frame[1] = native_cpufreq_frame[1] + 1;
+        const bool boost = t < boostEnd;
         uint64_t busy[3] = {};   // per mille of the busiest CPU
         for (unsigned c = 0; c < kCpus; ++c) {
             const uint64_t idle = sheng_cpu_idle_mach((int)c), di = idle - lastIdle[c];
@@ -218,6 +261,23 @@ void governorThread(void *, wait_result_t) {
                 const uint64_t need = l.khz[cur[d]] * busy[d] * 125 / 100000;
                 want = 0;
                 while (want + 1 < l.count && l.khz[want] < need) ++want;
+            }
+            if (busy[d] >= 500 && cur[d] < l.count) {
+                const uint32_t stateKHz = (rd32(w.va, kRegDomainState) & 0xff) * kXoKHz;
+                volatile uint32_t *th = &native_cpufreq_throttle[d * 3];
+                th[0] = th[0] + 1;
+                if (stateKHz && stateKHz * 5 < l.khz[cur[d]] * 4) {
+                    th[1] = th[1] + 1;
+                    if (!th[2] || stateKHz / 1000 < th[2]) th[2] = stateKHz / 1000;
+                }
+            }
+            if (framing)
+                while (want + 1 < l.count && (uint64_t)l.khz[want] * 100 < (uint64_t)l.khz[l.count - 1] * gFramePct) ++want;
+            if (d > 0) {
+                quiet[d] = busy[d] < 100 ? quiet[d] + 1 : 0;
+                if (boost) want = l.count - 1;
+                else if (quiet[d] < 12)
+                    while (want + 1 < l.count && l.khz[want] * 2 < l.khz[l.count - 1]) ++want;
             }
             if (want > cur[d]) {
                 cur[d] = want; down[d] = 0; setLevel(d, want); ++changes[d];
@@ -258,10 +318,16 @@ extern "C" void sheng_cpufreq_poll(void) {
 }
 
 extern "C" void sheng_cpufreq_probe(void) {
-    unsigned mode = 0, capMHz = 0, minMHz = 0;
+    unsigned mode = 0, capMHz = 0, minMHz = 0, boostMs = 1000, frameMs = 300, framePct = 60;
     PE_parse_boot_argn("sheng-cpufreq", &mode, sizeof(mode));
     PE_parse_boot_argn("sheng-cpufreq-cap", &capMHz, sizeof(capMHz));
     PE_parse_boot_argn("sheng-cpufreq-min", &minMHz, sizeof(minMHz));
+    PE_parse_boot_argn("sheng-cpufreq-boost-ms", &boostMs, sizeof(boostMs));
+    PE_parse_boot_argn("sheng-cpufreq-frame-ms", &frameMs, sizeof(frameMs));
+    gBoostMs = boostMs;
+    PE_parse_boot_argn("sheng-cpufreq-frame-pct", &framePct, sizeof(framePct));
+    gFrameMs = frameMs;
+    gFramePct = framePct > 100 ? 100 : framePct;
     gFloorKHz = minMHz * 1000;
     if (!mode || gLock) return;
     gLock = IOLockAlloc();
