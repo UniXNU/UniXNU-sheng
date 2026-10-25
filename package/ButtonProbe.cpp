@@ -194,6 +194,17 @@ extern "C" void native_buttons_set_sink(void (*sink)(void *, uint32_t), void *co
     __atomic_store_n(&gSink, sink, __ATOMIC_RELEASE);
 }
 
+// A synthetic press for unattended tests: the mask (report 2 bits) is held for `ms` milliseconds, then released. Returns false without a sink.
+extern "C" bool sheng_buttons_press(uint32_t mask, uint32_t ms) {
+    void (*sink)(void *, uint32_t) = __atomic_load_n(&gSink, __ATOMIC_ACQUIRE);
+    if (!sink) return false;
+    sink(gSinkContext, mask);
+    IOSleep(ms);
+    sink(gSinkContext, 0);
+    native_buttons_stats[2] = native_buttons_stats[2] + 2;
+    return true;
+}
+
 extern "C" void sheng_buttons_probe(void) {
     unsigned enabled = 0;
     if (!PE_parse_boot_argn("sheng-buttons", &enabled, sizeof enabled) || enabled != 1 || native_buttons_stats[0]) return;
