@@ -109,7 +109,7 @@ paths = ["package/*Display*", "package/*Framebuffer*", "package/*Backlight*", "p
 inputs = ["UEFI GOP framebuffer, stride, pixel format, splash reservation and board panel/backlight controls."]
 configuration = ["Select GopFramebuffer; CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y; artwork-display-gamut = sRGB.", "sheng-vsync=120 requests board display timing."]
 procedure = ["Verify GOP address, dimensions, stride and pixel layout before enabling presentation.", "Build the late display archive with the selected OS ABI records, then check display publication and frame presentation."]
-findings = ["The display source and ABI binding are selected independently from the physical panel configuration.", "The board configuration declares sRGB for the current 8-bit framebuffer path.", "scripts/build-gop-legacy-display.py also builds the board driver objects in the display archive, including the ADSP, IPC router, FAT reader and battery manager."]
+findings = ["The display source and ABI binding are selected independently from the physical panel configuration.", "The board configuration declares sRGB for the current 8-bit framebuffer path.", "scripts/build-gop-legacy-display.py also builds the board driver objects in the display archive, including the ADSP, IPC router, FAT reader and battery manager.", "The GENI I2C core also moves 1 to 8 byte writes and 1 to 4 byte reads (the audio amplifiers use 32-bit registers); the backlight keeps its 8-bit transfers."]
 completion = ["A known frame appears with correct geometry and colors, then userland presentation and backlight controls work."]
 limits = ["The late display builder needs qualified prelink candidates and ABI records. A timing request requires a measured presentation result."]
 next_action = ["Record frame timing, pixel format and presentation evidence for each image used to qualify display."]
@@ -145,7 +145,7 @@ paths = ["package/*Gpu*", "package/*Gmu*", "package/*Adreno*", "scripts/*adreno*
 inputs = ["A740 GPU/GMU registers, GPU SMMU streams 0/1 and GMU stream 5, signed ZAP firmware and board power votes.", "Turnip, metal2vulkan, AIR translation and the selected OS GPU/Metal ABI."]
 configuration = ["Select Adreno740, AdrenoMetal and AirNir; shared SM8550 operations arrive through component dependencies.", "Board scripts combine shared GMU code with package/ShengGmuVotes.c."]
 procedure = ["Qualify power, firmware, SMMU and GMU startup before command submission.", "Check memory mapping, command completion and a known rendered image before staging the Metal plugin."]
-findings = ["GPU generation and the frontend ABI define component scope. Firmware, votes and display integration remain board inputs.", "Shared platform code and board votes require separate include paths during archive assembly."]
+findings = ["GPU generation and the frontend ABI define component scope. Firmware, votes and display integration remain board inputs.", "Shared platform code and board votes require separate include paths during archive assembly.", "A frame is one submission of up to 128 IBs (24 at most observed). WPTR writes check the GMU AHB fence status; none were dropped. Jobs take about 5 ms against the client's 1 ms waits, so the stall handler's write-pointer and TLB recovery runs on ordinary jobs: mapping-time TLB invalidation did not change it."]
 completion = ["GPU submissions complete, mapping/fence handling is correct, a known image renders, and the selected Metal client presents it."]
 limits = ["A740 coverage depends on the selected firmware and OS ABI; board qualification requires its own memory and power evidence."]
 next_action = ["Record the exact firmware, compiler inputs, driver revision and rendered output for the next qualification."]
@@ -177,19 +177,33 @@ result = "Implementation and configuration described in this section"
 id = "audio"
 status = "implemented"
 components = []
-paths = ["package/*Adsp*", "package/*Audio*", "package/*Gpr*", "package/FatVolume*", "package/QcomGlink*", "package/QcomMdt*", "package/QcomQrtr*", "package/ShengQrtr*", "package/QcomSmem*", "package/QcomSmp2p*", "scripts/*adsp*", "scripts/*audio*", "scripts/*gpr*", "scripts/*modem-fw*", "scripts/*qrtr*"]
-inputs = ["ADSP firmware, SMEM, SMP2P, GLINK, GPR services, board codec and audio routing."]
-configuration = ["The board display archive includes ADSP and audio probe objects."]
-procedure = ["Check firmware loading and ADSP service readiness before configuring audio endpoints.", "Record route, format and playback/capture observations for each enabled endpoint."]
-findings = ["The ADSP image loads in place from the split adsp and adsp_dtb files in /image of the modem_a FAT volume (modem_b as fallback); sheng-adsp-fw=DIR reads adsp.mbn and adsp_dtb.mbn from DIR instead.", "The DSP reaches GLINK and opens the battery manager and IPCRTR channels. The IPC router answers the DSP's service locator requests.", "Firmware startup, service registration and audible playback require separate evidence.", "The GPR client and firmware loading helpers can be inspected independently from codec routing."]
+paths = ["package/*Adsp*", "package/*Audio*", "package/*Gpr*", "package/*Cs35l43*", "package/GeniI2c*", "package/FatVolume*", "package/QcomGlink*", "package/QcomMdt*", "package/QcomQrtr*", "package/ShengQrtr*", "package/QcomSmem*", "package/QcomSmp2p*", "package/tests/audioreach*", "package/tests/cs35l43*", "package/tests/geni_i2c*", "hal/**", "patches/xnu/zzyd-*", "scripts/*adsp*", "scripts/*audio*", "scripts/*gpr*", "scripts/*cs35l43*", "scripts/*geni*", "scripts/*modem-fw*", "scripts/*qrtr*"]
+inputs = ["ADSP firmware from modem_a, SMEM, SMP2P, GLINK, the GPR channel adsp_apps.", "Speakers: six CS35L43 amplifiers on QUP1 SE5 and QUP2 SE0 (I2C 0x40 to 0x42), shared reset gpio90, secondary MI2S (gpio121 to 124).", "Microphones: WCD938x codec on the TX SoundWire master (0x6d30000), reset gpio108, supply ldob15; TX and VA macros."]
+configuration = ["sheng-audio takes bits: 1 serves the audio service, 2 plays a 1.5 s test tone at boot, 4 starts the microphone path. sheng-adsp=2 is required.", "sheng-audio-pa moves the DSP period buffer (default 0xd0000000); sheng-audio-tone-ms and sheng-audio-atten set the tone.", "The payload addon carries hal/ShengAudio.driver under audio/; patches/xnu/zzyd-sheng-audio-addon-mount.patch mounts it over /System/Library/Audio/Plug-Ins/HAL. Its CDHash joins the owner trust cache."]
+procedure = ["Read the [audio], [amps], [audio-glink], [audio-buffer], [mic] and [mic regs] log lines with scripts/read-sheng-log.py.", "Run scripts/check-audioreach-host.py, scripts/check-cs35l43-host.py and scripts/check-geni-i2c-host.py after changing the codecs."]
+findings = ["The ADSP image loads in place from the split adsp and adsp_dtb files in /image of the modem_a FAT volume.", "The DSP offers 24 intents of 128 bytes on adsp_apps and grants a 4 KiB one on request; the GLINK remote intent table keeps it.", "The amplifiers play ASP RX1 directly (DSP bypassed, no amplifier firmware): top three slot 0, bottom three slot 1, gain 18 dB, 16-bit I2S at 48 kHz from the SoC as clock master.", "The DSP takes buffers as a 32-bit address with the stream index (0x1001 & 0xf) in the upper word. The period buffer is low DRAM outside the kernel's window, mapped write-combined; the audio streams stay in SMMU pass-through.", "Programming a translating SMMU context for the audio streams resets the board; the hypervisor keeps those context banks.", "PRM commands go from the PRM port (2) and use PRM clock ids: the TX core clock is 0x30c. The macro and digital codec votes make the LPASS registers accessible.", "The VA macro gates the TX SoundWire master's clock on SM8550; with its gate and the TX macro's on, the link comes up and the codec enumerates as device 1."]
 completion = ["Each declared route carries the selected audio format through playback or capture and handles start/stop correctly."]
-limits = ["Current source contains ADSP bring-up and audio framework probes. Endpoint playback qualification needs route-specific evidence."]
-next_action = ["Document the codec, clocks and endpoint routing before claiming playback completion."]
+limits = ["The audio server plug-in path (service, ring, union mount) is in place; iOS playback through it has no device result yet.", "The microphone path stops after codec enumeration: codec power-up, SoundWire data ports, the TX decimator and the codec DMA capture graph follow."]
+next_action = ["Bring up the codec TX path and the capture graph; then qualify iOS playback and capture through the plug-in."]
 
 [[area.evidence]]
 kind = "source"
 reference = "package/AudioProbe.cpp"
 result = "Implementation and configuration described in this section"
+
+[[area.evidence]]
+kind = "host"
+reference = "scripts/check-audioreach-host.py"
+command = "python3 scripts/check-audioreach-host.py; python3 scripts/check-cs35l43-host.py; python3 scripts/check-geni-i2c-host.py"
+revision = "a516f43fc1901e0a3a4fede4f4b61dae0abcfe4a"
+result = "PASS audioreach: 182 checks; PASS cs35l43: 225 checks; PASS GENI I2C: 2169 checks"
+
+[[area.evidence]]
+kind = "device"
+reference = "scripts/read-sheng-log.py"
+command = "fastboot boot boot.img (sheng-adsp=2 sheng-audio=6); python3 scripts/read-sheng-log.py --wait 240"
+revision = "a516f43fc1901e0a3a4fede4f4b61dae0abcfe4a"
+result = "Speaker test tone: DSP mapped the buffer, 155 periods sent and 151 returned, all six amplifiers PLL-locked with no error interrupts. TX SoundWire link up, WCD938x enumerated (manufacturer 0x0217, part 0x010d)."
 
 [[area]]
 id = "power"
@@ -199,7 +213,7 @@ paths = ["package/*Battery*", "package/*Battmgr*", "package/*Power*", "package/*
 inputs = ["Board PMGR integration, clocks/regulators and per-peripheral power requirements.", "ADSP battery manager: PMIC GLINK owner 32778 on PMIC_RTR_ADSP_APPS; board properties use opcode 0x50; fuel gauges 0x8a/0x8b and 0xa6/0xa7."]
 configuration = ["CONFIG_XNU_SHENG_PMGR=y; sheng-pmgr=2 selects the board integration.", "AppleKeyStoreState is selected with the OS event integration.", "sheng-adsp=2 sheng-battery=1 publish the battery as an IOPMPowerSource.", "sheng-usb-sdp-ma sets the input limit on a standard computer port (default 900; 0 keeps the firmware limit)."]
 procedure = ["Document each clock, regulator and firmware-owned state before enabling power transitions.", "Check battery units and update behavior separately from suspend/resume and peripheral power.", "Read the [battery], [battery-raw] and [charger] log lines with scripts/read-sheng-log.py."]
-findings = ["The ADSP firmware runs charging and PD/PPS negotiation without host requests.", "Battery properties after 11 are shifted by one: charge current 12, temperature 13, charge counter 15, cycles 16, design 17, full 18, time to full 20, time to empty 21.", "Charge is the sum of both fuel gauges' remaining over full capacity. Battery current is reported discharge-positive.", "USB property 6 reads SDP on every port. Property 7 carries the adapter type (6 PD, 8 PD PPS).", "A PPS adapter gets a 3 A input limit at about 8.7 V; the battery charges at the 2000 mA charge current with the charge pump off.", "Both cells and the PD adapter read unauthenticated.", "A Mac USB-C port negotiates PD 5 V with a 1.2 A input limit, below the load during boot.", "Power policy belongs to the board even when controller operations are shared."]
+findings = ["The ADSP firmware runs charging and PD/PPS negotiation without host requests.", "Battery properties after 11 are shifted by one: charge current 12, temperature 13, charge counter 15, cycles 16, design 17, full 18, time to full 20, time to empty 21.", "Charge is the sum of both fuel gauges' remaining over full capacity. Battery current is reported discharge-positive.", "USB property 6 reads SDP on every port. Property 7 carries the adapter type (6 PD, 8 PD PPS).", "A PPS adapter gets a 3 A input limit at about 8.7 V; the battery charges at the 2000 mA charge current with the charge pump off.", "Both cells and the PD adapter read unauthenticated.", "A Mac USB-C port negotiates PD 5 V with a 1.2 A input limit, below the load during boot.", "Power policy belongs to the board even when controller operations are shared.", "The GPU power probe hands the ring its register window without a GMU fence callback: only the GPU service checks fenced WPTR writes."]
 completion = ["Declared power controls and battery readings match observations; each claimed sleep/resume transition restores its dependent peripherals."]
 limits = ["Adapter details shown to iOS come from USB property 6, so every adapter reads as a computer port.", "Charge current stays at 2 A without fuel gauge and adapter authentication.", "A low-battery shutdown panics in vnode_rele_ext during unmount.", "Per-peripheral controls and battery publication have separate coverage from system suspend."]
 next_action = ["Take adapter details from property 7.", "Authenticate both fuel gauges, then qualify PPS charge pump charging; Xiaomi adapter authentication follows."]
@@ -231,7 +245,7 @@ paths = ["scripts/*payload*", "scripts/*image*", "scripts/*flash*", "patches/**"
 inputs = ["Prelinked kernel, hardware DTB, generated ADT, trust cache, Data seed, platform identity and firmware DTB."]
 configuration = ["Payload volume is 208 MiB. kernel.patch_series selects ARM64, SoC, OS and device series in order."]
 procedure = ["Build kernel and package, then payload with --unique-chip-id and the selected trust-cache/Data inputs.", "Run ./unixnu bootimg -D ../UniXNU-sheng --uefi ../uefi-sheng --dtb <firmware.dtb> and inspect the assembly report."]
-findings = ["The OS boot-progress integration follows the SoC hooks in patch order.", "The payload carries kernel.macho.adt; the boot image carries the firmware FDT. Keep the two inputs named explicitly."]
+findings = ["The OS boot-progress integration follows the SoC hooks in patch order.", "The payload carries kernel.macho.adt; the boot image carries the firmware FDT. Keep the two inputs named explicitly.", "The device patch series adds zzyd-sheng-audio-addon-mount.patch: the payload addon's audio directory is union-mounted over /System/Library/Audio/Plug-Ins/HAL (mount4 in the A log line)."]
 completion = ["Kernel and prelink succeed, payload contains all declared inputs, and the boot image matches the bootloader format and size limit."]
 limits = ["Image output depends on the selected ABI audits, firmware and volume policy inputs."]
 next_action = ["Attach artifact paths and exact source revisions to the next image build record."]
@@ -249,7 +263,7 @@ paths = ["scripts/check-*", "scripts/probe-*", "scripts/audit-*", "scripts/read-
 inputs = ["Serial or framebuffer diagnostics, panic region, boot checkpoints and a recovery path."]
 configuration = ["boot-progress=2 enables checkpoints; source and image revisions accompany every log."]
 procedure = ["Run the existing check for the changed area and keep its command, output and input revision.", "Record the last completed checkpoint and the first failing operation; link the captured output."]
-findings = ["A source implementation, a host check and a device observation establish different completion levels.", "Keep an unresolved cause explicit and record the next measurement that can distinguish it.", "The UFS log carries [adsp], [qrtr], [battery], [battery-raw] and [charger] lines for the DSP, the IPC router and the charger.", "Host checks for the ADSP path: check-adsp-host.py, check-modem-fw-host.py, check-qrtr-host.py and check-battery-host.py."]
+findings = ["A source implementation, a host check and a device observation establish different completion levels.", "Keep an unresolved cause explicit and record the next measurement that can distinguish it.", "The UFS log carries [adsp], [qrtr], [battery], [battery-raw] and [charger] lines for the DSP, the IPC router and the charger.", "Host checks for the ADSP path: check-adsp-host.py, check-modem-fw-host.py, check-qrtr-host.py and check-battery-host.py.", "The log carries [audio], [amps], [audio-glink], [audio-buffer], [mic] and [mic regs] for the audio path, and [gpu wptr] for fenced GPU write pointer writes."]
 completion = ["Each claimed milestone has a reproducible command, a matching source/image revision and an accessible result."]
 limits = ["Source references in this record describe implemented behavior. Host and device status require their respective evidence entries."]
 next_action = ["Add captured host or device evidence when repeating a checkpoint on a known image."]
