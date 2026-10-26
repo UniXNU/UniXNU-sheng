@@ -3,7 +3,7 @@ schema_version = 1
 [device]
 name = "sheng"
 soc = "SM8550"
-os_profile = "ipados-17.7.11-21H461"
+os_profile = "ipados-26.5.2-23F84"
 summary = "Xiaomi Pad 6S Pro 12.4 uses shared SM8550 support and board-owned storage, input, firmware and power integration. This record describes implementation coverage and the evidence required for each milestone."
 
 [[area]]
