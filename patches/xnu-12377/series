@@ -1,0 +1,4 @@
+# Board patch paths for xnu-12377, one per line in application order.
+zzye-sheng-cpu-idle.patch
+zzyf-sheng-amp.patch
+zzyd-sheng-audio-addon-mount.patch

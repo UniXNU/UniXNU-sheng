@@ -1,0 +1,25 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index b823dc0d..edf4b1d3 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8139,6 +8139,8 @@ volatile int native_gpu_addon2_stage = 0;
+ volatile int native_gpu_addon2_status = -1;
+ volatile int native_gpu_addon3_stage = 0;
+ volatile int native_gpu_addon3_status = -1;
++volatile int native_gpu_addon4_stage = 0;
++volatile int native_gpu_addon4_status = -1;
+ static void
+ native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const char *source, size_t source_size,
+     const char *point, size_t point_size, const char *visible, const char *own, volatile int *stage, volatile int *status)
+@@ -8594,6 +8596,11 @@ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+ 	    "7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca/assets/J120.HEIC",
+ 	    "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/7570.iPadOS_17_Flat-1024w-1366h@2x~ipad.wallpaper/"
+ 	    "7570.iPadOS_17_Flat_Background-1024w-1366h@2x~ipad.ca/J120.png", &native_gpu_addon3_stage, &native_gpu_addon3_status);
++	/* The board's audio server plug-in next to the system's (the audio server loads every driver bundle in this directory). */
++	static const char audio_source[] = "/private/var/ngpu/audio", audio_point[] = "/System/Library/Audio/Plug-Ins/HAL";
++	native_gpu_addon_mount(p, scratch, 0xa00, audio_source, sizeof(audio_source), audio_point, sizeof(audio_point),
++	    "/System/Library/Audio/Plug-Ins/HAL/BuiltinAudioPlugin.driver", "/System/Library/Audio/Plug-Ins/HAL/ShengAudio.driver/Info.plist",
++	    &native_gpu_addon4_stage, &native_gpu_addon4_status);
+ 	native_cryptex_os_view(p, scratch);
+ 	native_gestalt_cache_drop(p, scratch);
+ 	native_ls_store_drop(p, scratch);

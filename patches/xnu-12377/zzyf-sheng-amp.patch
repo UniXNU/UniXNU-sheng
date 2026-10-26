@@ -1,0 +1,104 @@
+diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
+index 768efa7f..b27d2913 100644
+--- a/osfmk/kern/sched_clutch.c
++++ b/osfmk/kern/sched_clutch.c
+@@ -1379,6 +1379,39 @@ sched_clutch_bucket_init(
+ 	queue_init(&clutch_bucket->scb_thread_timeshare_queue);
+ }
+ 
++#if CONFIG_SCHED_EDGE
++/*
++ * sheng: no performance controller recommends clusters here, so a thread group starts with its fixed priority
++ * to default buckets on the first P cluster and its utility and background buckets on the boot cluster.
++ */
++static pset_id_t
++sched_edge_default_preferred_pset(sched_bucket_t bucket)
++{
++	if (bucket >= TH_BUCKET_SHARE_UT) {
++		return sched_boot_pset->pset_id;
++	}
++	/* The first pset of a cluster takes the cluster ID. */
++	const ml_topology_info_t *topology = ml_get_topology_info();
++	for (unsigned int i = 0; i < topology->num_clusters; i++) {
++		if (topology->clusters[i].cluster_type == CLUSTER_TYPE_P) {
++			return (pset_id_t)topology->clusters[i].cluster_id;
++		}
++	}
++	return sched_boot_pset->pset_id;
++}
++
++/*
++ * sheng: fixed priority, UI and user-initiated threads that prefer the P cluster neither migrate nor get stolen to the E cluster.
++ * The A510 cores run at a fraction of the P cores' speed and no performance controller raises their clock for a frame, so
++ * such a thread waits for (or preempts lower work on) a P core instead.
++ */
++static bool
++sched_edge_ui_bucket_stays_on_p(pset_type_t from, pset_type_t to, sched_bucket_t bucket)
++{
++	return from == PSET_AMP_P && to == PSET_AMP_E && bucket < TH_BUCKET_SHARE_DF;
++}
++#endif /* CONFIG_SCHED_EDGE */
++
+ /*
+  * sched_clutch_bucket_group_init()
+  *
+@@ -1401,7 +1434,11 @@ sched_clutch_bucket_group_init(
+ 
+ 	os_atomic_store(&clutch_bucket_group->scbg_timeshare_tick, 0, relaxed);
+ 	os_atomic_store(&clutch_bucket_group->scbg_pri_shift, INT8_MAX, relaxed);
++#if CONFIG_SCHED_EDGE
++	os_atomic_store(&clutch_bucket_group->scbg_preferred_pset, sched_edge_default_preferred_pset(bucket), relaxed);
++#else /* CONFIG_SCHED_EDGE */
+ 	os_atomic_store(&clutch_bucket_group->scbg_preferred_pset, sched_boot_pset->pset_id, relaxed);
++#endif /* CONFIG_SCHED_EDGE */
+ 	/*
+ 	 * All thread groups should be initialized to be interactive; this allows the newly launched
+ 	 * thread groups to fairly compete with already running thread groups.
+@@ -1473,7 +1510,12 @@ sched_clutch_destroy(
+ static pset_id_t
+ sched_edge_clutch_bucket_group_preferred_pset(sched_clutch_bucket_group_t clutch_bucket_group)
+ {
+-	return os_atomic_load(&clutch_bucket_group->scbg_preferred_pset, relaxed);
++	pset_id_t pset_id = os_atomic_load(&clutch_bucket_group->scbg_preferred_pset, relaxed);
++	/* sheng: the P pset exists only once its first core registers; until then threads run on the boot pset */
++	if (os_atomic_load(&pset_array[pset_id], acquire) == PROCESSOR_SET_NULL) {
++		return sched_boot_pset->pset_id;
++	}
++	return pset_id;
+ }
+ 
+ static pset_id_t
+@@ -6359,8 +6401,8 @@ sched_edge_cpu_init_completed(void)
+ 	edge_config_defaults[PSET_AMP_E][PSET_AMP_E] = free_spill;
+ 	/* P -> E */
+ 	edge_config_defaults[PSET_AMP_P][PSET_AMP_E] = weighted_spill;
+-	/* E -> P */
+-	edge_config_defaults[PSET_AMP_E][PSET_AMP_P] = no_spill;
++	/* E -> P; sheng: an idle P core may steal E work, as no controller moves thread groups */
++	edge_config_defaults[PSET_AMP_E][PSET_AMP_P] = (sched_clutch_edge){.sce_migration_weight = 0, .sce_migration_allowed = 0, .sce_steal_allowed = 1};
+ #if HAS_MCORE
+ 	/* M -> M */
+ 	edge_config_defaults[PSET_AMP_M][PSET_AMP_M] = free_spill;
+@@ -6444,6 +6486,9 @@ sched_edge_cpu_init_completed(void)
+ 				 * values when deciding to enforce performance islands for certain buckets.
+ 				 */
+ #endif /* CONFIG_SCHED_PERF_ISLANDS */
++				if (sched_edge_ui_bucket_stays_on_p(src_pset->pset_type, dst_pset->pset_type, bucket)) {
++					edge_config = no_spill;
++				}
+ 				sched_edge_config_set(src_pset_id, dst_pset_id, bucket, edge_config);
+ 				if (edge_config.sce_migration_allowed) {
+ 					src_pset->max_parallel_cores[bucket] += dst_pset->cpu_set_count;
+diff --git a/pexpert/pexpert/arm64/BCM2837.h b/pexpert/pexpert/arm64/BCM2837.h
+index 5a5574ea..b12c67b4 100644
+--- a/pexpert/pexpert/arm64/BCM2837.h
++++ b/pexpert/pexpert/arm64/BCM2837.h
+@@ -17,6 +17,8 @@
+ #define __ARM_COHERENT_CACHE__    1
+ #define __ARM_DEBUG__             7
+ #define __ARM64_PMAP_SUBPAGE_L1__ 1
++/* sheng: the ADT marks A510 cores as an E cluster and the rest as a P cluster, scheduled by Edge. */
++#define __ARM_AMP__               1
+ 
+ /* Native ARMv8.1+ targets select PAN explicitly; the original A53 target has none. */
+ #if defined(XNU_NATIVE_PAN) && XNU_NATIVE_PAN
