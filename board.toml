@@ -6,7 +6,7 @@
 "description" = "Xiaomi Pad 6S Pro"
 "kit" = "sheng"
 "soc_source" = "sm8550"
-"os_profile" = "ipados-17.7.11-21H461"
+"os_profile" = "ipados-26.5.2-23F84"
 
 
 ["userdata"]
@@ -17,32 +17,10 @@
 
 
 ["kernel"]
-"defconfig" = "sheng_defconfig"
-"archives" = [
-  "build-corecrypto-14.py",
-  "build-corecrypto-14.py --namespace",
-  "component:ArmDTPlatform",
-  "component:ArmCpu",
-  "component:SoftwareAES",
-  "build-software-aes-bindings.py",
-  "component:ShengUfs",
-  "component:VirtioMmioBlock",
-  "component:RamBlock",
-  "build-virtio-mmio-bindings.py --component RamBlock --directory build/ram-block",
-  "build-virtio-mmio-bindings.py --component VirtioMmioBlock",
-  "build-mockfs-fixture.py",
-  "build-sheng-platform-power.py",
-  "build-boot-progress.py",
-  "build-libpthread-kernel.py",
-  "component:Adreno740",
-  "build-adreno740-kits.py",
-  "build-adreno740-accelerator.py",
-  "component:ShengHidInput",
-  "component:AppleKeyStoreState",
-  "build-gop-legacy-display.py",
-]
-"config_fragments" = ["arch:configs/common.config", "soc:configs/sm8550.config", "os:configs/ipados.config"]
-"patch_series" = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu/series"]
+"defconfig" = "sheng_ipados26_defconfig"
+"archives" = []
+"config_fragments" = ["arch:configs/common.config", "os:configs/ipados.config"]
+"patch_series" = ["arch:patches/xnu/series", "os:patches/xnu/series"]
 
 
 ["firmware"]
@@ -100,7 +78,7 @@
 
 
 ["components"]
-"include" = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "ShengUfs", "VirtioMmioBlock", "RamBlock", "Adreno740", "AdrenoMetal", "GopFramebuffer", "ShengHidInput", "ShengNovatekTouch", "QcomGeniSpi", "AppleKeyStoreState", "XnuPrelink", "DarwinBoot", "VerifiedRoot", "ShengPreflight", "AirNir", "Ath12kWifi"]
+"include" = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot", "ShengPreflight"]
 
 
 ["adt"]
