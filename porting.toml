@@ -307,12 +307,12 @@ status = "planned"
 components = []
 paths = ["configs/*ipados26*", "patches/xnu-12377/**"]
 inputs = ["iPadOS 26.5.2 build 23F84 IPSW for iPad17,1 to iPad17,4; target identity iPad17,3 J820AP.", "Public XNU source xnu-12377.121.6; arm64e profile requirements in https://unixnu.com/porting/arm64e."]
-configuration = ["Target OS profile ipados-26.5.2-23F84 with [os] arch = \"arm64e\". board.os_profile stays ipados-17.7.11-21H461 until the arm64e kernel links."]
+configuration = ["board.os_profile = ipados-26.5.2-23F84 with [os] arch = \"arm64e\"; kernel defconfig sheng_ipados26_defconfig with CONFIG_XNU_BUILD_ARCHIVES=n.", "The arm64e build uses the BCM2837 machine config restored for xnu-12377, the non-SPTM pmap and no Apple CPU counters."]
 procedure = ["Check FEAT_PAuth, EL1 key register writes and PAC instruction behavior on all eight CPUs.", "Build the arm64e kernel from xnu-12377.121.6 with the ported 4 KiB patches, then prelink the 23F84 kexts.", "Follow the bring-up order: arm_init, bsd_init, root mount, launchd, SpringBoard."]
-findings = ["The 23F84 kernelcache is xnu-12377.122.8; xnu-12377.121.6 is the closest public source.", "SM8550 CPUs implement FEAT_PAuth; signatures are created on the device, so the PAC algorithm need not match Apple's.", "Public XNU programs PAC keys only for VMAPPLE through HVC; the arm64e profile provides native key programming.", "The 23F84 dyld cache is arm64e and contains SME code; SM8550 has no SME."]
+findings = ["The 23F84 kernelcache is xnu-12377.122.8; xnu-12377.121.6 is the closest public source.", "SM8550 CPUs implement FEAT_PAuth; signatures are created on the device, so the PAC algorithm need not match Apple's.", "Public XNU programs PAC keys only for VMAPPLE through HVC; the arm64e profile provides native key programming.", "The 23F84 dyld cache is arm64e and contains SME code; SM8550 has no SME.", "The arm64e xnu-12377.121.6 kernel compiles and links as MH_EXECUTE with chained fixups.", "The 23F84 kernelcache is an MH_FILESET with stripped symbol tables; kext code branches directly into the kernel, so the prelink step for iPadOS 17 does not apply."]
 completion = ["The arm64e kernel reaches launchd on sheng from the 23F84 root volume, then SpringBoard."]
-limits = ["Facts: only the boot core has a recorded PAC check; the other seven cores are unmeasured.", "Guess: the SME functions are selected at run time from hw.optional and commpage features; this is unconfirmed."]
-next_action = ["Read ID_AA64ISAR1_EL1 and ID_AA64ISAR2_EL1 on all eight CPUs and run a PACIA and AUTIA round trip on each."]
+limits = ["Facts: only the boot core has a recorded PAC check; the other seven cores are unmeasured.", "Facts: no fileset prelink output exists yet, so the kernel has not booted.", "Guess: the SME functions are selected at run time from hw.optional and commpage features; this is unconfirmed."]
+next_action = ["Produce a fileset kernel collection from the native kernel and the selected 23F84 kexts.", "Read ID_AA64ISAR1_EL1 and ID_AA64ISAR2_EL1 on all eight CPUs and run a PACIA and AUTIA round trip on each."]
 
 [[area.evidence]]
 kind = "host"
@@ -327,3 +327,17 @@ reference = "https://updates.cdn-apple.com/2026SpringFCS/fullrestores/140-25976/
 command = "ipsw extract --dyld -a arm64e <ipsw>; scan 4-byte aligned words for SMSTART SM (0xd503437f) and SMSTART ZA (0xd503457f)"
 revision = "759eb61b6b8d475de5b3d1b39e1de1f5294e8d9a"
 result = "dyld cache iOS 26.5, 4261 images, 83 subcaches; 1208 SMSTART SM and 1287 SMSTART ZA in 11 subcaches. Sampled functions with names include _sme_sgemm, _sme_strsm and *_SME2."
+
+[[area.evidence]]
+kind = "host"
+reference = "configs/sheng_ipados26_defconfig"
+command = "./unixnu defconfig sheng_ipados26_defconfig -D ../UniXNU-sheng; ./unixnu kernel -D ../UniXNU-sheng"
+revision = "4ed86f68213ed7dc83726987c2d3a78b7c16114a"
+result = "27 patches on xnu-12377.121.6; mach.development.bcm2837 links, 19789128 bytes, arm64e MH_EXECUTE with LC_DYLD_CHAINED_FIXUPS (pointer format 7). The prelink step stops: the input is MH_FILESET."
+
+[[area.evidence]]
+kind = "host"
+reference = "https://updates.cdn-apple.com/2026SpringFCS/fullrestores/140-25976/000BB0A6-045B-47FF-AE4E-D8BF722E24FD/iPad17,1,iPad17,2,iPad17,3,iPad17,4_26.5.2_23F84_Restore.ipsw"
+command = "parse LC_FILESET_ENTRY, LC_DYLD_CHAINED_FIXUPS and kext __TEXT_EXEC branches of the decompressed kernelcache"
+revision = "4ed86f68213ed7dc83726987c2d3a78b7c16114a"
+result = "298 entries, base 0xfffffe0007004000, 585131 fixups in pointer format 8, 0 symbols in every entry. For the 31 prelink roots (30 with code, 7 kernel resources): 1864 kernel targets, 47807 pointer sites, 42027 branch sites."
