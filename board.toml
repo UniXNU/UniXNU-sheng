@@ -13,12 +13,11 @@
 "first_lba" = 3094592
 "last_lba" = 64007162
 "lba_bytes" = 4096
-"windows" = [{ "name" = "OS", "component" = "OS" }, { "name" = "SystemOS", "component" = "Cryptex1,SystemOS" }]
 
 
 ["kernel"]
 "defconfig" = "sheng_ipados26_defconfig"
-"archives" = []
+"archives" = ["build-corecrypto-14.py", "build-corecrypto-14.py --namespace", "component:ArmDTPlatform", "component:ArmCpu", "build-libpthread-kernel.py"]
 "config_fragments" = ["arch:configs/common.config", "os:configs/ipados.config"]
 "patch_series" = ["arch:patches/xnu/series", "os:patches/xnu/series"]
 
