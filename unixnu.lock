@@ -1,7 +1,7 @@
 # Resolved git sources, written by "unixnu fetch". Local sources are never recorded.
 
 [source."AvailabilityVersions"]
-commit = "933f9360f1b70dfbda5548386a3d65e0358b4f7d"
+commit = "149b1777f3e8c2133042d8e188f72e3adf6a7110"
 
 [source."IOStorageFamily"]
 commit = "e45fbe30a7879e0b16e26dddb78538f1b00e0bff"
@@ -13,16 +13,16 @@ commit = "11fba65b12d8830630e248dfa8344caf8b065f26"
 commit = "cfb93724a06ff86ff5ba971413368a7809ee42a5"
 
 [source."libdispatch"]
-commit = "30fe6a7d945340ce69cef121132f049e810089a5"
+commit = "701f4d1a24ae9c6863901bbbb22624b7d1b87321"
 
 [source."libplatform"]
-commit = "a00a4cc36da2110578bcf3b8eeeeb93dcc7f4e11"
+commit = "b7ed7cf5cf7dd12b98672435db2225a860f199d8"
 
 [source."libpthread"]
-commit = "c0e60fb5ecfc54cf379c261d3f9572cc22ded891"
+commit = "1f4f5265b319111142f1bf3a27d4484ef5a98314"
 
 [source."sm8550"]
 commit = "23b2049fcd9e30356161def84231334fb55ecca9"
 
 [source."xnu"]
-commit = "d8b80295118ef25ac3a784134bcf95cd8e88109f"
+commit = "ac9718fb1af618d5ce8678d0dc6e8a58f252216f"
