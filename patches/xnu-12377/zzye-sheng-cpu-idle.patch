@@ -1,0 +1,26 @@
+diff --git a/osfmk/kern/processor.c b/osfmk/kern/processor.c
+index 3e35085f..30cf9666 100644
+--- a/osfmk/kern/processor.c
++++ b/osfmk/kern/processor.c
+@@ -2032,3 +2032,21 @@ sched_perfcontrol_inherit_recommendation_from_tg(__unused perfcontrol_class_t pe
+ }
+ 
+ #endif /* defined(__arm64__) */
++
++/*
++ * Board CPU governor helper: a CPU's idle time so far in mach absolute time units (recount brings it up to now
++ * while the CPU idles), for board code that cannot see struct processor. 0 for a CPU number without a processor.
++ */
++uint64_t sheng_cpu_idle_mach(int cpu);
++uint64_t
++sheng_cpu_idle_mach(int cpu)
++{
++	processor_t p = cpu_to_processor(cpu);
++	if (p == PROCESSOR_NULL) {
++		return 0;
++	}
++	struct recount_usage usage = {};
++	uint64_t idle = 0;
++	recount_processor_usage(&p->pr_recount, &usage, &idle);
++	return idle;
++}

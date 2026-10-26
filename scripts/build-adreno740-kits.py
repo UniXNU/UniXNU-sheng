@@ -2,6 +2,7 @@
 """Add the GMU kit and firmware planner objects to the NativeAdreno archive."""
 import json, subprocess, sys
 from pathlib import Path
+from kernel_target import TRIPLE
 ROOT = Path(__file__).resolve().parents[1]
 c_recipe = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/bsd/DEVELOPMENT/bsd_init.o.json').read_text().strip().rstrip(','))
 cxx_recipe = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json').read_text().strip().rstrip(','))
@@ -64,7 +65,7 @@ for label, key in embedded:
     assembly += ['.p2align 12', '.globl ' + label, label + ':', '.incbin ' + json.dumps(str(path)), label + '_end:',
                  '.p2align 3', '.globl ' + label + '_size', label + '_size:', '.quad ' + label + '_end-' + label]
 (out / 'firmware.S').write_text('\n'.join(assembly) + '\n')
-subprocess.run(['xcrun', 'clang', '-target', 'arm64-apple-ios17.0', '-Wno-incompatible-sysroot', '-c', out / 'firmware.S',
+subprocess.run(['xcrun', 'clang', '-target', TRIPLE, '-Wno-incompatible-sysroot', '-c', out / 'firmware.S',
                 '-o', out / 'firmware.o'], check=True)
 objects.append(out / 'firmware.o')
 archive = out / 'libAdreno740.a'

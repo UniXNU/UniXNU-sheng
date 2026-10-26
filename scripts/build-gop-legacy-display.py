@@ -9,6 +9,8 @@ import sys
 ROOT=Path(__file__).resolve().parents[1];OUT=ROOT/'build/native-legacy-display';OUT.mkdir(parents=True,exist_ok=True)
 sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho,backed_offset,exports
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from kernel_target import TRIPLE
 def run(cmd,**kw):return subprocess.check_output([str(x) for x in cmd],timeout=90,**kw)
 def require(v,why):
     if not v:raise SystemExit(why)
@@ -182,7 +184,7 @@ require(read(0xfffffff005777e9c,16)==bytes.fromhex('080040f908e142f900013fd6c000
         'Original isMainDisplay dispatch uses only self and tests boolean bit zero')
 asm=OUT/'original-bindings.S';asm.write_text(''.join(f'.globl {name}\n.set {name}, {va:#x}\n' for name,va in sorted(bindings.items())))
 sdk=run(['xcrun','--sdk','iphoneos','--show-sdk-path'],text=True).strip()
-run(['xcrun','clang','-target','arm64-apple-ios17.0','-isysroot',sdk,'-c',asm,'-o',OUT/'original-bindings.o'])
+run(['xcrun','clang','-target',TRIPLE,'-isysroot',sdk,'-c',asm,'-o',OUT/'original-bindings.o'])
 llvm=Path(run(['brew','--prefix','llvm'],text=True).strip())/'bin';late=OUT/'NativeLegacyDisplay.late.o'
 run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-symbol=__GLOBAL__sub_I_NativeLegacyDisplay.cpp',obj,late])
 def code(data,info):
