@@ -1,0 +1,10 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -796,2 +796,6 @@
+ 	vfsinit();
++	/* Optional source storage runtime registers after the IOKit bootstrap. */
++	extern void native_source_storage_start(void) __attribute__((weak_import));
++	if (&native_source_storage_start)
++		native_source_storage_start();
+ #if DEVELOPMENT || DEBUG
