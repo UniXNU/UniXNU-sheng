@@ -34,8 +34,10 @@ static const char lite_jobs[]=
 // The board's always-on switches (pexpert/gen/bootargs.c reads them after the command line, which wins), so the boot loader's line,
 // at most 1000 bytes, carries only what changes between images: the staged system apps' view over /Applications (their icons), the
 // data-protection class kept on the unencrypted Data volume (PosterBoard's wallpaper store), and the camera daemon off (no camera:
-// it held a GPU client and wrote denied trace files every 5 s).
-char PE_builtin_boot_args[]="owner-staged-apps=1 owner-dataprotect=1 sheng-disable-jobs=com.apple.cameracaptured sched_preemption_disable_debug_mode=1";
+// it held a GPU client and wrote denied trace files every 5 s). The scheduler hygiene checks of a development kernel trace instead
+// of panicking, as a shipping (release) kernel has none: an interrupts-off window of 786 us in a work queue thread's priority change
+// panicked the board (untagged-203fd45bf).
+char PE_builtin_boot_args[]="owner-staged-apps=1 owner-dataprotect=1 sheng-disable-jobs=com.apple.cameracaptured sched_preemption_disable_debug_mode=1 interrupt-masked-debug-mode=1";
 static char policy[2048],jobs[200];
 volatile int sheng_watchdog_policy_status=-1;
 
