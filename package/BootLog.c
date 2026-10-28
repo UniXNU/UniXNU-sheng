@@ -183,7 +183,7 @@ extern volatile uint64_t native_adreno_cache_stats[5] __attribute__((weak_import
 struct native_adreno_client_record {char name[20]; uint32_t opens, refused, closes, slot, peak_mib, last_refusal;};
 extern struct native_adreno_client_record native_adreno_client_log[8] __attribute__((weak_import));
 struct native_adreno_client_text {char name[20]; char text[64];};
-extern struct native_adreno_client_text native_adreno_client_text[4] __attribute__((weak_import));
+extern struct native_adreno_client_text native_adreno_client_text[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_mount_fail[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_table_switches[8] __attribute__((weak_import));
 struct sheng_exc_record {char name[20]; uint32_t pid, type, esr, frames; uint64_t pc, lr, far, ret[12];};
@@ -812,7 +812,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_adreno_mount_fail[0], native_adreno_mount_fail[1], native_adreno_mount_fail[2], native_adreno_mount_fail[3]);
     at = put(out, at, cap, row, sizeof row);
     if (&native_adreno_client_text)
-      for (unsigned i = 0; i < 4 && native_adreno_client_text[i].name[0]; ++i) {
+      for (unsigned i = 0; i < 8 && native_adreno_client_text[i].name[0]; ++i) {
         snprintf(row, sizeof row, "[gpu client text] %.19s: %.63s", native_adreno_client_text[i].name, native_adreno_client_text[i].text);
         at = put(out, at, cap, row, sizeof row);
       }

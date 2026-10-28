@@ -31,6 +31,11 @@ static const char lite_jobs[]=
  // the icons missing (seen on hardware), so it stays enabled. coreduetd keeps one thread above 50 % of a core for the whole boot
  // (the kernel's "burning CPU" report in i480 to i556), holding a big core and the P domain at its top clock.
  "com.apple.fairplayd.A2,com.apple.passd,com.apple.mobile.obliteration,com.apple.coreduetd";
+// The board's always-on switches (pexpert/gen/bootargs.c reads them after the command line, which wins), so the boot loader's line,
+// at most 1000 bytes, carries only what changes between images: the staged system apps' view over /Applications (their icons), the
+// data-protection class kept on the unencrypted Data volume (PosterBoard's wallpaper store), and the camera daemon off (no camera:
+// it held a GPU client and wrote denied trace files every 5 s).
+char PE_builtin_boot_args[]="owner-staged-apps=1 owner-dataprotect=1 sheng-disable-jobs=com.apple.cameracaptured sched_preemption_disable_debug_mode=1";
 static char policy[2048],jobs[200];
 volatile int sheng_watchdog_policy_status=-1;
 
