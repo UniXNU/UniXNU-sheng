@@ -20,7 +20,7 @@ index 87ca424..2156540 100644
  	native_iogpu_load_probe();
  #if defined(XNU_ADRENO_FIRMWARE_PROBE) && XNU_ADRENO_FIRMWARE_PROBE
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index a4f494d..506e780 100644
+index a4f494d..bf0e12f 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
 @@ -4332,6 +4332,42 @@ spawn_posix_cred_adopt(proc_t p,
@@ -89,7 +89,158 @@ index a4f494d..506e780 100644
  static void
  native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const char *source, size_t source_size,
      const char *point, size_t point_size, const char *visible, const char *own, volatile int *stage, volatile int *status)
-@@ -8580,7 +8623,7 @@ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+@@ -8495,34 +8538,28 @@ native_gestalt_cache_drop(proc_t p, user_addr_t scratch)
+ }
+ /* LaunchServices' database of this Data store was built while /System/Cryptexes/OS led nowhere, so it never registered what lies behind
+  * it (WebKit's extensions among them) and lsd does not register system content again on a later boot of the same OS build. Its files
+- * are removed once, so lsd builds the database again with the path in place; the marker file keeps later boots from repeating it.
+- * Status for the boot log: files removed, or -2 done before, or -errno. */
++ * are removed once, so lsd builds the database again with the path in place; the marker file keeps later boots from repeating it. */
+ #include <sys/dirent.h>
+ volatile int native_ls_store_status = -1;
+-static void
+-native_ls_store_drop(proc_t p, user_addr_t scratch)
++static int
++native_ls_store_names(const char *path, const char *prefix, char (*names)[64], unsigned max, unsigned *found)
+ {
+-	static const char marker[] = "/private/var/ngpu/ls-store-rebuilt-1";
+-	static const char caches[] = "/private/var/mobile/Containers/Data/InternalDaemon/5C583048-0C53-456F-B110-BB12068B787F/Library/Caches";
+-	static const char prefix[] = "com.apple.LaunchServices-";
++	/* The entries of directory path whose names start with prefix ("" for all but . and ..), at most max of them. */
+ 	vfs_context_t ctx = vfs_context_current();
+ 	vnode_t vp = NULLVP;
+-	if (!vnode_lookup(marker, 0, &vp, ctx)) {
+-		vnode_put(vp);
+-		native_ls_store_status = -2;
+-		return;
+-	}
+-	int error = vnode_lookup(caches, 0, &vp, ctx);
++	*found = 0;
++	int error = vnode_lookup(path, 0, &vp, ctx);
+ 	if (error) {
+-		native_ls_store_status = -error;
+-		return;
++		return error;
+ 	}
+-	char names[8][64];
+-	unsigned found = 0;
+ 	char *buffer = kalloc_data(4096, Z_WAITOK);
+ 	uio_t uio = buffer ? uio_create(1, 0, UIO_SYSSPACE, UIO_READ) : NULL;
++	if (!uio) {
++		error = ENOMEM;
++	}
+ 	int eof = 0;
+-	while (uio && !eof && found < 8) {
++	const size_t prefix_length = strlen(prefix);
++	while (uio && !eof && *found < max) {
+ 		uio_reset(uio, uio_offset(uio), UIO_SYSSPACE, UIO_READ);
+ 		uio_addiov(uio, CAST_USER_ADDR_T(buffer), 4096);
+ 		int entries = 0;
+@@ -8533,14 +8570,15 @@ native_ls_store_drop(proc_t p, user_addr_t scratch)
+ 		if (!used) {
+ 			break;
+ 		}
+-		for (size_t at = 0; at + sizeof(struct dirent) - sizeof(((struct dirent *)0)->d_name) <= used && found < 8;) {
++		for (size_t at = 0; at + sizeof(struct dirent) - sizeof(((struct dirent *)0)->d_name) <= used && *found < max;) {
+ 			const struct dirent *entry = (const struct dirent *)(buffer + at);
+ 			if (!entry->d_reclen) {
+ 				break;
+ 			}
+-			if (entry->d_namlen < sizeof(names[0]) && !strncmp(entry->d_name, prefix, sizeof(prefix) - 1)) {
+-				memcpy(names[found], entry->d_name, entry->d_namlen);
+-				names[found++][entry->d_namlen] = 0;
++			const int dot = entry->d_name[0] == '.' && (entry->d_namlen == 1 || (entry->d_namlen == 2 && entry->d_name[1] == '.'));
++			if (!dot && entry->d_namlen < 64 && !strncmp(entry->d_name, prefix, prefix_length)) {
++				memcpy(names[*found], entry->d_name, entry->d_namlen);
++				names[(*found)++][entry->d_namlen] = 0;
+ 			}
+ 			at += entry->d_reclen;
+ 		}
+@@ -8552,22 +8590,71 @@ native_ls_store_drop(proc_t p, user_addr_t scratch)
+ 		kfree_data(buffer, 4096);
+ 	}
+ 	vnode_put(vp);
+-	if (error) {
+-		native_ls_store_status = -error;
++	return error;
++}
++static void
++native_ls_store_drop(proc_t p, user_addr_t scratch)
++{
++	/* LaunchServices keeps its database in the Library/Caches of lsd's data container, whose name is a UUID made when the Data store
++	 * was: it is searched for (the fixed UUID of one earlier store, 5C583048-..., did not exist in this one, so the database was never
++	 * dropped and the staged system apps of iPadOS 27 -- Safari, Photos, Camera, App Store and 49 more, shown in /Applications by
++	 * owner-staged-apps -- were never registered: the Home Screen showed Settings alone). The marker is written only once files went.
++	 * Status: removed * 1000 + data containers looked at; -2 done before. */
++	static const char marker[] = "/private/var/ngpu/ls-store-rebuilt-2";
++	static const char *const parents[] = {"/private/var/mobile/Containers/Data/InternalDaemon", "/private/var/containers/Data/InternalDaemon",
++		                              "/private/var/containers/Data/System"};
++	static const char prefix[] = "com.apple.LaunchServices-";
++	vfs_context_t ctx = vfs_context_current();
++	vnode_t vp = NULLVP;
++	if (!vnode_lookup(marker, 0, &vp, ctx)) {
++		vnode_put(vp);
++		native_ls_store_status = -2;
+ 		return;
+ 	}
+-	int removed = 0;
+-	char path[192];
+-	for (unsigned i = 0; i < found; ++i) {
+-		snprintf(path, sizeof(path), "%s/%s", caches, names[i]);
+-		struct unlink_args request = {.path = scratch + 0xc00};
+-		int32_t result = 0;
+-		if (!copyout(path, request.path, strlen(path) + 1) && !unlink(p, &request, &result)) {
+-			removed++;
++	char (*containers)[64] = kalloc_data(128 * 64, Z_WAITOK);
++	char (*files)[64] = kalloc_data(8 * 64, Z_WAITOK);
++	char *path = kalloc_data(256, Z_WAITOK);
++	int removed = 0, looked = 0;
++	if (!containers || !files || !path) {
++		native_ls_store_status = -ENOMEM;
++		goto done;
++	}
++	for (size_t k = 0; k < sizeof(parents) / sizeof(parents[0]); ++k) {
++		unsigned count = 0;
++		if (native_ls_store_names(parents[k], "", containers, 128, &count)) {
++			continue;
++		}
++		for (unsigned i = 0; i < count; ++i) {
++			snprintf(path, 256, "%s/%s/Library/Caches", parents[k], containers[i]);
++			unsigned n = 0;
++			if (native_ls_store_names(path, prefix, files, 8, &n)) {
++				continue;
++			}
++			looked++;
++			for (unsigned j = 0; j < n; ++j) {
++				snprintf(path, 256, "%s/%s/Library/Caches/%s", parents[k], containers[i], files[j]);
++				struct unlink_args request = {.path = scratch + 0xc00};
++				int32_t result = 0;
++				if (!copyout(path, request.path, strlen(path) + 1) && !unlink(p, &request, &result)) {
++					removed++;
++				}
++			}
+ 		}
+ 	}
+-	(void)native_gpu_addon_write(marker, (const uint8_t *)"1\n", 2, 0644, ctx);
+-	native_ls_store_status = removed;
++	if (removed) {
++		(void)native_gpu_addon_write(marker, (const uint8_t *)"1\n", 2, 0644, ctx);
++	}
++	native_ls_store_status = removed * 1000 + looked;
++done:
++	if (containers) {
++		kfree_data(containers, 128 * 64);
++	}
++	if (files) {
++		kfree_data(files, 8 * 64);
++	}
++	if (path) {
++		kfree_data(path, 256);
++	}
+ }
+ static void
+ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+@@ -8580,7 +8667,7 @@ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
  	static const char extensions_source[] = "/private/var/ngpu/addons", extensions_point[] = "/System/Library/Extensions";
  	static const char daemons_source[] = "/private/var/ngpu/daemons", daemons_point[] = "/System/Library/LaunchDaemons";
  	native_gpu_addon_mount(p, scratch, 0x400, extensions_source, sizeof(extensions_source), extensions_point,
@@ -98,7 +249,7 @@ index a4f494d..506e780 100644
  	    "/System/Library/Extensions/NativeAdrenoMetal.bundle/Info.plist", &native_gpu_addon_stage,
  	    &native_gpu_addon_status);
  	native_gpu_addon_mount(p, scratch, 0x600, daemons_source, sizeof(daemons_source), daemons_point, sizeof(daemons_point),
-@@ -8590,12 +8633,22 @@ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+@@ -8590,12 +8677,22 @@ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
  	 * The overlay carries the animation's documents and the PNG images; the sealed assets directory stays visible below it. */
  	static const char wallpaper_source[] = "/private/var/ngpu/wallpaper",
  	    wallpaper_point[] = "/Library/Wallpaper/Collections/iPadOS_17~ipad.wallpaperCollection/Wallpapers/"
@@ -126,7 +277,7 @@ index a4f494d..506e780 100644
  	/* The board's audio server plug-in next to the system's (the audio server loads every driver bundle in this directory). */
  	static const char audio_source[] = "/private/var/ngpu/audio", audio_point[] = "/System/Library/Audio/Plug-Ins/HAL";
  	native_gpu_addon_mount(p, scratch, 0xa00, audio_source, sizeof(audio_source), audio_point, sizeof(audio_point),
-@@ -8913,6 +8966,26 @@ native_staged_apps_prepare(proc_t p, user_addr_t scratch, mount_t data_mount)
+@@ -8913,6 +9010,26 @@ native_staged_apps_prepare(proc_t p, user_addr_t scratch, mount_t data_mount)
  	vnode_put(vp);
  }
  
@@ -153,7 +304,7 @@ index a4f494d..506e780 100644
  static int
  native_owner_data_prepare(proc_t p, user_addr_t scratch)
  {
-@@ -8956,6 +9029,8 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
+@@ -8956,6 +9073,8 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
  	    (error = copyout("/private/var", request.path, 13)) ||
  	    (error = copyout(device_path, spec, strlen(device_path) + 1)) ||
  	    (error = copyout(payload, request.data, sizeof(payload)))) goto done;
@@ -162,7 +313,7 @@ index a4f494d..506e780 100644
  	native_owner_data_stage = 2;
  	error = mount(p, &request, &result);
  	if (error) goto done;
-@@ -9140,6 +9215,13 @@ load_init_program(proc_t p)
+@@ -9140,6 +9259,14 @@ load_init_program(proc_t p)
  	int policy_error=sheng_boot_watchdog_policy(p, (uint64_t)scratch_addr);
  	if (policy_error) panic("sheng watchdog launch policy failed: %d", policy_error);
  	boot_progress_stage("temporary watchdog launch policy ready");
@@ -171,7 +322,8 @@ index a4f494d..506e780 100644
 +	extern int sheng_boot_watchdog_policy(void *, uint64_t) __attribute__((weak_import));
 +	if (sheng_boot_watchdog_policy) {
 +		int policy_error = sheng_boot_watchdog_policy(p, (uint64_t)scratch_addr);
-+		if (policy_error) panic("sheng watchdog launch policy failed: %d", policy_error);
++		/* A full or unwritable Data volume (ENOSPC) only loses the job policy: boot on instead of a panic. */
++		if (policy_error) printf("sheng watchdog launch policy failed: %d (continuing)\n", policy_error);
 +	}
  #endif
  #endif
@@ -475,10 +627,37 @@ index 930dac3..ab2489f 100644
  		goto done;
  	}
 diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
-index 0d9c70a..cd15545 100644
+index 0d9c70a..f256633 100644
 --- a/iokit/Kernel/IOUserClient.cpp
 +++ b/iokit/Kernel/IOUserClient.cpp
-@@ -6925,7 +6925,8 @@ native_mobile_graphics_client_probe(void)
+@@ -4391,6 +4391,10 @@ native_sandbox_grant(IOService * service)
+ 	if (!list) {
+ 		return false;
+ 	}
++	/* "*": every process that opens the service (the GPU: every Metal client runs the driver's plugin, no name list). */
++	if (list->isEqualTo("*")) {
++		return true;
++	}
+ 	proc_selfname(name, sizeof(name));
+ 	for (const char * at = list->getCStringNoCopy(); *at;) {
+ 		size_t length = 0;
+@@ -4407,6 +4411,15 @@ native_sandbox_grant(IOService * service)
+ 	return false;
+ }
+ 
++/* The kobject filter grant (osfmk/device/iokit_rpc.c native_kobj_map_grant): the native GPU driver's user client only. */
++extern "C" boolean_t native_adreno_connect_granted(io_object_t obj);
++extern "C" boolean_t
++native_adreno_connect_granted(io_object_t obj)
++{
++	IOUserClient * client = OSDynamicCast(IOUserClient, (OSObject *) obj);
++	return client && 0 == strcmp(client->getMetaClass()->getClassName(), "AGXDeviceUserClient");
++}
++
+ kern_return_t
+ is_io_service_open_extended(
+ 	io_object_t _service,
+@@ -6925,7 +6938,8 @@ native_mobile_graphics_client_probe(void)
  		native_mobile_graphics_client_meta = (uintptr_t)client->getMetaClass();
  		native_mobile_graphics_client_size = client->getMetaClass()->getClassSize();
  		native_mobile_graphics_client_init = client->init();
@@ -1069,7 +1248,7 @@ index 51fdc9d..8f83d0a 100644
  #else
  #define CACHE_ATTRINDX_RT CACHE_ATTRINDX_POSTED_COMBINED_REORDERED
 diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
-index d6fff49..4c6700f 100644
+index d6fff49..d8d69a3 100644
 --- a/osfmk/arm64/sleh.c
 +++ b/osfmk/arm64/sleh.c
 @@ -1663,7 +1663,7 @@ user_fault_matches_pac_error_code(vm_offset_t fault_addr, uint64_t pc, bool data
@@ -1097,18 +1276,11 @@ index d6fff49..4c6700f 100644
  void
  sleh_irq(arm_saved_state_t *state)
  {
-@@ -3013,6 +3022,14 @@ sleh_irq(arm_saved_state_t *state)
+@@ -3013,6 +3022,7 @@ sleh_irq(arm_saved_state_t *state)
  
  	sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_OTHER);
  	boot_progress_irq(get_saved_state_pc(state), get_saved_state_cpsr(state), get_saved_state_sp(state));
-+	{
-+		task_t task = current_task();
-+		const uint64_t pid = task ? (uint64_t)(uint32_t)task_pid(task) & 0xffff : 0;
-+		const uint64_t kernel = (get_saved_state_cpsr(state) & 0x1f) != 0;
-+		const uint32_t at = os_atomic_inc_orig(&sheng_prof_head, relaxed);
-+		sheng_prof_ring[at % SHENG_PROF_SAMPLES] = (pid << 48) | (kernel << 47) | (get_saved_state_pc(state) & ((1ull << 47) - 1));
-+		os_atomic_inc(&sheng_prof_cpu[cdp->cpu_number & 7], relaxed);
-+	}
++	/* per-interrupt sampling off: boots with it and the Edge matrix stalled after the data disk started (cause not isolated) */
  
  #if USE_APPLEARMSMP
  	PE_handle_ext_interrupt();
@@ -1132,6 +1304,36 @@ index ad43956..05d38d6 100644
  	mov		x19, lr
  	// Convert CPU data PA to VA and set as first argument
  	mov		x0, x21
+diff --git a/osfmk/device/iokit_rpc.c b/osfmk/device/iokit_rpc.c
+index fd3e49e..64bcd3f 100644
+--- a/osfmk/device/iokit_rpc.c
++++ b/osfmk/device/iokit_rpc.c
+@@ -125,6 +125,25 @@ iokit_lookup_connect_port(ipc_port_t port)
+ 	return iokit_lookup_io_object(port, IKOT_IOKIT_CONNECT);
+ }
+ 
++/* io_connect_map_memory_into_task (2863) and io_connect_unmap_memory_from_task (2864) on the native GPU driver's user client:
++ * allowed past the sandbox's kobject filter (ipc_kobject_server_internal). Any other routine or object: false. */
++extern boolean_t native_adreno_connect_granted(io_object_t obj);
++boolean_t native_kobj_map_grant(ipc_port_t port, mach_msg_id_t msgh_id);
++boolean_t
++native_kobj_map_grant(ipc_port_t port, mach_msg_id_t msgh_id)
++{
++	if ((msgh_id != 2863 && msgh_id != 2864) || !IP_VALID(port) || ip_type(port) != IKOT_IOKIT_CONNECT) {
++		return FALSE;
++	}
++	io_object_t obj = iokit_lookup_connect_port(port);
++	if (!obj) {
++		return FALSE;
++	}
++	boolean_t granted = native_adreno_connect_granted(obj);
++	iokit_remove_connect_reference(obj);
++	return granted;
++}
++
+ MIGEXTERN io_object_t
+ iokit_lookup_ident_port(ipc_port_t port)
+ {
 diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
 index 29d7dbe..af797d0 100644
 --- a/osfmk/kern/exception.c
@@ -1273,6 +1475,35 @@ index 29d7dbe..af797d0 100644
  kern_return_t
  bsd_exception(
  	exception_type_t        exception,
+diff --git a/osfmk/kern/ipc_kobject.c b/osfmk/kern/ipc_kobject.c
+index d4272a1..fb9b778 100644
+--- a/osfmk/kern/ipc_kobject.c
++++ b/osfmk/kern/ipc_kobject.c
+@@ -129,6 +129,8 @@
+ #include <ipc/ipc_kmsg.h>
+ #include <ipc/ipc_policy.h>
+ #include <ipc/ipc_port.h>
++
++extern boolean_t native_kobj_map_grant(ipc_port_t port, mach_msg_id_t msgh_id);
+ #include <ipc/ipc_voucher.h>
+ #include <kern/sync_sema.h>
+ #include <kern/work_interval.h>
+@@ -562,10 +564,13 @@ ipc_kobject_server_internal(
+ 	int idx = ptr->kobjidx;
+ 	uint8_t *filter_mask = task_get_mach_kobj_filter_mask(curtask);
+ 
+-	/* Check kobject mig filter mask, if exists. */
++	/* Check kobject mig filter mask, if exists. The native GPU driver's own user client is mapped and unmapped by its
++	 * sandboxed Metal clients (iconservicesagent, the poster extensions), which the original profiles never let reach
++	 * io_connect_map_memory_into_task: native_kobj_map_grant lets those two routines through for that client only. */
+ 	if (filter_mask != NULL &&
+ 	    (idx == KOBJ_IDX_NOT_SET || !bitstr_test(filter_mask, idx)) &&
+-	    mac_task_kobj_msg_evaluate != NULL) {
++	    mac_task_kobj_msg_evaluate != NULL &&
++	    !native_kobj_map_grant(port, request_msgh_id)) {
+ 		/* No index registered by Sandbox, or not in filter mask: evaluate policy. */
+ 		kern_return_t kr = mac_task_kobj_msg_evaluate(curproc,
+ 		    request_msgh_id, idx);
 diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
 index b27d291..01e48b2 100644
 --- a/osfmk/kern/sched_clutch.c
