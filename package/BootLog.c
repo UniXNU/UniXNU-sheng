@@ -179,6 +179,7 @@ extern volatile uint32_t native_adreno_pool_chunks[4] __attribute__((weak_import
 extern volatile uint32_t native_adreno_wc_audit[6] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_submit_ibs[4] __attribute__((weak_import));
 extern volatile uint32_t native_touch_edge_stats[4] __attribute__((weak_import));
+extern volatile uint32_t native_touch_edge_install[3] __attribute__((weak_import));
 extern volatile uint32_t native_touch_hid_multi[3] __attribute__((weak_import));
 extern volatile int32_t native_backlight_request[6] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_reassert_ticks __attribute__((weak_import));
@@ -865,9 +866,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // Edge contacts (drivers/ShengHidInput edge::): wrapper installed, contacts begun, of them from an edge, events skipped.
   if (&native_touch_edge_stats) {
-    char row[100];
-    snprintf(row, sizeof row, "[touch edge] installed=%u contacts=%u from_edge=%u skipped=%u", native_touch_edge_stats[0],
-             native_touch_edge_stats[1], native_touch_edge_stats[2], native_touch_edge_stats[3]);
+    char row[128];
+    // install: outcome (1 another class, 2 a slot did not check out, 3 installed), slots copied, first slot that did not check out.
+    snprintf(row, sizeof row, "[touch edge] installed=%u contacts=%u from_edge=%u skipped=%u install=%u/%u/%u", native_touch_edge_stats[0],
+             native_touch_edge_stats[1], native_touch_edge_stats[2], native_touch_edge_stats[3],
+             &native_touch_edge_install ? native_touch_edge_install[0] : 0, &native_touch_edge_install ? native_touch_edge_install[1] : 0,
+             &native_touch_edge_install ? native_touch_edge_install[2] : 0);
     at = put(out, at, cap, row, sizeof row);
   }
   // Multi-finger reports (drivers/ShengHidInput): reports with two or more fingers down, the most at once, lifts of vanished fingers.
