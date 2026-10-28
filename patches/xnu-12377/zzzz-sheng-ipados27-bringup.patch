@@ -921,20 +921,18 @@ index 01ab93b..f2e883b 100644
  	flush_mmu_tlb();
  	kva_active = TRUE;
 diff --git a/osfmk/arm64/cpu.c b/osfmk/arm64/cpu.c
-index 53f9ce5..7206078 100644
+index 53f9ce5..8312c43 100644
 --- a/osfmk/arm64/cpu.c
 +++ b/osfmk/arm64/cpu.c
-@@ -139,12 +139,19 @@ uint64_t expecting_ipi_wfe_timeout_mt = 0x0ULL; /* initialized to a non-zero val
+@@ -139,12 +139,17 @@ uint64_t expecting_ipi_wfe_timeout_mt = 0x0ULL; /* initialized to a non-zero val
   * loop. The default.
   */
  uint32_t idle_proximate_io_wfe_unmasked = 1;
 +/* sheng (UniXNU): off Apple silicon the cores belong to a hypervisor that traps WFI and blocks the vCPU but may run WFE in the guest,
 + * so a core awaiting a proximate timer in WFE keeps its physical core awake. Await it in WFI there. */
-+#if defined(APPLE_ARM64_ARCH_FAMILY)
++/* Measured on the board (2026-10-28): with WFI in the idle path every core went to sleep and nothing woke the system again (boot stalled
++ * 30 s after the data disk started), so the stock WFE polling stays. */
 +#define IDLE_PROXIMATE_TIMER_WFE 1
-+#else
-+#define IDLE_PROXIMATE_TIMER_WFE 0
-+#endif
  #if DEVELOPMENT || DEBUG
 -uint32_t idle_proximate_timer_wfe = 1;
 +uint32_t idle_proximate_timer_wfe = IDLE_PROXIMATE_TIMER_WFE;
@@ -946,18 +944,16 @@ index 53f9ce5..7206078 100644
  /* When recommended, issue WFE with [FI]IRQ masked in the idle loop.
   * Non-default, retained for experimentation.
   */
-@@ -379,8 +386,8 @@ cpu_proximate_timer(void)
+@@ -379,7 +384,7 @@ cpu_proximate_timer(void)
  	return !SetIdlePop();
  }
  
 -#ifdef ARM64_BOARD_CONFIG_T6000
--int wfe_allowed = 0;
-+#if defined(ARM64_BOARD_CONFIG_T6000) || !defined(APPLE_ARM64_ARCH_FAMILY)
-+int wfe_allowed = 0;    /* off Apple silicon: see IDLE_PROXIMATE_TIMER_WFE */
++#if defined(ARM64_BOARD_CONFIG_T6000)
+ int wfe_allowed = 0;
  #else
  int wfe_allowed = 1;
- #endif /* ARM64_BOARD_CONFIG_T6000 */
-@@ -477,6 +484,9 @@ wfe_to_deadline_or_interrupt(uint32_t cid, uint64_t wfe_deadline, cpu_data_t *cd
+@@ -477,6 +482,9 @@ wfe_to_deadline_or_interrupt(uint32_t cid, uint64_t wfe_deadline, cpu_data_t *cd
   *	Routine:	cpu_idle
   *	Function:
   */
@@ -967,7 +963,7 @@ index 53f9ce5..7206078 100644
  void __attribute__((noreturn))
  cpu_idle(void)
  {
-@@ -488,10 +498,20 @@ cpu_idle(void)
+@@ -488,10 +496,20 @@ cpu_idle(void)
  	if (__improbable((!idle_enable))) {
  		idle_disallowed = true;
  	} else if (__improbable(cpu_data_ptr->cpu_signal & SIGPdisabled)) {
@@ -989,7 +985,7 @@ index 53f9ce5..7206078 100644
  		Idle_load_context();
  	}
  
-@@ -843,8 +863,10 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
+@@ -843,8 +861,10 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
  	pmap_cpu_data_ptr->pv_free_spill_marker = NULL;
  #if !CONFIG_SPTM
  	pmap_cpu_data_ptr->cpu_nested_pmap = (struct pmap *) NULL;
@@ -1000,7 +996,7 @@ index 53f9ce5..7206078 100644
  #endif /* !XNU_MONITOR */
  	cpu_data_ptr->halt_status = CPU_NOT_HALTED;
  #if __ARM_KERNEL_PROTECT__
-@@ -934,6 +956,18 @@ cpu_start(int cpu)
+@@ -934,6 +954,18 @@ cpu_start(int cpu)
  
  		flush_dcache((vm_offset_t)&CpuDataEntries[cpu], sizeof(cpu_data_entry_t), FALSE);
  		flush_dcache((vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t), FALSE);
