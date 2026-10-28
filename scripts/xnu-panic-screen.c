@@ -38,6 +38,10 @@ struct ctx {
 #ifndef PANIC_TEXT
 #define PANIC_TEXT 0UL
 #endif
+/* The board log's panic writer (package/BootLog.c, boot_log_panic_flush): it puts PANIC_TEXT and the message buffer on the medium. */
+#ifndef PANIC_FLUSH
+#define PANIC_FLUSH 0UL
+#endif
 #define PANIC_TEXT_BYTES 2048   /* boot_progress_panic_text: a data abort's message with every register, then the frames */
 
 __attribute__((noreturn)) static void park (void)
@@ -232,8 +236,8 @@ __attribute__((noreturn, used, section(".text.b_main"))) void panic_screen_main 
 
   /* First panic wins: a marker in the last row's first two pixels means a panic already drew
    * the screen; a later panic (another thread or exception) must not overwrite it. */
-  volatile u32 *mark = (volatile u32 *)(g.base + (u64)(g.h - 1) * g.rb);
-  if (mark[0] == 0xC0FFEE11u && mark[1] == 0x5CEEDA7Au) {
+  volatile u64 *mark = (volatile u64 *)(g.base + (u64)(g.h - 1) * g.rb);   /* pixels 0xC0FFEE11, 0x5CEEDA7A */
+  if (*mark == 0x5CEEDA7AC0FFEE11ul) {
     park ();
   }
   g.x = 0;
@@ -276,9 +280,9 @@ __attribute__((noreturn, used, section(".text.b_main"))) void panic_screen_main 
   hex (&g, "\npages=", *(volatile const u32 *)PAGE_TOTAL);
   hex (&g, "\nfree=", *(volatile const u32 *)PAGE_FREE);
   /* The raw argument slots are not dumped: the formatted message above already carries them (room for the PANIC_TEXT copy). */
-  mark[0] = 0xC0FFEE11u;
-  mark[1] = 0x5CEEDA7Au;
+  *mark = 0x5CEEDA7AC0FFEE11ul;
   __asm__ volatile ("dsb sy");
+  if (PANIC_FLUSH) ((void (*)(void))PANIC_FLUSH) ();
   park ();
 }
 

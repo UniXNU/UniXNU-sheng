@@ -2,6 +2,7 @@
 """Build the opt-in board diagnostic against this source kernel's actual ABI."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -31,7 +32,7 @@ while i < len(args):
     i += 1
 command += ['-DXNU_BOOT_PROGRESS=1', '-mgeneral-regs-only', '-Wall', '-Wextra', '-Werror',
             '-I', str(ROOT / '.cache/xnu-work/osfmk'),
-            '-I', str(ROOT / 'uefi-sheng/Silicon/Silicium/SiliciumPkg/Library/FrameBufferSerialPortLib')]
+            '-I', str(Path(os.environ.get('UNIXNU_UEFI') or ROOT / 'uefi-sheng') / 'Silicon/Silicium/SiliciumPkg/Library/FrameBufferSerialPortLib')]
 subprocess.run(command, cwd=record['directory'], check=True, timeout=90)
 (OUT / 'compile-command.json').write_text(json.dumps(command,indent=2)+'\n')
 fault_source = ROOT / 'kits/sheng/BootFaultProbe.c'
