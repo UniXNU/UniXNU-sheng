@@ -126,7 +126,7 @@ extern "C" volatile uint32_t armcpu_gic_diag_stage __attribute__((weak));
 extern "C" void armcpu_sgi_selfprobe(uint64_t *out) __attribute__((weak));
 extern "C" volatile uint32_t armcpu_core_timer[8], armcpu_core_sgi[8], armcpu_gic_boot[8];
 extern "C" IOService *native_adreno_published_service() __attribute__((weak));
-extern "C" volatile uint32_t native_adreno_wc_enabled;
+extern "C" volatile uint32_t native_adreno_wc_enabled, native_adreno_owned_coherent;
 extern "C" volatile uint32_t native_adreno_pool_mib;
 extern "C" volatile uint64_t native_adreno_fence_phys;
 extern "C" const uint8_t native_adreno_sqe_firmware_image[] __attribute__((weak));
@@ -1507,6 +1507,8 @@ void gpuStart() {
     // with 1536 MiB no BO fell back to scattered pages (peak 782 MiB in use); with 384 MiB (int-160) 18 did, 81933 single-page spans
     // whose attribute XNU kept setting back (123847 pages write-combined again at submissions, 766 ms).
     {unsigned pool = 1536; PE_parse_boot_argn("sheng-gpu-pool", &pool, sizeof pool); native_adreno_pool_mib = pool;}
+    // Before the pool is reserved: owned BOs on the IO-coherent path are not write-combined (the mode applies once the coherence proof passes).
+    {unsigned owned = 0; PE_parse_boot_argn("sheng-gpu-owned-coherent", &owned, sizeof owned); native_adreno_owned_coherent = owned ? 1 : 0;}
     const IOReturn ctx = NativeAdrenoGpuContextBringup(reinterpret_cast<volatile uint8_t *>(gSmmuMap->getVirtualAddress()),
         kSmmuWindow, 0, 2, 0, 0, 1, 1, gpuCtxProgress, &q);
     // Q s<step> st<IOReturn> k<program>/<attach kit status> p<phase>e<enabled> r<route phase>v<verified> n<spans>
