@@ -3,7 +3,7 @@
 from pathlib import Path
 import json,hashlib,subprocess
 root=Path(__file__).resolve().parents[1];out=root/'build/cpu-desktop/ui-trace';out.mkdir(parents=True,exist_ok=True)
-s=(root/'kits/sheng/BootUiTraceProbe.c').read_text();body=s[s.index('static struct bt_entry samples'):]
+s=(root/'kits/sheng/BootUiTraceProbe.c').read_text();body=s[s.index('static struct bt_entry samples'):s.index('// One kernel thread found')]
 prefix=r'''
 #include <stdint.h>
 #include <stdio.h>
@@ -16,6 +16,8 @@ prefix=r'''
 #define KERN_SUCCESS 0
 struct saved {uint64_t pc,lr,fp;bool valid;};typedef struct saved arm_saved_state_t;
 struct thread {bool sched_lock;struct {struct saved *upcb;} machine;struct thread *next;uint64_t thread_id;uint32_t c_switch;uint64_t kernel_stack;uint64_t wait_event;int state;uint8_t block_hint;int16_t sched_pri;};typedef struct thread *thread_t;
+static uint64_t recount_thread_time_mach(struct thread *thread){(void)thread;return 0;}
+static void proc_name(int pid,char *name,int size){snprintf(name,(unsigned)size,"pid%d",pid);}
 struct kstate {struct {struct {uint64_t fp,lr,sp;} ss;} machine;};typedef struct kstate *thread_kernel_state_t;
 static struct kstate fake_kstate;static uint64_t kernel_stack_size=16384;static uint64_t fake_kstack[2048] __attribute__((aligned(16)));
 #define thread_get_kernel_state(t) (&fake_kstate)
