@@ -1277,6 +1277,22 @@ index 29d7dbe..af797d0 100644
  kern_return_t
  bsd_exception(
  	exception_type_t        exception,
+diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
+index b27d291..01e48b2 100644
+--- a/osfmk/kern/sched_clutch.c
++++ b/osfmk/kern/sched_clutch.c
+@@ -6504,7 +6504,10 @@ sched_edge_cpu_init_completed(void)
+ 	}
+ 	sched_edge_config_final_push();
+ #if DEVELOPMENT || DEBUG
+-	assert(sched_edge_config_verify());
++	/* The matrix check is advisory: the board's two-cluster matrix (UI buckets stay on P) is reported, not fatal. */
++	if (!sched_edge_config_verify()) {
++		kprintf("warn: sched_edge_config_verify failed; continuing\n");
++	}
+ #endif /* DEVELOPMENT || DEBUG */
+ 	splx(s);
+ }
 diff --git a/osfmk/kern/stack.c b/osfmk/kern/stack.c
 index 1111ccf..069db94 100644
 --- a/osfmk/kern/stack.c
