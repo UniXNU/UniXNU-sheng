@@ -168,7 +168,8 @@ extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_i
 extern volatile uint64_t native_adreno_vm_phase_us[2][8] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_vm_kind_us[5][3] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_maint_phase[8][2] __attribute__((weak_import));
-extern volatile uint32_t native_adreno_table_blocks[3] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_table_pages[4] __attribute__((weak_import));
+extern unsigned NativeAdrenoGpuContextInputBits(void) __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_stats_uncached[2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak_import));
@@ -778,16 +779,18 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // [gpu tables]: per-process GPU page tables: the switch mode (2 CP, 1 CPU), the SCM CP-aperture availability/result and the CP switch
   // check (IOReturn), then switches by the CP and by the CPU, address spaces made, freed, live and peak, the last
-  // failure (IOReturn; bit 31: a free) and the step a failed make stopped at.
+  // failure (IOReturn; bit 31: a free) and the step a failed make stopped at, then the table pages taken on demand (live, taken, freed,
+  // refused by the system) and the GPU address size (ias).
   if (&native_adreno_table_switches) {
     char row[200];
-    snprintf(row, sizeof row, "[gpu tables] mode %u aperture %x/%x check %x | cp %u cpu %u made %u freed %u live %u peak %u fail %x step %u | blocks %u took %u pool %u",
+    snprintf(row, sizeof row, "[gpu tables] mode %u aperture %x/%x check %x | cp %u cpu %u made %u freed %u live %u peak %u fail %x step %u | pages %u taken %u freed %u refused %u ias %u",
              &native_adreno_cp_aperture ? native_adreno_cp_aperture[3] : 0, &native_adreno_cp_aperture ? native_adreno_cp_aperture[0] : 0,
              &native_adreno_cp_aperture ? native_adreno_cp_aperture[1] : 0, &native_adreno_cp_aperture ? native_adreno_cp_aperture[2] : 0,
              native_adreno_table_switches[0], native_adreno_table_switches[1], native_adreno_table_switches[2],
              native_adreno_table_switches[3], native_adreno_table_switches[4], native_adreno_table_switches[5],
-             native_adreno_table_switches[6], native_adreno_table_switches[7], &native_adreno_table_blocks ? native_adreno_table_blocks[0] : 0,
-             &native_adreno_table_blocks ? native_adreno_table_blocks[1] : 0, &native_adreno_table_blocks ? native_adreno_table_blocks[2] : 0);
+             native_adreno_table_switches[6], native_adreno_table_switches[7], &native_adreno_table_pages ? native_adreno_table_pages[0] : 0,
+             &native_adreno_table_pages ? native_adreno_table_pages[1] : 0, &native_adreno_table_pages ? native_adreno_table_pages[2] : 0,
+             &native_adreno_table_pages ? native_adreno_table_pages[3] : 0, NativeAdrenoGpuContextInputBits ? NativeAdrenoGpuContextInputBits() : 0);
     at = put(out, at, cap, row, sizeof row);
   }
   // [gpu cp image]: the GPU bank's registers before / after the CP switch check (SCTLR TCR TCR2 MAIR0 TTBR1 lo/hi CBAR FSR, then the kit
