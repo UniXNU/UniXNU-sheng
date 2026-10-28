@@ -557,9 +557,11 @@ bool start() {
     }
     stage(StLoadState);
 
-    static uint8_t db[kCmdDbSize];
+    // A copy of the command database, held only while the levels are looked up (a static copy would sit in the kernel's __DATA).
+    struct CmdDbCopy {uint8_t *bytes = static_cast<uint8_t *>(IOMallocData(kCmdDbSize)); ~CmdDbCopy() {if (bytes) IOFreeData(bytes, kCmdDbSize);}} copy;
+    uint8_t *const db = copy.bytes;
     uint32_t lcx = 0, lmx = 0;
-    if (!readCmdDb(db) || qcom_cmd_db_find(db, sizeof db, "lcx.lvl", &gLcx) || qcom_cmd_db_find(db, sizeof db, "lmx.lvl", &gLmx) ||
+    if (!db || !readCmdDb(db) || qcom_cmd_db_find(db, kCmdDbSize, "lcx.lvl", &gLcx) || qcom_cmd_db_find(db, kCmdDbSize, "lmx.lvl", &gLmx) ||
         qcom_rpmh_level_index(&gLcx, 0xffffffffu, &lcx) || qcom_rpmh_level_index(&gLmx, 0xffffffffu, &lmx)) {
         fail(StRails, -2); release(dtb); release(adsp); return false;
     }

@@ -259,7 +259,9 @@ constexpr uint64_t kGmuPhys[3] = {0x03d6a000, 0x03d50000, 0x03d9e000};
 constexpr uint64_t kGmuLen[3] = {0x35000, 0x10000, 0x1000};
 constexpr uint32_t kGmuSysReset = 0x1f800 * 4 - 0x6a000, kGmuHfiStatus = 0x1f980 * 4 - 0x6a000;
 constexpr uint32_t kRsccSeqBusy = 0x101 * 4, kCxMiscTcmRet = 0x39 * 4;
-alignas(8) uint8_t gCmdDb[kCmdDbBytes];
+// The command DB snapshot. gVoteInputs keeps pointers into it, so it lives for the rest of the boot; it is allocated at its first
+// use rather than being a static array, which would sit in the kernel's __DATA.
+uint8_t *gCmdDb;
 ShengGmuVoteInputs gVoteInputs;
 AdrenoHfiStartupConfig gStartup;
 OSSharedPtr<IOMemoryMap> gCmdDbMap, gGmuMaps[3];
@@ -519,7 +521,7 @@ void cpRow(const char *what) {
 // the returned x6 (ARM_SMCCC_QUIRK_QCOM_A6); QCOM_SCM_V2_EBUSY (-12) retries after 30 ms, at most 20 times. WAITQ_SLEEP
 // (2) needs the SCM wait-queue interrupt, which is not wired here, so it is returned to the caller as is.
 struct ScmRes {int64_t a0; uint64_t a1; uint32_t ms, resumes;};
-ScmRes scmCall(uint64_t fn, uint64_t arginfo, uint64_t p0, uint64_t p1, uint64_t p2) {
+ScmRes scmCall(uint64_t fn, uint64_t arginfo, uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3 = 0) {
     uint64_t first = fn, a6 = 0;
     const uint64_t start = ringNow(nullptr);
     auto done = [&](int64_t a0, uint64_t a1, unsigned resumes) {
@@ -527,7 +529,7 @@ ScmRes scmCall(uint64_t fn, uint64_t arginfo, uint64_t p0, uint64_t p1, uint64_t
     };
     for (unsigned resume = 0, busy = 0; resume < 10000;) {
         register uint64_t x0 asm("x0") = first, x1 asm("x1") = arginfo, x2 asm("x2") = p0, x3 asm("x3") = p1;
-        register uint64_t x4 asm("x4") = p2, x5 asm("x5") = 0, x6 asm("x6") = a6, x7 asm("x7") = 0;
+        register uint64_t x4 asm("x4") = p2, x5 asm("x5") = p3, x6 asm("x6") = a6, x7 asm("x7") = 0;
         asm volatile("smc #0" : "+r"(x0), "+r"(x1), "+r"(x2), "+r"(x3), "+r"(x4), "+r"(x5), "+r"(x6), "+r"(x7)
                      :: "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "memory");
         if (x0 == 1) {first = 1; a6 = x6; ++resume; continue;}
@@ -1104,6 +1106,61 @@ bool gpuCopyPage(uint64_t src, uint64_t dst) {
     return cpFence(words, 7);
 }
 unsigned gCoherenceAttempts;
+// Table walk coherence, after the data proofs: a page is mapped while table pages are published by ordering alone (no clean), the new
+// leaf descriptor must still be dirty in a CPU cache (DRAM holding an invalid descriptor), and the GPU copies through the mapping; the copy
+// is right only if the SMMU's walk read the descriptor from the CPU's cache. Only then do later maps clean no table line
+// (native_adreno_walk_coherent). A wrong walk faults the context: the fault is cleared and every table page is cleaned as before.
+// Row: W d<attempt with a dirty descriptor> c<words copied right> f<FSR seen> -> on/off
+extern "C" volatile uint32_t native_adreno_walk_coherent[3];
+extern "C" {char native_gpu_walk_row[80];}
+static bool walkProbe(NativeAdrenoVm *vm) {
+    constexpr uint64_t kBase = 0x18100000;
+    constexpr size_t kBytes = 2 * 4096;
+    uint8_t *buf = static_cast<uint8_t *>(IOMallocAligned(kBytes, 4096));
+    if (!buf) {snprintf(native_gpu_walk_row, sizeof native_gpu_walk_row, "W nomem -> off"); return false;}
+    volatile uint32_t *A = reinterpret_cast<volatile uint32_t *>(buf), *B = A + 1024;
+    for (unsigned i = 0; i < 1024; ++i) {A[i] = 0x66660000u | i; B[i] = 0;}
+    (void)NativeAdrenoMaintainOwnedPages(buf, kBytes, NativeAdrenoCleanInvalidate);
+    NativeAdrenoMemory mem;
+    IOReturn st = mem.importTask(kernel_task, uint64_t(uintptr_t(buf)), kBytes, 40, kBytes);
+    uint64_t phys[2] = {};
+    for (size_t j = 0; !st && j < mem.spanCount(); ++j)
+        for (size_t at = 0; at < mem.spans()[j].bytes; at += 4096) phys[(mem.spans()[j].offset + at) / 4096] = mem.spans()[j].physical + at;
+    static uint32_t words[1024];
+    unsigned dirtyAt = 0, copied = 0;
+    uint32_t fault[4] = {};
+    bool pass = false;
+    for (unsigned attempt = 0; attempt < 8 && !st && phys[0] && phys[1] && !dirtyAt; ++attempt) {
+        uint64_t handle = 0, pte = 0;
+        native_adreno_walk_coherent[0] = 1;   // this map's table pages: ordering only
+        st = vm->map(&mem, 0, kBase + attempt * 0x200000ull, 3, 1, 3, &handle);
+        native_adreno_walk_coherent[0] = 0;
+        if (st) break;
+        // the descriptor of page A must still differ in DRAM from what the CPU stored
+        if (vm->leafPhysical(phys[0], &pte) && dramPage(pte & ~0xfffull, words)) {
+            const uint64_t inDram = uint64_t(words[(pte & 0xfff) / 4]) | uint64_t(words[(pte & 0xfff) / 4 + 1]) << 32;
+            if ((inDram & 0x0000fffffffff000ull) != phys[0]) {
+                dirtyAt = attempt + 1;
+                const uint64_t iova = kBase + attempt * 0x200000ull;
+                if (gpuCopyPage(iova, iova + 4096) && dramPage(phys[1], words))
+                    for (unsigned i = 0; i < 1024; ++i) copied += words[i] == (0x66660000u | i);
+                (void)vm->faultState(fault);
+            }
+        }
+        (void)vm->unmap(handle);
+    }
+    if (fault[0]) {
+        uint32_t far[3] = {};
+        if (NativeAdrenoGpuContext *context = NativeAdrenoGpuContextObject()) (void)context->clearFault(fault[0], far);
+    }
+    pass = !st && dirtyAt && copied == 1024 && !fault[0];
+    (void)NativeAdrenoMaintainOwnedPages(buf, kBytes, NativeAdrenoCleanInvalidate);
+    (void)mem.release();
+    IOFreeAligned(buf, kBytes);
+    snprintf(native_gpu_walk_row, sizeof native_gpu_walk_row, "W d%u c%u f%x s%x -> %s", dirtyAt, copied, fault[0], uint32_t(st),
+             pass ? "on" : "off");
+    return pass;
+}
 void coherenceProbe(NativeAdrenoVm *vm) {
     uint32_t *k = native_gpu_coherence;
     unsigned wanted = 1;
@@ -1171,8 +1228,25 @@ void coherenceProbe(NativeAdrenoVm *vm) {
     if (buf) IOFreeAligned(buf, kBytes);
     k[7] = pass;
     native_adreno_io_coherent = pass ? 1 : 0;
+    // The walk proof needs the data path proved (it reads the copy through it); sheng-gpu-walk=0 keeps every table page cleaned.
+    unsigned walk = 1;
+    PE_parse_boot_argn("sheng-gpu-walk", &walk, sizeof walk);
+    native_adreno_walk_coherent[0] = pass && walk && walkProbe(vm) ? 1 : 0;
     snprintf(native_gpu_coherence_row, sizeof native_gpu_coherence_row, "H d%u/64 a%u r%u/%u w%u/%u s%x k%u -> %s", k[1], gCoherenceAttempts,
              k[2], k[3], k[4], k[5], k[6], k[0], pass ? "on" : "off");
+}
+// qcom_scm_set_gpu_smmu_aperture(0): the secure world opens the CP's aperture to the GPU's context bank 0, so CP_SMMU_TABLE_UPDATE in
+// the ring can switch the bank's page table (per-process GPU address spaces, NativeAdrenoSubmit table mode 2). Asked first whether the
+// call exists (QCOM_SCM_INFO_IS_CALL_AVAIL). native_adreno_cp_aperture: [0] availability (x1, or 0x80000000|x0 on error), [1] the call's x0.
+extern "C" volatile uint32_t native_adreno_cp_aperture[4];
+void openCpAperture() {
+    // ARM_SMCCC_CALL_VAL(STD, SMC_64, OWNER_SIP, svc << 8 | cmd): SVC_INFO 0x06 / IS_CALL_AVAIL 0x01, SVC_MP 0x0c / CP_SMMU_APERTURE_ID 0x1b.
+    const ScmRes avail = scmCall(0x42000601u, 1, 0x02000000u | (0x0cu << 8) | 0x1bu, 0, 0);
+    native_adreno_cp_aperture[0] = avail.a0 ? 0x80000000u | uint32_t(avail.a0) : uint32_t(avail.a1);
+    if (avail.a0 || !avail.a1) {native_adreno_cp_aperture[1] = 0xffffffffu; return;}
+    // args[0] = 0xffff0000 | QCOM_SCM_CP_APERTURE_REG (0) << 8 | context bank; the other three 0xffffffff. ARGS(4), all values.
+    const ScmRes r = scmCall(0x42000c1bu, 4, 0xffff0000u | (0u << 8) | 0u, 0xffffffffu, 0xffffffffu, 0xffffffffu);
+    native_adreno_cp_aperture[1] = uint32_t(r.a0);
 }
 void publishAndWrapperTest(bool rounds) {
     char row[64];
@@ -1187,6 +1261,7 @@ void publishAndWrapperTest(bool rounds) {
     coherenceProbe(vm);
     const IOReturn timer = gTimer.attach(&gTimerIo, NativeAdrenoTimeCp);
     {unsigned wc = 1; PE_parse_boot_argn("sheng-gpu-wc", &wc, sizeof wc); native_adreno_wc_enabled = wc ? 1 : 0;}
+    openCpAperture();
     const IOReturn published = native_adreno_publish(vm, &gSubmit, &gRing, &clock, timer ? nullptr : &gTimer, &gDeviceInfo, 32, 40);
     IOService *svc = published ? nullptr : native_adreno_published_service();
     int ok = 0, n = 0, errAt = -1, v1 = -1, v2 = -1;
@@ -1935,7 +2010,9 @@ void gmuPrerequisites(const gpb_result &r) {
     native_gpu_power_stage = 0x52;
     unsigned parse = 9, build = 9;
     uint32_t version = 0, magic = 0;
-    if (volatile uint32_t *db = mapWords(kCmdDbBase, kCmdDbBytes, gCmdDbMap)) {
+    if (!gCmdDb) gCmdDb = static_cast<uint8_t *>(IOMallocData(kCmdDbBytes));
+    volatile uint32_t *db = gCmdDb ? mapWords(kCmdDbBase, kCmdDbBytes, gCmdDbMap) : nullptr;
+    if (db) {
         for (uint64_t i = 0; i < kCmdDbBytes / 4; ++i) {
             const uint32_t w = db[i];
             memcpy(gCmdDb + 4 * i, &w, 4);

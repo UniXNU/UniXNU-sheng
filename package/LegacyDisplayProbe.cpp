@@ -22,7 +22,7 @@ static IOService *pendingLegacyDisplay;
 static IOService *activeGOPPresenter,*activeGOPNub;
 // GPU hand-off presenter (sheng-fb-gpu=1, phase 4): lives beside the display driver, which offers it frames instead of copying them.
 static IOService *gpuHandoffPresenter;
-extern "C" bool native_gop_gpu_offer(IOService *,void *display,IOMemoryDescriptor *,uint64_t stride,uint32_t width,uint32_t height);
+extern "C" bool native_gop_gpu_offer(IOService *,void *display,IOMemoryDescriptor *,uint64_t stride,uint32_t width,uint32_t height,uint32_t format);
 extern "C" void native_gop_presenter_set_source(IOService *presenter,IOService *nub);
 volatile uint32_t native_legacy_gpu_fallbacks,native_legacy_gpu_last_status;
 static IOService *activeLegacyDisplay;
@@ -171,6 +171,8 @@ void native_legacy_frame_observed(unsigned kind,uint64_t count,uint64_t minx,uin
         native_legacy_frame_stats[n][3]=maxx;native_legacy_frame_stats[n][4]=maxy;
     }
     native_legacy_frame_count=n+1;
+    if(n<NATIVE_LEGACY_FRAMES)
+        printf("sheng-fb: frame %u kind %u: %llu lit pixels in (%llu,%llu)-(%llu,%llu)\n",n,kind,count,minx,miny,maxx,maxy);
 }
 volatile uint32_t native_legacy_frame_colors[8][4];
 volatile uint64_t native_legacy_frame_color_counts[8][4],native_legacy_frame_color_other[8];
@@ -240,6 +242,10 @@ void native_legacy_copy_timing_observed(uint64_t ticks,uint64_t bytes) {
     native_legacy_copy_bytes_last=bytes;native_legacy_copy_bytes_sum=native_legacy_copy_bytes_sum+bytes;
     native_legacy_copy_n=native_legacy_copy_n+1;native_legacy_copy_last=ticks;native_legacy_copy_sum=native_legacy_copy_sum+ticks;
     if(ticks>native_legacy_copy_max)native_legacy_copy_max=ticks;
+    if(native_legacy_copy_n<=32) {
+        uint64_t frequency;__asm__ volatile("mrs %0, cntfrq_el0":"=r"(frequency));
+        printf("sheng-fb: copy %u: %llu bytes in %llu us\n",(unsigned)native_legacy_copy_n,bytes,frequency?ticks*1000000/frequency:0);
+    }
 }
 __attribute__((noinline)) void native_legacy_transfer_observed(IOReturn status,const void *request,uint64_t bytes) {
     native_legacy_transfer_calls=native_legacy_transfer_calls+1;
@@ -251,8 +257,8 @@ __attribute__((noinline)) void native_legacy_transfer_observed(IOReturn status,c
         boot_progress_stage(message);
     }
 }
-bool native_legacy_gpu_offer(void *display,IOMemoryDescriptor *memory,uint64_t stride,uint32_t width,uint32_t height) {
-    return gpuHandoffPresenter && native_gop_gpu_offer(gpuHandoffPresenter,display,memory,stride,width,height);
+bool native_legacy_gpu_offer(void *display,IOMemoryDescriptor *memory,uint64_t stride,uint32_t width,uint32_t height,uint32_t format) {
+    return gpuHandoffPresenter && native_gop_gpu_offer(gpuHandoffPresenter,display,memory,stride,width,height,format);
 }
 void native_legacy_gpu_fallback_observed(int status) {
     native_legacy_gpu_last_status=(uint32_t)status;native_legacy_gpu_fallbacks=native_legacy_gpu_fallbacks+1;
@@ -343,6 +349,10 @@ static IOReturn wrappedRegister(IOUserClient *client,mach_port_t port,UInt32 typ
     return status;
 }
 static void interpose(IOUserClient *client,int pid) {
+#if __has_feature(ptrauth_calls)
+    // The vtable pointer and its entries are signed: a copied vtable would not authenticate. Clients are not interposed.
+    (void)client;(void)pid;return;
+#endif
     if(seenClientCount>=kSeenClients)return;
     ClientStat &stat=seenClients[seenClientCount];
     memset(&stat,0,sizeof stat);
@@ -517,7 +527,8 @@ void native_legacy_display_late_probe(void) {
         // A real firmware framebuffer resource, with addresses and extent
         // obtained from the actual GOP handoff. It has no invented compatible,
         // display list, panel timing, GPU/fence completion or vendor registers.
-        native_legacy_stage=4;IOPlatformDevice *nub=new IOPlatformDevice;
+        // A plain service: an IOPlatformDevice expects the platform expert as its provider (compareName calls it), not the resources.
+        native_legacy_stage=4;IOService *nub=new IOService;
         native_legacy_nub=(uintptr_t)nub;bool nubAttached=false,nubStarted=false,attached=false,started=false;
         IORegistryEntry *displayTreeParent=nullptr;bool dtAttached=false;
         IOService *parent=IOService::getResourceService();
@@ -530,7 +541,7 @@ void native_legacy_display_late_probe(void) {
                 unsigned phase=0;PE_parse_boot_argn("offline-legacy-phase",&phase,sizeof(phase));
                 if(phase==4) {
                     // This is the actually implemented GOP display subsystem,
-                    // attached to its real IOPlatformDevice memory resource.
+                    // attached to its real firmware framebuffer memory resource.
                     // No Apple/vendor compatible or panel timing is supplied.
                     displayTreeParent=IORegistryEntry::fromPath("/arm-io",gIODTPlane);
                     const char type[]="display-subsystem";OSData *data=OSData::withBytes(type,sizeof(type));

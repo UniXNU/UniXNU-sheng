@@ -6,6 +6,7 @@
 #include <libkern/c++/OSMetaClass.h>
 #include <libkern/c++/OSSymbol.h>
 #include <libkern/c++/OSIterator.h>
+#include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSKext.h>
 #include <pexpert/pexpert.h>
 #include <mach/kmod.h>
@@ -114,8 +115,13 @@ __attribute__((noinline)) void native_hid_live_checkpoint(IOService *device) {
         // opened, not from the HID device below it; publish them on the service itself (idempotent, once per second).
         // Set once only: every setProperty on a service with attached user clients is a registry property-change
         // notification, and repeating it each second keeps backboardd/hidd busy re-evaluating the service.
+        // iPadOS 27: the event service is the kernel side of a DriverKit driver, which publishes its own usage pair (1,6) after it
+        // starts, later than the first check here; a pair read back as anything but (0x0d,4) is therefore published again.
         static IORegistryEntry *publishedFor;
-        if(device->getProperty("Built-In") && publishedFor!=driver) {
+        OSNumber *page=OSDynamicCast(OSNumber,driver->getProperty("PrimaryUsagePage"));
+        OSNumber *usage=OSDynamicCast(OSNumber,driver->getProperty("PrimaryUsage"));
+        const bool digitizerPair=page && usage && page->unsigned32BitValue()==0x0d && usage->unsigned32BitValue()==4;
+        if(device->getProperty("Built-In") && (publishedFor!=driver || !digitizerPair)) {
             publishedFor=driver;
             driver->setProperty("Built-In",kOSBooleanTrue);driver->setProperty("DisplayIntegrated",kOSBooleanTrue);
             // backboardd (-[BKHIDDirectTouchEventProcessor processEvent:sender:dispatcher:], decoded from the target) drops a
