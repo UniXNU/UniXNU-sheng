@@ -94,6 +94,7 @@ extern "C" unsigned NativeAdrenoGpuContextInputBits() __attribute__((weak));
 extern "C" IOReturn native_adreno_publish(NativeAdrenoVm *, NativeAdrenoSubmit *, NativeAdrenoRing *, const NativeAdrenoRingClock *,
     const NativeAdrenoTimer *, const NativeAdrenoAbiDeviceInfo *, uint32_t, uint32_t) __attribute__((weak));
 extern "C" uint32_t native_adreno_publish_stats(uint32_t *) __attribute__((weak));
+extern "C" void native_adreno_set_restart(NativeAdrenoRestart, void *) __attribute__((weak));
 // The staged AGXAccelerator (drivers/Adreno740/NativeAdrenoAccelerator.cpp): its static initializer runs only after the
 // original IOGPUFamily kext has loaded, because the parent metaclass does not exist before that.
 extern "C" void native_adreno_accelerator_static_init(void) __asm__("__GLOBAL__sub_I_NativeAdrenoAccelerator.cpp") __attribute__((weak));
@@ -1501,47 +1502,9 @@ void ipiSelfTest() {
 }
 void startHeartbeatThread();
 void startGpuDcvs();
-void gpuStart() {
-    char row[64];
-    uint32_t *c = native_gpu_cp;
-    if (!NativeAdrenoGpuContextBringup || !NativeAdrenoGpuContextBuffers || !gSmmuMap) {setRow(6, "Q nolink"); return;}
-    // 1. The GPU's own context bank and buffers (arm-smmu-qcom: the GPU always gets bank 0; DT iommus SIDs 0 and 1).
-    NativeAdrenoGmuContextReport &q = native_gpu_context;
-    // The BO pool (one contiguous block, sheng-gpu-pool MiB, default 1536) is taken inside the bring-up, before memory fragments. int-159:
-    // with 1536 MiB no BO fell back to scattered pages (peak 782 MiB in use); with 384 MiB (int-160) 18 did, 81933 single-page spans
-    // whose attribute XNU kept setting back (123847 pages write-combined again at submissions, 766 ms).
-    {unsigned pool = 1536; PE_parse_boot_argn("sheng-gpu-pool", &pool, sizeof pool); native_adreno_pool_mib = pool;}
-    // Before the pool is reserved: owned BOs on the IO-coherent path are not write-combined (the mode applies once the coherence proof passes).
-    {unsigned owned = 0; PE_parse_boot_argn("sheng-gpu-owned-coherent", &owned, sizeof owned); native_adreno_owned_coherent = owned ? 1 : 0;}
-    const IOReturn ctx = NativeAdrenoGpuContextBringup(reinterpret_cast<volatile uint8_t *>(gSmmuMap->getVirtualAddress()),
-        kSmmuWindow, 0, 2, 0, 0, 1, 1, gpuCtxProgress, &q);
-    // Q s<step> st<IOReturn> k<program>/<attach kit status> p<phase>e<enabled> r<route phase>v<verified> n<spans>
-    snprintf(row, sizeof row, "Q s%u st%x k%u/%u p%ue%u r%uv%u n%u", q.step, unsigned(ctx), q.program_status, q.route_status,
-             q.program_phase, q.program_enabled, q.route_phase, q.routes_verified, q.spans);
-    setRow(6, row);
-    if (ctx) return;
-    gpuSetActlr();
-    c[0] = 1;
-    if (NativeAdrenoGpuContextBuffers(gGpuBuffers)) {setRow(7, "C1 buffers refused"); return;}
-    for (unsigned i = 0; i < 5; ++i) {
-        IODeviceMemory *m = IODeviceMemory::withRange(gGpuBuffers[i].physical, gGpuBuffers[i].bytes);
-        if (m) {
-            gGpuMaps[i] = OSSharedPtr<IOMemoryMap>(m->map(kIOMapAnywhere | kIOMapWriteCombineCache), OSNoRetain);
-            m->release();
-        }
-        if (!gGpuMaps[i]) {setRow(7, "C1 nomap buffer"); return;}
-        gGpuCpu[i] = reinterpret_cast<volatile uint8_t *>(gGpuMaps[i]->getVirtualAddress());
-    }
-    // 2. SQE: adreno_fw_create_bo copies the firmware without its first dword.
-    c[0] = 2;
-    const uint64_t sqe = &native_adreno_sqe_firmware_image_size ? native_adreno_sqe_firmware_image_size : 0;
-    if (sqe < 8 || sqe - 4 > gGpuBuffers[0].bytes) {setRow(7, "C2 no sqe image"); return;}
-    for (uint64_t i = 4; i < sqe; ++i) gGpuCpu[0][i - 4] = native_adreno_sqe_firmware_image[i];
-    __asm__ volatile("dsb sy" ::: "memory");
-    for (uint64_t i = 4; i < sqe; ++i) if (gGpuCpu[0][i - 4] != native_adreno_sqe_firmware_image[i]) {c[1] = uint32_t(i); break;}
-    if (c[1]) {snprintf(row, sizeof row, "C2 sqe readback differs at %x", c[1]); setRow(7, row); return;}
-    // 3. hw_init (a6xx_gpu.c), A740 branches only. OOB GPU_SET is already held (mode 8).
-    c[0] = 3;
+// hw_init (a6xx_gpu.c), A740 branches only, up to CP_SQE_INSTR_BASE; OOB GPU_SET is already held (mode 8). The restart after a hang runs
+// it again, as a6xx_recover's msm_gpu_hw_init does.
+void gpuHwInit() {
     gpuWr(A740_GBIF_HALT, 0); (void)gpuRd(A740_GBIF_HALT);
     gpuWr(A740_RBBM_GBIF_HALT, 0); (void)gpuRd(A740_RBBM_GBIF_HALT);
     gpuWr(A740_RBBM_SECVID_TSB_CNTL, 0);
@@ -1593,6 +1556,94 @@ void gpuStart() {
     // A7XX_INT_MASK: bits 1,6,7,8,9,15,17,20,22,23,24,25,28,29. Nothing services the GPU interrupt yet; status is polled.
     gpuWr(A740_RBBM_INT_0_MASK, 0x33d283c2);
     gpuWr64(A740_CP_SQE_INSTR_BASE, gGpuBuffers[0].iova);
+}
+// The GPU restart after a hang (NativeAdrenoSubmit::recover, under the publish lock): a6xx_recover's reset for a GPU whose GMU it does
+// not power-cycle (the adreno_has_gmu_wrapper branch: GBIF drained including its GX side, RBBM_SW_RESET_CMD asserted for at least
+// 100 us, then released) followed by msm_gpu_hw_init's hw_init on the same ring: registers, ring, SQE start, a7xx_cp_init waited
+// with a6xx_idle, and CP_SET_SECURE_MODE 0 again when the zap shader was loaded (a6xx_zap_shader_init returns 0 once loaded). The
+// GMU keeps running and keeps the OOB GPU_SET vote; its power-collapse cycle needs a GMU stop and warm-boot path the GMU kit does
+// not have. [0] restarts, [1] the step a failed one stopped at, [2] its status, [3] RBBM_STATUS after the reset.
+extern "C" {uint32_t native_gpu_restart[4];}
+IOReturn gpuRestart(void *, NativeAdrenoRing *ring, uint32_t completed) {
+    uint32_t *r = native_gpu_restart;
+    r[0] = r[0] + 1;
+    auto fail = [&](uint32_t step, IOReturn status) {r[1] = step; r[2] = uint32_t(status); return status ? status : kIOReturnIOError;};
+    if (!ring) return fail(1, kIOReturnBadArgument);
+    if (gxOn()) gpuWr(A740_CP_SQE_CNTL, 3);
+    // spin_until is bounded by ADRENO_IDLE_TIMEOUT (1 s); a GBIF register read is well under a microsecond, so 1000000 reads stay inside it.
+    IOReturn status = ring->busHalt(true, 1000000);
+    if (status) return fail(2, status);
+    gpuWr(A740_RBBM_SW_RESET_CMD, 1); (void)gpuRd(A740_RBBM_SW_RESET_CMD); IODelay(1);
+    IODelay(100);
+    gpuWr(A740_RBBM_SW_RESET_CMD, 0); (void)gpuRd(A740_RBBM_SW_RESET_CMD); IODelay(1);
+    r[3] = gpuRd(A740_RBBM_STATUS);
+    gpuHwInit();
+    status = ring->restart(completed);
+    if (status) return fail(3, status);
+    gpuWr64(A740_CP_BV_RB_RPTR_ADDR, gGpuBuffers[2].iova + 8);
+    gpuWr(A740_CP_SQE_CNTL, 1);
+    // The power-up list stays as a7xx_patch_pwrup_reglist wrote it at bring-up (pwrup_reglist_emitted).
+    const NativeAdrenoRingIo rio{nullptr, ringWrite, ringRead, ringBarrier, nullptr, nullptr};
+    const NativeAdrenoCpInitConfig config{gGpuBuffers[0].iova, gGpuBuffers[3].iova, 1};
+    const NativeAdrenoRingClock clock{nullptr, ringNow, nullptr};
+    NativeAdrenoCpInit init;
+    uint32_t fence = 0;
+    status = init.run(&rio, ring, &config, &fence, false);
+    if (status) return fail(4, status);
+    status = ring->idle(&clock, 1000000);
+    if (status) return fail(5, status);
+    if (native_gpu_zap[0] == 9) {
+        uint32_t words[2] = {};
+        if (AdrenoPM4Type7(0x66, 1, &words[0]) != AdrenoPM4Success) return fail(6, kIOReturnInternalError);
+        status = ring->submitUnfenced(words, 2);
+        if (!status) status = ring->idle(&clock, 1000000);
+        if (status) return fail(6, status);
+    }
+    r[1] = 0; r[2] = 0;
+    return kIOReturnSuccess;
+}
+void gpuStart() {
+    char row[64];
+    uint32_t *c = native_gpu_cp;
+    if (!NativeAdrenoGpuContextBringup || !NativeAdrenoGpuContextBuffers || !gSmmuMap) {setRow(6, "Q nolink"); return;}
+    // 1. The GPU's own context bank and buffers (arm-smmu-qcom: the GPU always gets bank 0; DT iommus SIDs 0 and 1).
+    NativeAdrenoGmuContextReport &q = native_gpu_context;
+    // The BO pool (one contiguous block, sheng-gpu-pool MiB, default 1536) is taken inside the bring-up, before memory fragments. int-159:
+    // with 1536 MiB no BO fell back to scattered pages (peak 782 MiB in use); with 384 MiB (int-160) 18 did, 81933 single-page spans
+    // whose attribute XNU kept setting back (123847 pages write-combined again at submissions, 766 ms).
+    {unsigned pool = 1536; PE_parse_boot_argn("sheng-gpu-pool", &pool, sizeof pool); native_adreno_pool_mib = pool;}
+    // Before the pool is reserved: owned BOs on the IO-coherent path are not write-combined (the mode applies once the coherence proof passes).
+    {unsigned owned = 0; PE_parse_boot_argn("sheng-gpu-owned-coherent", &owned, sizeof owned); native_adreno_owned_coherent = owned ? 1 : 0;}
+    const IOReturn ctx = NativeAdrenoGpuContextBringup(reinterpret_cast<volatile uint8_t *>(gSmmuMap->getVirtualAddress()),
+        kSmmuWindow, 0, 2, 0, 0, 1, 1, gpuCtxProgress, &q);
+    // Q s<step> st<IOReturn> k<program>/<attach kit status> p<phase>e<enabled> r<route phase>v<verified> n<spans>
+    snprintf(row, sizeof row, "Q s%u st%x k%u/%u p%ue%u r%uv%u n%u", q.step, unsigned(ctx), q.program_status, q.route_status,
+             q.program_phase, q.program_enabled, q.route_phase, q.routes_verified, q.spans);
+    setRow(6, row);
+    if (ctx) return;
+    gpuSetActlr();
+    c[0] = 1;
+    if (NativeAdrenoGpuContextBuffers(gGpuBuffers)) {setRow(7, "C1 buffers refused"); return;}
+    for (unsigned i = 0; i < 5; ++i) {
+        IODeviceMemory *m = IODeviceMemory::withRange(gGpuBuffers[i].physical, gGpuBuffers[i].bytes);
+        if (m) {
+            gGpuMaps[i] = OSSharedPtr<IOMemoryMap>(m->map(kIOMapAnywhere | kIOMapWriteCombineCache), OSNoRetain);
+            m->release();
+        }
+        if (!gGpuMaps[i]) {setRow(7, "C1 nomap buffer"); return;}
+        gGpuCpu[i] = reinterpret_cast<volatile uint8_t *>(gGpuMaps[i]->getVirtualAddress());
+    }
+    // 2. SQE: adreno_fw_create_bo copies the firmware without its first dword.
+    c[0] = 2;
+    const uint64_t sqe = &native_adreno_sqe_firmware_image_size ? native_adreno_sqe_firmware_image_size : 0;
+    if (sqe < 8 || sqe - 4 > gGpuBuffers[0].bytes) {setRow(7, "C2 no sqe image"); return;}
+    for (uint64_t i = 4; i < sqe; ++i) gGpuCpu[0][i - 4] = native_adreno_sqe_firmware_image[i];
+    __asm__ volatile("dsb sy" ::: "memory");
+    for (uint64_t i = 4; i < sqe; ++i) if (gGpuCpu[0][i - 4] != native_adreno_sqe_firmware_image[i]) {c[1] = uint32_t(i); break;}
+    if (c[1]) {snprintf(row, sizeof row, "C2 sqe readback differs at %x", c[1]); setRow(7, row); return;}
+    // 3. hw_init (a6xx_gpu.c), A740 branches only. OOB GPU_SET is already held (mode 8).
+    c[0] = 3;
+    gpuHwInit();
     // 4. Ring 0 (MSM_GPU_RB_CNTL_DEFAULT: 32 KiB, block 32; hw_apriv uses the hardware rptr shadow at memptrs+0).
     c[0] = 4;
     const NativeAdrenoRingIo rio{nullptr, ringWrite, ringRead, ringBarrier, nullptr, nullptr};
@@ -1646,6 +1697,7 @@ void gpuStart() {
         const bool selftest = bootArg("sheng-gpu-selftest", 0) != 0;
         if (selftest) userClientTest();
         setRow(5, "P start");
+        if (native_adreno_set_restart) native_adreno_set_restart(gpuRestart, nullptr);
         publishAndWrapperTest(selftest);
         if (bootArg("sheng-gpu-metal", 0) == 1) publishMetal();
         if (bootArg("sheng-gpu-dcvs", 0)) startGpuDcvs();
