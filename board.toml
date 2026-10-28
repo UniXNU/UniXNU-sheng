@@ -6,7 +6,7 @@
 "description" = "Xiaomi Pad 6S Pro"
 "kit" = "sheng"
 "soc_source" = "sm8550"
-"os_profile" = "ipados-26.5.2-23F84"
+"os_profile" = "ipados-27.0.1-24A446"
 
 
 ["userdata"]
@@ -16,31 +16,9 @@
 
 
 ["kernel"]
-"defconfig" = "sheng_ipados26_defconfig"
-"archives" = [
-  "build-corecrypto-14.py",
-  "build-corecrypto-14.py --namespace",
-  "component:ArmDTPlatform",
-  "component:ArmCpu",
-  "component:SoftwareAES",
-  "build-software-aes-bindings.py",
-  "component:ShengUfs",
-  "component:VirtioMmioBlock",
-  "component:RamBlock",
-  "build-virtio-mmio-bindings.py --component RamBlock --directory build/ram-block",
-  "build-virtio-mmio-bindings.py --component VirtioMmioBlock",
-  "build-mockfs-fixture.py",
-  "build-sheng-platform-power.py",
-  "build-boot-progress.py",
-  "build-libpthread-kernel.py",
-  "component:Adreno740",
-  "build-adreno740-kits.py",
-  "build-adreno740-accelerator.py",
-  "component:ShengHidInput",
-  "component:AppleKeyStoreState",
-  "build-gop-legacy-display.py",
-]
-"config_fragments" = ["arch:configs/common.config", "soc:configs/sm8550.config", "os:configs/ipados.config"]
+"defconfig" = "sheng_ipados27_defconfig"
+"archives" = ["build-corecrypto-14.py", "build-corecrypto-14.py --namespace", "component:ArmDTPlatform", "component:ArmCpu", "build-libpthread-kernel.py", "component:ShengUfs", "component:RamBlock", "component:Adreno740", "build-adreno740-kits.py", "build-adreno740-accelerator.py", "component:AppleKeyStoreState", "build-gop-legacy-display-27.py"]
+"config_fragments" = ["arch:configs/common.config", "os:configs/ipados.config"]
 "patch_series" = ["arch:patches/xnu/series", "soc:patches/xnu-12377/series", "os:patches/xnu/series", "device:patches/xnu-12377/series"]
 
 
@@ -64,18 +42,24 @@
 
 ["payload"]
 "volume" = "SHENGESP"
-"size_mib" = 208
+"size_mib" = 176
+"root_policies" = "{tree}/build/sheng-source-storage/root-policies.bin"
 "loader" = "firmware"
 "title" = "Boot"
 "dram_size" = "0x80000000"
 "skip_setup_tool" = "scripts/seed-data-skip-setup.py"
 "panic_screen" = true
-"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic"]
+"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "offline-key-events=1", "sheng-aks=1", "offline-hid-input=1", "offline-hid-home=1", "sheng-touch=4", "sheng-touch-hid=1", "sheng-buttons=1"]
+
+["payload"."install"]
+"title" = "Install and boot"
+"confirm" = "ERASE all iPadOS user data and install again?"
+"confirm_titles" = ["Erase Data, skip Hello, boot", "Erase Data, show Hello, boot"]
+"confirm_args" = ["sheng-data-reset=1", "sheng-data-reset=2"]
 
 ["payload"."adt"]
 "chip_id" = "207"
 "owned_memory_size" = "0x130000000"
-"root_match_volume_uuid" = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 "packed_data_ramdisk" = true
 "persistent_data" = true
 "unique_chip_id" = "required"
@@ -92,7 +76,7 @@
 
 
 ["components"]
-"include" = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "ShengUfs", "VirtioMmioBlock", "RamBlock", "Adreno740", "AdrenoMetal", "GopFramebuffer", "ShengHidInput", "ShengNovatekTouch", "QcomGeniSpi", "AppleKeyStoreState", "XnuPrelink", "DarwinBoot", "VerifiedRoot", "ShengPreflight", "AirNir", "Ath12kWifi"]
+"include" = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot", "ShengPreflight", "ShengUfs", "RamBlock", "GopFramebuffer", "AppleKeyStoreState", "Adreno740", "AdrenoMetal"]
 
 
 ["adt"]
@@ -113,8 +97,17 @@
 
 ["adt"."defaults"."u32"]
 "sleep-disabled" = 1
+# No Apple PMGR or SEP: report a virtual platform, so AMFI does not wait for an ApplePMGRNub.
+"vmm-present" = 1
+# The kernel is built with CONFIG_VNODES=1024 (xsmall), so desiredvnodes clips to 1024; the desktop keeps about 1950 vnodes live and
+# vnode jetsam then kills daemons several times a second. XNU reads this value before it clips: memory/64K + 1024 for the owned 4864 MiB.
+"kern.maxvnodes" = 78848
 
 
+
+["adt"."chosen"."u32"]
+# This SoC has no CTRR: kernel text stays writable by hardware, which XNU must be told (iBoot writes this on Apple SoCs).
+"kernel-ctrr-to-be-enabled" = 0
 
 ["adt"."buttons"]
 
