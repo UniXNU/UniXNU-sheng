@@ -5,6 +5,9 @@
 #include <CoreAudio/AudioServerPlugIn.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <dlfcn.h>
+#if __has_feature(ptrauth_calls)
+#include <ptrauth.h>
+#endif
 #include <IOKit/IOKitLib.h>
 #include <mach/mach_time.h>
 #include <mach/mach.h>
@@ -75,10 +78,17 @@ static kern_return_t call(uint32_t selector) {return gConnect ? IOConnectCallSca
 // is taken from those two instructions and the service sets the constant (on the shared page it cannot be written from here).
 static void setHostClock(void) {
     ShengAudioDiag *diag = (ShengAudioDiag *)((uint8_t *)gControl + SHENG_AUDIO_DIAG_OFFSET);
-    // The audio server is arm64e: dlsym signs the pointer, and this arm64 code neither reads nor calls through the signature bits.
-    const uintptr_t symbol = (uintptr_t)dlsym(RTLD_DEFAULT, "AudioGetHostClockFrequency") & (((uintptr_t)1 << 47) - 1);
-    if (!symbol) {diag->host_clock_result = -1; return;}
+    // dlsym signs the pointer for an arm64e caller: the code is read through the stripped address and called through the signed one
+    // (an arm64 build sees the signature bits only in an arm64e server, and neither reads nor calls through them).
+    void *const signed_symbol = dlsym(RTLD_DEFAULT, "AudioGetHostClockFrequency");
+#if __has_feature(ptrauth_calls)
+    const uintptr_t symbol = (uintptr_t)ptrauth_strip(signed_symbol, ptrauth_key_function_pointer);
+    Float64 (*frequency)(void) = (Float64 (*)(void))signed_symbol;
+#else
+    const uintptr_t symbol = (uintptr_t)signed_symbol & (((uintptr_t)1 << 47) - 1);
     Float64 (*frequency)(void) = (Float64 (*)(void))symbol;
+#endif
+    if (!symbol) {diag->host_clock_result = -1; return;}
     const uint32_t *code = (const uint32_t *)symbol, adrp = code[0], ldr = code[1];
     if ((adrp & 0x9f000000u) != 0x90000000u || (ldr & 0xffc00000u) != 0xfd400000u || ((ldr >> 5) & 31) != (adrp & 31)) {
         diag->host_clock_result = -1;
@@ -507,13 +517,16 @@ static void rebind(const struct mach_header_64 *h, intptr_t slide) {
         }
     }
 }
-static void imageAdded(const struct mach_header *h, intptr_t slide) {
+__attribute__((unused)) static void imageAdded(const struct mach_header *h, intptr_t slide) {
     Dl_info info;
     if (h->magic != MH_MAGIC_64 || !dladdr(h, &info) || !info.dli_fname || !strstr(info.dli_fname, "VirtualAudio.plugin/")) return;
     gVaBase = (uintptr_t)h;
     rebind((const struct mach_header_64 *)h, slide);
 }
+// arm64e (iPadOS 27's server): the symbol pointers are authenticated with their slot address, so a plain rebind faults; the trace is off.
+#if !__has_feature(ptrauth_calls)
 __attribute__((constructor)) static void watchAudioServer(void) {_dyld_register_func_for_add_image(imageAdded);}
+#endif
 
 // ---- IO ----------------------------------------------------------------------------------------------------------------------------
 static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 client) {

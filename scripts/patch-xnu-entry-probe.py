@@ -139,7 +139,8 @@ def kernel_symbols(kernel):
     table = {}
     for line in subprocess.run([nm, '-n', kernel], capture_output=True, text=True, check=True).stdout.splitlines():
         parts = line.split()
-        if len(parts) == 3:
+        # A kernel collection prints a "Symbols for <entry>:" header per fileset entry.
+        if len(parts) == 3 and all(c in '0123456789abcdef' for c in parts[0]):
             table.setdefault(int(parts[0], 16), parts[2])
     return table
 
@@ -198,6 +199,10 @@ def assemble_c(source, va, workdir, symbols):
         if not any(base <= text and text + 256 <= base + size for base, size, _, _ in SEGMENTS):
             raise SystemExit('Invalid _boot_progress_panic_text')
         definitions.append(f'-DPANIC_TEXT={text:#x}UL')
+        # Optional too: the board log's panic writer (package/BootLog.c), called once the text is complete.
+        flush = symbols.get('_boot_log_panic_flush')
+        if flush is not None:
+            definitions.append(f'-DPANIC_FLUSH={flush:#x}UL')
     subprocess.run([clang, '--target=aarch64-none-elf', '-ffreestanding', '-fno-builtin', '-fno-stack-protector',
                     '-mgeneral-regs-only', '-fno-pic', '-mcmodel=tiny', '-Oz', f'-DVINFO={VINFO_VA:#x}UL',
                     *definitions, f'-I{font_dir}', '-c', source, '-o', obj], check=True)
@@ -391,6 +396,7 @@ def main():
         sites.append((AFTER_MMU_VA, 3, {'target': AFTER_MMU_VA + 4}))
         description = f'stage 3 reset {args.reset_delay} s after the MMU is on'
 
+    stage_end = {}
     with tempfile.TemporaryDirectory() as tmp:
         for site, stage, symbols in sites:
             source = RESET_BEFORE if (stage == 4 and args.reset_before) else SOURCES[stage].format(ticks=TIMEBASE * args.reset_delay)
@@ -398,18 +404,23 @@ def main():
             if len(code) > CAVE_SIZE:
                 raise SystemExit(f'Stage {stage} code is too large')
             data[file_offset(CAVES[stage]):file_offset(CAVES[stage]) + len(code)] = code
+            stage_end[stage] = CAVES[stage] + len(code)
     for site, stage, _ in sites:
         struct.pack_into('<I', data, file_offset(site), branch(site, CAVES[stage]))
     if args.panic_screen:
-        # Right after the last probe cave in use, so the padding is shared as tightly as possible.
-        PANIC_CAVE = max(CAVES[stage] for _, stage, _ in sites) + CAVE_SIZE
-        if word(PANIC_VA) in (0, 0xFFFFFFFF) or any(data[file_offset(PANIC_CAVE):file_offset(PANIC_CAVE_END)]):
+        # Right after the code of the last probe cave in use, so the padding is shared as tightly as possible,
+        # up to the end of the zero padding, where the next page of kernel text starts.
+        PANIC_CAVE = (max(stage_end.values()) + 15) & ~15
+        cave_end = PANIC_CAVE_END
+        while cave_end & 0xFFF and not any(data[file_offset(cave_end):file_offset(cave_end) + 4]):
+            cave_end += 4
+        if word(PANIC_VA) in (0, 0xFFFFFFFF) or any(data[file_offset(PANIC_CAVE):file_offset(cave_end)]):
             raise SystemExit('panic() or the panic screen padding is not as expected')
         with tempfile.TemporaryDirectory() as tmp:
             code, load, entry = assemble_c(ROOT / 'scripts/xnu-panic-screen.c', PANIC_CAVE, Path(tmp), kernel_names)
             common_entry = panic_common_entry(Path(tmp), code, load)
-        if load + len(code) > PANIC_CAVE_END:
-            raise SystemExit(f'panic screen is {len(code):#x} bytes at {load:#x}, the padding ends at {PANIC_CAVE_END:#x}')
+        if load + len(code) > cave_end:
+            raise SystemExit(f'panic screen is {len(code):#x} bytes at {load:#x}, the padding ends at {cave_end:#x}')
         if any(data[file_offset(load):file_offset(load) + len(code)]):
             raise SystemExit(f'Padding at {load:#x} is not empty')
         data[file_offset(load):file_offset(load) + len(code)] = code

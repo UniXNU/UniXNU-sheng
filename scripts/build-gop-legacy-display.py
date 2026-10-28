@@ -6,11 +6,14 @@ from pathlib import Path
 import struct
 import subprocess
 import sys
+from kernel_target import ARCH, IOS_VERSION, TRIPLE
+if ARCH != 'arm64' or IOS_VERSION.split('.')[0] != '17':
+    raise SystemExit('The legacy display ABI builder only supports arm64 iOS 17. '
+                     'Its fixed original addresses and class layout are not qualified for iOS 26.')
 ROOT=Path(__file__).resolve().parents[1];OUT=ROOT/'build/native-legacy-display';OUT.mkdir(parents=True,exist_ok=True)
 sys.path.insert(0,str(ROOT/'kits/XnuPrelink'))
 from native_prelink import macho,backed_offset,exports
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from kernel_target import TRIPLE
 def run(cmd,**kw):return subprocess.check_output([str(x) for x in cmd],timeout=90,**kw)
 def require(v,why):
     if not v:raise SystemExit(why)
@@ -27,6 +30,14 @@ header='''// SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <IOKit/IOService.h>
 #include <libkern/libkern.h>
 struct OriginalLegacySwapRequest;
+// Original state request (skip/requested and skip/powered word pairs, then the changed flag) taken by the state setter.
+struct OriginalLegacyStateRequest {uint32_t skipRequested,requested,skipPowered,powered;uint8_t changed;uint8_t pad[11];};
+// Original field offsets: vsync client queue in the display; rectangles, layer masks (updated, disabled, background),
+// options, dimensions and surfaces in a swap request.
+static constexpr unsigned kLegacyVsyncClients=5592;
+static constexpr unsigned kRequestRect0=17,kRequestRect1=81,kRequestMasks=792,kRequestOptions=804,kRequestDims=816,kRequestSurfaces=2624;
+// Backend leaves: pure original slots the owned backend implements only as guards.
+#define NATIVE_LEGACY_LEAVES(LEAF) LEAF(211) LEAF(245) LEAF(246) LEAF(306) LEAF(307) LEAF(338) LEAF(345)
 class IOMobileFramebufferLegacy : public IOService {
  OSDeclareAbstractStructors(IOMobileFramebufferLegacy)
  unsigned char originalPrivate[0x18a0-sizeof(IOService)];
@@ -85,6 +96,7 @@ for i in range(168,358):
     elif i==295:header+=' virtual void completeCurrentSwap();\n'
     elif i==337:header+=' virtual IOReturn collectCompletionReports(uint32_t,void *,uint32_t *,uint32_t)=0;\n'
     elif i==288:header+=' virtual bool startHardware();\n'
+    elif i==354:header+=' virtual int applyStateRequest(OriginalLegacyStateRequest *,bool);\n'
     elif i==301:header+=' virtual bool getRefreshAttributes(uint64_t *,bool);\n'
     elif i in pure:header+=f' virtual __attribute__((noreturn)) void opaque{i}()=0;\n'
     else:header+=f' virtual __attribute__((deprecated("Unclassified ABI: never call from source"))) void opaque{i}();\n'

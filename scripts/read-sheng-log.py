@@ -93,8 +93,13 @@ def decode(blob, out):
     run = out / f'{tag}-{h["boot_id"]:x}'
     run.mkdir(parents=True, exist_ok=True)
     (run / 'log.bin').write_bytes(blob)
-    lines = [f'{k}={v.split(chr(0))[0] if isinstance(v, str) else (v.split(b"\0")[0].decode(errors="replace") if isinstance(v, bytes) else v)}'
-             for k, v in h.items()]
+    lines = []
+    for key, value in h.items():
+        if isinstance(value, bytes):
+            value = value.split(b'\0')[0].decode(errors='replace')
+        elif isinstance(value, str):
+            value = value.split('\0')[0]
+        lines.append(f'{key}={value}')
     (run / 'header.txt').write_text('\n'.join(lines) + '\n')
     msg = blob[h['msg_first'] * BLOCK:(h['msg_first'] + h['msg_blocks']) * BLOCK][:h['msg_bytes']]
     (run / 'msgbuf.txt').write_bytes(msg)
