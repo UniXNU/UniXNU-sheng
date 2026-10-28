@@ -90,6 +90,7 @@ extern "C" IOReturn NativeAdrenoGpuContextBringup(volatile uint8_t *, size_t, un
     unsigned, void (*)(uint32_t), NativeAdrenoGmuContextReport *) __attribute__((weak));
 extern "C" IOReturn NativeAdrenoGpuContextBuffers(NativeAdrenoGpuBuffer out[5]) __attribute__((weak));
 extern "C" NativeAdrenoVm *NativeAdrenoGpuContextVm() __attribute__((weak));
+extern "C" unsigned NativeAdrenoGpuContextInputBits() __attribute__((weak));
 extern "C" IOReturn native_adreno_publish(NativeAdrenoVm *, NativeAdrenoSubmit *, NativeAdrenoRing *, const NativeAdrenoRingClock *,
     const NativeAdrenoTimer *, const NativeAdrenoAbiDeviceInfo *, uint32_t, uint32_t) __attribute__((weak));
 extern "C" uint32_t native_adreno_publish_stats(uint32_t *) __attribute__((weak));
@@ -973,10 +974,11 @@ void userClientTest() {
 NativeAdrenoTimer gTimer;
 // Constant facts for the Vulkan driver, each from a pinned source: chip id and gmem from a6xx_catalog.c (a740, "C510v2"),
 // UBWC 4.0 / swizzle levels 2+3 / bank bit 16 / macrotile from ubwc_config.c sm8550_data, the GMEM window and trap base from the
-// values hw_init programs above. The VA window keeps clear of the kernel buffers (below 0x302000+) and the GMEM window
-// (0x1000000..0x12fffff) and ends at the 4 GiB aperture.
-const NativeAdrenoAbiDeviceInfo gDeviceInfo = {0x43050a01u, 3u << 20, 0x1000000ull, 0x1fffffffff000ull, 0x20000000ull,
-                                               0xE0000000ull, 16, 6, 1, 4, NativeAdrenoDeviceClientIova, 0};
+// values hw_init programs above. The VA window is msm's per-process one: from ADRENO_VM_START (4 GiB, clear of the kernel buffers
+// below 0x302000+ and the GMEM window 0x1000000..0x12fffff) to the end of the bank's aperture (adreno_private_vm_size: BIT(ias) -
+// ADRENO_VM_START), set at publication from the GPU context's ias.
+NativeAdrenoAbiDeviceInfo gDeviceInfo = {0x43050a01u, 3u << 20, 0x1000000ull, 0x1fffffffff000ull, GpuClientVaStart,
+                                         0, 16, 6, 1, 4, NativeAdrenoDeviceClientIova, 0};
 int timerRead(void *, uint32_t reg, uint32_t *value) {*value = gpuRd(reg); return 0;}
 const NativeAdrenoTimeIo gTimerIo{nullptr, timerRead};
 IOReturn wcall(IOUserClient *uc, uint32_t method, const void *in, void *out) {
@@ -1262,7 +1264,9 @@ void publishAndWrapperTest(bool rounds) {
     const IOReturn timer = gTimer.attach(&gTimerIo, NativeAdrenoTimeCp);
     {unsigned wc = 1; PE_parse_boot_argn("sheng-gpu-wc", &wc, sizeof wc); native_adreno_wc_enabled = wc ? 1 : 0;}
     openCpAperture();
-    const IOReturn published = native_adreno_publish(vm, &gSubmit, &gRing, &clock, timer ? nullptr : &gTimer, &gDeviceInfo, 32, 40);
+    const unsigned ias = NativeAdrenoGpuContextInputBits ? NativeAdrenoGpuContextInputBits() : 0;
+    gDeviceInfo.va_size = ias > 32 ? (1ull << ias) - GpuClientVaStart : 0;
+    const IOReturn published = native_adreno_publish(vm, &gSubmit, &gRing, &clock, timer ? nullptr : &gTimer, &gDeviceInfo, ias, 40);
     IOService *svc = published ? nullptr : native_adreno_published_service();
     int ok = 0, n = 0, errAt = -1, v1 = -1, v2 = -1;
     IOReturn err = 0;
