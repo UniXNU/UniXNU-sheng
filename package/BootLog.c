@@ -171,6 +171,7 @@ extern volatile uint64_t native_adreno_maint_phase[8][2] __attribute__((weak_imp
 extern volatile uint32_t native_adreno_table_pages[4] __attribute__((weak_import));
 extern unsigned NativeAdrenoGpuContextInputBits(void) __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recovery[8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_recovery_fault[5] __attribute__((weak_import));
 extern uint32_t native_gpu_restart[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_stats_uncached[2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import));
@@ -801,14 +802,18 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // [gpu recovery]: msm hangcheck and GPU restarts (NativeAdrenoSubmit::recover): hangs found, restarts, failed restarts, the last hung
   // fence, the last restart's IOReturn, submissions replayed, hangs with a guilty job, hangs of the kernel's VM; then the board's restart
-  // (restarts, the step a failed one stopped at, its status, RBBM_STATUS after the reset).
+  // (restarts, the step a failed one stopped at, its status, RBBM_STATUS after the reset); then the SMMU faults ended before a restart
+  // and the last one's FSR, FAR (hi:lo) and FSYNR0.
   if (&native_adreno_recovery) {
-    char row[200];
-    snprintf(row, sizeof row, "[gpu recovery] hangs %u restarts %u failed %u fence %u status %x replayed %u guilty %u kernel %u | board %u step %u st %x rbbm %x",
+    char row[260];
+    snprintf(row, sizeof row, "[gpu recovery] hangs %u restarts %u failed %u fence %u status %x replayed %u guilty %u kernel %u | board %u step %u st %x rbbm %x | faults ended %u last fsr %x far %x:%x fsynr %x",
              native_adreno_recovery[0], native_adreno_recovery[1], native_adreno_recovery[2], native_adreno_recovery[3],
              native_adreno_recovery[4], native_adreno_recovery[5], native_adreno_recovery[6], native_adreno_recovery[7],
              &native_gpu_restart ? native_gpu_restart[0] : 0, &native_gpu_restart ? native_gpu_restart[1] : 0,
-             &native_gpu_restart ? native_gpu_restart[2] : 0, &native_gpu_restart ? native_gpu_restart[3] : 0);
+             &native_gpu_restart ? native_gpu_restart[2] : 0, &native_gpu_restart ? native_gpu_restart[3] : 0,
+             &native_adreno_recovery_fault ? native_adreno_recovery_fault[0] : 0, &native_adreno_recovery_fault ? native_adreno_recovery_fault[1] : 0,
+             &native_adreno_recovery_fault ? native_adreno_recovery_fault[3] : 0, &native_adreno_recovery_fault ? native_adreno_recovery_fault[2] : 0,
+             &native_adreno_recovery_fault ? native_adreno_recovery_fault[4] : 0);
     at = put(out, at, cap, row, sizeof row);
   }
   // [gpu cp image]: the GPU bank's registers before / after the CP switch check (SCTLR TCR TCR2 MAIR0 TTBR1 lo/hi CBAR FSR, then the kit
