@@ -175,6 +175,7 @@ extern uint32_t native_gpu_restart[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_stats_uncached[2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_pool_chunks[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wc_audit[6] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_submit_ibs[4] __attribute__((weak_import));
 extern volatile uint32_t native_touch_edge_stats[4] __attribute__((weak_import));
@@ -702,10 +703,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if (native_adreno_vm_kind_us[0][0] || native_adreno_vm_kind_us[1][0] || native_adreno_vm_kind_us[2][0]) at = put(out, at, cap, row, sizeof row);
   }
   if (&native_adreno_pool_stats) {
-    char row[200];
-    snprintf(row, sizeof row, "[bo pool] %u MiB (last reserve status %x, wc %x): %u BOs from it, %u fell back, in use %u MiB (peak %u) | scattered: %u BOs %u spans | import spans %u",
+    char row[240];
+    snprintf(row, sizeof row, "[bo pool] %u MiB (last reserve status %x, wc %x): %u BOs from it, %u fell back, in use %u MiB (peak %u) | chunks %u live %u made %u freed %u refused | scattered: %u BOs %u spans | import spans %u",
              native_adreno_pool_stats[0], native_adreno_pool_status, &native_adreno_pool_wc ? native_adreno_pool_wc : 0, native_adreno_pool_stats[1], native_adreno_pool_stats[2], native_adreno_pool_stats[3],
-             native_adreno_pool_stats[4], native_adreno_pool_stats[5], native_adreno_pool_stats[6], native_adreno_pool_stats[7]);
+             native_adreno_pool_stats[4], &native_adreno_pool_chunks ? native_adreno_pool_chunks[0] : 0, &native_adreno_pool_chunks ? native_adreno_pool_chunks[1] : 0,
+             &native_adreno_pool_chunks ? native_adreno_pool_chunks[2] : 0, &native_adreno_pool_chunks ? native_adreno_pool_chunks[3] : 0,
+             native_adreno_pool_stats[5], native_adreno_pool_stats[6], native_adreno_pool_stats[7]);
     at = put(out, at, cap, row, sizeof row);
   }
   // GPU clients: name opens/refused/closes, live slot (- none), highest GPU address its mappings reached (MiB), last refusal.
