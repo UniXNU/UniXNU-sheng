@@ -6,8 +6,9 @@ from pathlib import Path
 import re
 import subprocess
 
-ROOT = Path(__file__).resolve().parents[2]
-pins = json.loads((ROOT / 'docs/adreno-inputs.json').read_text())
+# The build tree links kits/sheng to the device package; resolve from the tree, not through the link.
+ROOT = Path(__file__).absolute().parents[2]
+pins = json.loads((ROOT / 'scripts/data/adreno-inputs.json').read_text())
 tree = ROOT / '.cache/linux-dts'
 for name, expected in pins['board']['sha256'].items():
     path = tree / name

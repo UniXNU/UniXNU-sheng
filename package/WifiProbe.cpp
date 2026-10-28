@@ -292,7 +292,10 @@ constexpr uint64_t kRscDrv = 0x17a20000, kRscTcs = 0xd00, kCmdDb = 0x81c60000, k
 
 // [20] bit i: rail i found in the command database and voted | 1 << (8 + i) request done; [21] RSC id | TCS << 24 (negative stage on failure)
 int powerRails() {
-    static uint8_t db[kCmdDbSize];
+    // A copy of the command database, held only while the rails are voted (a static copy would sit in the kernel's __DATA).
+    struct CmdDbCopy {uint8_t *bytes = static_cast<uint8_t *>(IOMallocData(kCmdDbSize)); ~CmdDbCopy() {if (bytes) IOFreeData(bytes, kCmdDbSize);}} copy;
+    uint8_t *const db = copy.bytes;
+    if (!db) return -1;
     Window dbw = {}, rsc = {};
     if (!mapWindow(dbw, kCmdDb, kCmdDbSize)) return -1;
     for (uint64_t i = 0; i < kCmdDbSize; i += 4) {const uint32_t w = dbw.va[i / 4]; memcpy(db + i, &w, 4);}
@@ -327,7 +330,7 @@ int powerRails() {
     };
     for (unsigned i = 0; i < sizeof kRails / sizeof kRails[0]; ++i) {
         QcomRpmhResource res;
-        if (qcom_cmd_db_find(db, sizeof db, kRails[i].name, &res)) continue;
+        if (qcom_cmd_db_find(db, kCmdDbSize, kRails[i].name, &res)) continue;
         native_wifi_pmic[11 + i] = res.address;
         result |= 1u << i;
         send(res.address + 8, 7);
@@ -347,7 +350,7 @@ int powerRails() {
     // always tag); nothing has done that here. Bandwidth in the units of the manager's aux data: vote = ceil(ceil(kBps * width / buswidth) * 1000 / unit), buswidth 16.
     {
         QcomRpmhResource bcm;
-        if (!qcom_cmd_db_find(db, sizeof db, "SN7", &bcm)) {
+        if (!qcom_cmd_db_find(db, kCmdDbSize, "SN7", &bcm)) {
             uint32_t vote = 0x400;
             if (bcm.level_count >= 3 && (bcm.levels[0] | (uint32_t)bcm.levels[1] << 16) && bcm.levels[2]) {
                 const uint64_t unit = bcm.levels[0] | (uint32_t)bcm.levels[1] << 16;
@@ -581,9 +584,13 @@ void endpointLinkSetup(uint64_t sinkAddress) {
 
 // ---- Stage 6: the WiFi module (Ath12kWifi) on this board. It does its own chip power-up, MHI boot, QRTR/QMI and driver start; the board provides
 // register access, configuration space, DMA memory from the endpoint's SMMU window, firmware files from the container, a clock and a log.
-struct Arena {uint8_t *va; uint64_t iova; size_t bytes; struct Block {uint32_t off, size; bool used;} blocks[16384]; unsigned count;} gArena;
+// The block table is allocated once, at the first start (a static table would sit in the kernel's __DATA).
+constexpr unsigned kArenaBlocks = 16384;
+struct Arena {uint8_t *va; uint64_t iova; size_t bytes; struct Block {uint32_t off, size; bool used;} *blocks; unsigned count;} gArena;
 bool arenaInit() {
     if (&native_ufs_extra_va == nullptr || !native_ufs_extra_va || !native_ufs_extra_bytes) return false;
+    if (!gArena.blocks) gArena.blocks = static_cast<Arena::Block *>(IOMallocData(kArenaBlocks * sizeof(Arena::Block)));
+    if (!gArena.blocks) return false;
     gArena.va = native_ufs_extra_va; gArena.iova = native_ufs_extra_iova; gArena.bytes = native_ufs_extra_bytes;
     gArena.blocks[0] = {4096, (uint32_t)(gArena.bytes - 4096), false}; gArena.count = 1;   // the first page is the interrupt sink
     bzero(gArena.va, gArena.bytes);
@@ -605,7 +612,7 @@ void *arenaAlloc(size_t n, uint64_t *bus) {
         const uint32_t start = (b.off + align - 1) & ~(align - 1), pad = start - b.off;
         if (b.size < pad + n) continue;
         const bool tail = b.size > pad + n;
-        if (gArena.count + (pad ? 1 : 0) + (tail ? 1 : 0) > 16384) continue;
+        if (gArena.count + (pad ? 1 : 0) + (tail ? 1 : 0) > kArenaBlocks) continue;
         const unsigned extra = (pad ? 1u : 0u) + (tail ? 1u : 0u);
         const Arena::Block whole = b;
         memmove(&gArena.blocks[i + extra], &gArena.blocks[i], (gArena.count - i) * sizeof(Arena::Block));

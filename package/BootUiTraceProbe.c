@@ -12,9 +12,17 @@
 #include <arm/cpu_internal.h>
 #include <kern/processor.h>
 #include <vm/vm_map.h>
+#if __has_include(<vm/vm_map_xnu.h>)
+#include <vm/vm_map_xnu.h>
+#endif
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_port.h>
 #include <string.h>
+#if defined(__arm64e__)
+#include <ptrauth.h>
+#define BT_USER_ADDRESS_BITS 47
+#define BT_STRIP_USER_PC(value) ((uint64_t)ptrauth_strip((void *)(uintptr_t)(value), ptrauth_key_return_address))
+#endif
 #include "BootUiTraceCore.h"
 extern void proc_name(int pid, char *buf, int size);   // bsd/sys/proc.h; the header itself clashes with the Mach types used here
 #include "BootUiTraceDetails.h"
@@ -104,7 +112,7 @@ void boot_ui_trace_task(task_t task,unsigned index,int pid,const char *name,unsi
   if(state && is_saved_state64(state)) {
    struct bt_entry *e=&samples[count];memset(e,0,sizeof(*e));sample_tid[count]=thread->thread_id;sample_cs[count]=thread->c_switch;sample_cpu[count]=recount_thread_time_mach(thread);bt_kernel_stack(thread,sample_k[count]);sample_event[count]=(uint64_t)thread->wait_event;sample_state[count]=(unsigned)thread->state;sample_hint[count]=(unsigned)thread->block_hint;sample_pri[count]=thread->sched_pri;++count;
    e->index=visited;e->role=role?"BSTU"[role&3]:(!strcmp(name,"chronod")?'C':(!strcmp(name,"liveactivitiesd")?'L':'B'));
-   e->pc=(uint64_t)get_saved_state_pc(state);e->lr=(uint64_t)get_saved_state_lr(state);
+   e->pc=BT_STRIP_USER_PC((uint64_t)get_saved_state_pc(state));e->lr=BT_STRIP_USER_PC((uint64_t)get_saved_state_lr(state));
    e->fp=(uint64_t)get_saved_state_fp(state);
    e->trap=(uint64_t)get_saved_state_reg(state,16);
    for(unsigned reg=0;reg<8;++reg)e->regs[reg]=(uint64_t)get_saved_state_reg(state,reg);

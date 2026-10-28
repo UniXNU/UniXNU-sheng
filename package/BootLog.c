@@ -16,11 +16,35 @@
 #include <kern/misc_protos.h>
 #include <IOKit/IOLib.h>
 
+#if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
+extern void boot_process_start(void);
+#endif
+
 extern int native_ufs_log_open(uint64_t *, uint64_t *, const char **) __attribute__((weak_import));
 extern int native_ufs_log_write(uint64_t, uint32_t, const void *) __attribute__((weak_import));
 extern uint64_t native_ufs_export_blocks(void) __attribute__((weak_import));
 extern int native_ufs_export_write(uint64_t, uint32_t, const void *) __attribute__((weak_import));
 extern int native_ufs_log_sync(void) __attribute__((weak_import));
+// The display driver's last refused swap (LegacyDisplayProbe.cpp): counts, reason, layer state/options, request size, surface slots and the surface.
+extern volatile uint32_t native_legacy_swap_accepted_count __attribute__((weak_import));
+extern volatile uint32_t native_legacy_swap_rejected_count __attribute__((weak_import));
+extern volatile uint32_t native_legacy_rej_reason __attribute__((weak_import));
+extern volatile uint64_t native_legacy_rej_surfaces[4] __attribute__((weak_import));
+extern volatile uint64_t native_legacy_rej_surface[7] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_rej_state[3] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_rej_options[3] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_rej_size[2] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_rej_rects[2][4] __attribute__((weak_import));
+extern char native_legacy_rej_class[32] __attribute__((weak_import));
+// Signals to started cores whose SIGPdisabled had never been cleared (xnu cpu_common.c sheng_sigp_recover).
+extern volatile uint32_t sheng_sigp_recovered __attribute__((weak_import));
+extern volatile uint32_t sheng_idle_sigp_cleared __attribute__((weak_import)), sheng_idle_sigp_refused __attribute__((weak_import)),
+  sheng_idle_enter[8] __attribute__((weak_import)), sheng_idle_disallowed[8] __attribute__((weak_import));
+extern volatile uint32_t native_hid_input_events[8] __attribute__((weak_import));
+extern volatile int native_hid_input_results[8] __attribute__((weak_import));
+extern char native_hid_input_registry[2048] __attribute__((weak_import));
+extern char native_hid_input_props[1024] __attribute__((weak_import));
+extern int native_ufs_log_panic(void) __attribute__((weak_import));
 extern unsigned native_ufs_store_gpt_check(void) __attribute__((weak_import));
 extern uint32_t cs_text_fixup_parsed __attribute__((weak_import));
 extern uint32_t cs_text_fixup_applied __attribute__((weak_import));
@@ -52,6 +76,10 @@ extern volatile int native_gpu_addon2_status __attribute__((weak_import));
 extern volatile int native_gpu_addon3_stage __attribute__((weak_import));
 extern volatile int native_gpu_addon4_stage __attribute__((weak_import));
 extern volatile int native_gpu_addon4_status __attribute__((weak_import));
+extern volatile int native_gpu_addon5_stage __attribute__((weak_import));
+extern volatile int native_staged_union_stage __attribute__((weak_import));
+extern volatile int native_staged_union_status __attribute__((weak_import));
+extern volatile int native_gpu_addon5_status __attribute__((weak_import));
 extern volatile int native_gpu_addon3_status __attribute__((weak_import));
 extern volatile int native_cryptex_os_stage __attribute__((weak_import));
 extern volatile int native_cryptex_os_status __attribute__((weak_import));
@@ -139,6 +167,9 @@ extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_vm_phase_us[2][8] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_vm_kind_us[5][3] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_maint_phase[8][2] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_table_blocks[3] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_pool_stats_uncached[2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wc_audit[6] __attribute__((weak_import));
@@ -154,11 +185,19 @@ extern struct native_adreno_client_record native_adreno_client_log[8] __attribut
 struct native_adreno_client_text {char name[20]; char text[64];};
 extern struct native_adreno_client_text native_adreno_client_text[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_mount_fail[4] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_table_switches[8] __attribute__((weak_import));
+struct sheng_exc_record {char name[20]; uint32_t pid, type, esr, frames; uint64_t pc, lr, far, ret[12];};
+extern struct sheng_exc_record sheng_exc_ring[4] __attribute__((weak_import));
+extern volatile uint32_t sheng_exc_count __attribute__((weak_import));
+extern volatile uint32_t native_adreno_cp_aperture[4] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_cp_image[22] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_window_overflow[4][3] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_client_stats[5][6] __attribute__((weak_import));
 struct native_adreno_asker_record {char name[20]; uint32_t reads;};
 extern struct native_adreno_asker_record native_adreno_metal_askers[12] __attribute__((weak_import));
 extern char native_gpu_coherence_row[120] __attribute__((weak_import));
+extern char native_gpu_walk_row[80] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_walk_coherent[3] __attribute__((weak_import));
 extern size_t boot_progress_profile_rows(char *, size_t) __attribute__((weak_import));
 extern size_t boot_progress_spawn_rows(char *, size_t) __attribute__((weak_import));
 extern volatile uint64_t native_gpu_idle_sleeps __attribute__((weak_import));
@@ -221,11 +260,16 @@ struct boot_log_header {
   // version 4: the diagnostic file export (BootDiagExport.c) at block diag_first of the export region, diag_bytes long (0 = none)
   uint32_t diag_first, diag_bytes;
 };
-// Writer state for the board page: 0 off, 1 waiting for the window, 2 writing, 3 stopped after errors, 4 stopped (GPT changed).
+// Writer state for the board page: 0 off, 1 waiting for the window, 2 writing, 3 stopped after errors, 4 stopped (GPT changed);
+// 5 in a header written by boot_log_panic_flush.
 volatile uint32_t boot_log_state, boot_log_rounds, boot_log_errors;
+// Why the log window could not be opened, when the writer gave up on it (state 3 with no rounds).
+const char *volatile boot_log_open_refusal;
 volatile uint64_t boot_log_first_lba;
 static int boot_log_started;
 static uint8_t *boot_log_buffer;   // LogMsgBlocks blocks: the message buffer, then reused for a slot and the header
+static uint8_t *boot_log_panic_buffer;   // LogMsgBlocks blocks for boot_log_panic_flush, which must not touch the writer's buffer
+static struct boot_log_header *volatile boot_log_live;   // the writer's header once its window is open
 
 // The export: boot_log_export_put takes the blob's pieces in order (any thread) and writes them through a staging buffer straight into
 // the half of the export region that does not hold the last complete blob; once the last piece is on the medium that blob becomes the
@@ -336,6 +380,20 @@ static size_t put(char *out, size_t at, size_t cap, const char *text, size_t max
   if (at + 1 < cap) out[at++] = '\n';
   return at;
 }
+// The kernel's sampling profile (sleh_irq on iPadOS 27): one packed word per interrupt, pid << 48 | kernel << 47 | pc.
+extern uint64_t sheng_prof_ring[32768] __attribute__((weak_import));
+extern uint32_t sheng_prof_head __attribute__((weak_import));
+extern uint32_t sheng_prof_cpu[8] __attribute__((weak_import));
+extern void proc_name(int pid, char *buf, int size);
+static uint64_t prof_snap[32768], prof_rank[65536];
+static void prof_sort(uint64_t *v, size_t n) {
+  for (size_t start = n / 2; start-- > 0;)
+    for (size_t root = start;;) {size_t c = 2 * root + 1; if (c >= n) break; if (c + 1 < n && v[c + 1] > v[c]) ++c; if (v[root] >= v[c]) break;
+      uint64_t t = v[root]; v[root] = v[c]; v[c] = t; root = c;}
+  for (size_t end = n; end > 1;) {--end; uint64_t t = v[0]; v[0] = v[end]; v[end] = t;
+    for (size_t root = 0;;) {size_t c = 2 * root + 1; if (c >= end) break; if (c + 1 < end && v[c + 1] > v[c]) ++c; if (v[root] >= v[c]) break;
+      t = v[root]; v[root] = v[c]; v[c] = t; root = c;}}
+}
 
 static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   size_t at = 0;
@@ -366,15 +424,21 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     at = put(out, at, cap, row, sizeof row);
   }
   // The payload's GPU addon (kern_exec.c native_gpu_addon_install): files in it (-1 none), written, already equal, failed, last error; then
-  // the stage/status of the boot-time addon mounts (stage 5 = mounted and both entries visible): plugin, launchd job, wallpaper, audio
+  // the stage/status of the boot-time addon mounts (stage 5 = mounted and both entries visible): plugin, launchd job, wallpaper, audio, wallpaper floating layer
   // server plug-in.
   if (&native_gpu_addon_files && &native_gpu_addon_stage) {
-    char row[140];
-    snprintf(row, sizeof row, "A files=%d wr=%d same=%d fail=%d err=%d mount=%d/%d mount2=%d/%d mount3=%d/%d mount4=%d/%d", native_gpu_addon_files,
+    char row[180];
+    snprintf(row, sizeof row, "A files=%d wr=%d same=%d fail=%d err=%d mount=%d/%d mount2=%d/%d mount3=%d/%d mount4=%d/%d mount5=%d/%d",
+             native_gpu_addon_files,
              native_gpu_addon_written, native_gpu_addon_same, native_gpu_addon_failed, native_gpu_addon_error, native_gpu_addon_stage,
              native_gpu_addon_status, native_gpu_addon2_stage, native_gpu_addon2_status, &native_gpu_addon3_stage ? native_gpu_addon3_stage : 0,
              &native_gpu_addon3_status ? native_gpu_addon3_status : 0, &native_gpu_addon4_stage ? native_gpu_addon4_stage : 0,
-             &native_gpu_addon4_status ? native_gpu_addon4_status : 0);
+             &native_gpu_addon4_status ? native_gpu_addon4_status : 0, &native_gpu_addon5_stage ? native_gpu_addon5_stage : 0,
+             &native_gpu_addon5_status ? native_gpu_addon5_status : 0);
+    at = put(out, at, cap, row, sizeof row);
+    // the staged system apps' union view over /Applications (owner-staged-apps=1): stage 5 = mounted, both entries visible
+    snprintf(row, sizeof row, "[staged apps union] stage %d status %d", &native_staged_union_stage ? native_staged_union_stage : 0,
+             &native_staged_union_status ? native_staged_union_status : 0);
     at = put(out, at, cap, row, sizeof row);
   }
   // The OS cryptex path (kern_exec.c native_cryptex_os_view; stage 5 = a WebKit extension found through /System/Cryptexes/OS) and the
@@ -448,6 +512,38 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     native_legacy_prepare_report(row, sizeof row);
     at = put(out, at, cap, "[scanout prepare]", 18); at = put(out, at, cap, row, sizeof row);
   }
+  if (&sheng_sigp_recovered) {
+    char row[48];
+    snprintf(row, sizeof row, "[sigp] recovered=%u", sheng_sigp_recovered);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  if (&sheng_idle_enter) {
+    char row[160];
+    snprintf(row, sizeof row, "[idle] cleared=%u refused=%u enter=%u/%u/%u/%u/%u/%u/%u/%u disallowed=%u/%u/%u/%u/%u/%u/%u/%u",
+             sheng_idle_sigp_cleared, sheng_idle_sigp_refused, sheng_idle_enter[0], sheng_idle_enter[1], sheng_idle_enter[2], sheng_idle_enter[3],
+             sheng_idle_enter[4], sheng_idle_enter[5], sheng_idle_enter[6], sheng_idle_enter[7], sheng_idle_disallowed[0], sheng_idle_disallowed[1],
+             sheng_idle_disallowed[2], sheng_idle_disallowed[3], sheng_idle_disallowed[4], sheng_idle_disallowed[5], sheng_idle_disallowed[6],
+             sheng_idle_disallowed[7]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  if (&native_legacy_swap_rejected_count && native_legacy_swap_rejected_count) {
+    char row[220];
+    snprintf(row, sizeof row, "REJ acc=%u rej=%u r=%u st=%x/%x/%x op=%x/%x/%x wh=%ux%u s=%llx/%llx/%llx/%llx cls=%.24s",
+             native_legacy_swap_accepted_count, native_legacy_swap_rejected_count, native_legacy_rej_reason, native_legacy_rej_state[0],
+             native_legacy_rej_state[1], native_legacy_rej_state[2], native_legacy_rej_options[0], native_legacy_rej_options[1],
+             native_legacy_rej_options[2], native_legacy_rej_size[0], native_legacy_rej_size[1],
+             (unsigned long long)native_legacy_rej_surfaces[0], (unsigned long long)native_legacy_rej_surfaces[1],
+             (unsigned long long)native_legacy_rej_surfaces[2], (unsigned long long)native_legacy_rej_surfaces[3], native_legacy_rej_class);
+    at = put(out, at, cap, "[swap rejected]", 16); at = put(out, at, cap, row, sizeof row);
+    snprintf(row, sizeof row, "REJ2 rect0=%u,%u,%u,%u rect1=%u,%u,%u,%u surf %llux%llu fmt=%08llx planes=%llu stride=%llu alloc=%llu len=%llu",
+             native_legacy_rej_rects[0][0], native_legacy_rej_rects[0][1], native_legacy_rej_rects[0][2], native_legacy_rej_rects[0][3],
+             native_legacy_rej_rects[1][0], native_legacy_rej_rects[1][1], native_legacy_rej_rects[1][2], native_legacy_rej_rects[1][3],
+             (unsigned long long)native_legacy_rej_surface[0], (unsigned long long)native_legacy_rej_surface[1],
+             (unsigned long long)native_legacy_rej_surface[2], (unsigned long long)native_legacy_rej_surface[3],
+             (unsigned long long)native_legacy_rej_surface[4], (unsigned long long)native_legacy_rej_surface[5],
+             (unsigned long long)native_legacy_rej_surface[6]);
+    at = put(out, at, cap, row, sizeof row);
+  }
   if (&native_legacy_swap_timeline) {
     static char timeline[4096];
     if (native_legacy_swap_timeline(timeline, sizeof timeline)) {
@@ -491,6 +587,29 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       for (unsigned i = 0; i < n && at + 130 < cap; i += 116) {
         char row[124];
         snprintf(row, sizeof row, "D%03u %.116s", i / 116, props + i);
+        at = put(out, at, cap, row, sizeof row);
+      }
+    }
+  }
+  // HID input (HidInputProbe.cpp): report counts and handleReport results per kind, then the services below the last checked input
+  // device and its properties, so a report that leaves the device can be followed to the event driver that took it.
+  if (&native_hid_input_events && &native_hid_input_results) {
+    char row[124];
+    snprintf(row, sizeof row, "[hid] events %u %u %u %u %u %u %u %u results %d %d %d %d %d %d %d %d",
+             native_hid_input_events[0], native_hid_input_events[1], native_hid_input_events[2], native_hid_input_events[3],
+             native_hid_input_events[4], native_hid_input_events[5], native_hid_input_events[6], native_hid_input_events[7],
+             native_hid_input_results[0], native_hid_input_results[1], native_hid_input_results[2], native_hid_input_results[3],
+             native_hid_input_results[4], native_hid_input_results[5], native_hid_input_results[6], native_hid_input_results[7]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  if (&native_hid_input_registry && &native_hid_input_props) {
+    const char *texts[2] = {native_hid_input_registry, native_hid_input_props};
+    const char tags[2] = {'R', 'P'};
+    for (unsigned t = 0; t < 2; ++t) {
+      const size_t n = strnlen(texts[t], t ? 1024 : 2048);
+      for (size_t i = 0; i < n && at + 130 < cap; i += 112) {
+        char row[124];
+        snprintf(row, sizeof row, "H%c%02u %.112s", tags[t], (unsigned)(i / 112), texts[t] + i);
         at = put(out, at, cap, row, sizeof row);
       }
     }
@@ -599,11 +718,93 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
     at = put(out, at, cap, row, sizeof row);
   }
-  // [gpu windows]: per client window the mappings that fell outside it (count, last size KiB, last end MiB), the latest failed mount (stage 1 no free
-  // slot, 2 core open, 3 window scope; status; slot; count), then one line per process other than the render server: why its Metal device failed.
+  // [exc]: the last four user exceptions of the processes sheng-exc-name lists (oldest first): name[pid] type, pc, lr, far, esr, then the
+  // return addresses of the frame chain (dyld cache addresses: slide them back offline).
+  if (&sheng_exc_ring && &sheng_exc_count && sheng_exc_count) {
+    char row[300];
+    const uint32_t n = sheng_exc_count, first = n > 4 ? n - 4 : 0;
+    for (uint32_t k = first; k < n; ++k) {
+      const struct sheng_exc_record *e = &sheng_exc_ring[k & 3];
+      size_t used = (size_t)snprintf(row, sizeof row, "[exc %u] %.19s[%u] t%u pc %llx lr %llx far %llx esr %x |", k, e->name, e->pid, e->type,
+                                     (unsigned long long)e->pc, (unsigned long long)e->lr, (unsigned long long)e->far, e->esr);
+      for (uint32_t i = 0; i < e->frames && i < 12 && used < sizeof row - 12; ++i)
+        used += (size_t)snprintf(row + used, sizeof row - used, " %llx", (unsigned long long)e->ret[i]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // [prof]: the last 32K interrupts: samples per CPU, then the processes they landed in (pid:name:count, busiest first; pid 0 the kernel's
+  // own threads, idle included). [prof N]: for the three busiest, user and kernel samples and their hottest PCs (u/k, low 40 bits).
+  if (&sheng_prof_head && &sheng_prof_ring) {
+    const uint32_t head = sheng_prof_head;
+    const size_t n = head < 32768 ? head : 32768;
+    if (n) {
+      memcpy(prof_snap, sheng_prof_ring, n * sizeof(uint64_t));
+      prof_sort(prof_snap, n);
+      size_t procs = 0;
+      for (size_t i = 0; i < n;) {size_t j = i; const uint64_t pid = prof_snap[i] >> 48; while (j < n && prof_snap[j] >> 48 == pid) ++j;
+        prof_rank[procs++] = ((uint64_t)(j - i) << 16) | pid; i = j;}
+      prof_sort(prof_rank, procs);
+      char row[400];
+      size_t used = (size_t)snprintf(row, sizeof row, "[prof] samples=%u cpu", head);
+      for (unsigned c = 0; c < 8; ++c) used += (size_t)snprintf(row + used, sizeof row - used, " %u", sheng_prof_cpu[c]);
+      used += (size_t)snprintf(row + used, sizeof row - used, " |");
+      for (size_t k = 0; k < 12 && k < procs && used < sizeof row - 40; ++k) {
+        const int pid = (int)(prof_rank[procs - 1 - k] & 0xffff);
+        char name[24] = "kernel";
+        if (pid) proc_name(pid, name, sizeof name);
+        used += (size_t)snprintf(row + used, sizeof row - used, " %d:%s:%llu", pid, name, (unsigned long long)(prof_rank[procs - 1 - k] >> 16));
+      }
+      at = put(out, at, cap, row, sizeof row);
+      for (size_t k = 0; k < 3 && k < procs; ++k) {
+        const uint64_t pid = prof_rank[procs - 1 - k] & 0xffff;
+        size_t first = 0; while (first < n && prof_snap[first] >> 48 != pid) ++first;
+        size_t last = first; while (last < n && prof_snap[last] >> 48 == pid) ++last;
+        size_t kernel = 0; for (size_t i = first; i < last; ++i) kernel += (prof_snap[i] >> 47) & 1;
+        // the hottest PCs: (count << 48 | index of the first sample), ranked
+        size_t m = 0;
+        for (size_t i = first; i < last;) {size_t j = i; while (j < last && prof_snap[j] == prof_snap[i]) ++j;
+          prof_rank[procs + m++] = ((uint64_t)(j - i) << 48) | i; i = j;}
+        prof_sort(prof_rank + procs, m);
+        used = (size_t)snprintf(row, sizeof row, "[prof %llu] n=%lu kernel=%lu |", (unsigned long long)pid, (unsigned long)(last - first),
+                                (unsigned long)kernel);
+        for (size_t t = 0; t < 10 && t < m && used < sizeof row - 32; ++t) {
+          const uint64_t e = prof_rank[procs + m - 1 - t], word = prof_snap[e & 0xffffffffffffull];
+          used += (size_t)snprintf(row + used, sizeof row - used, " %c%llx:%llu", (word >> 47) & 1 ? 'k' : 'u',
+                                   (unsigned long long)(word & 0xffffffffffull), (unsigned long long)(e >> 48));
+        }
+        at = put(out, at, cap, row, sizeof row);
+      }
+    }
+  }
+  // [gpu tables]: per-process GPU page tables: the switch mode (2 CP, 1 CPU), the SCM CP-aperture availability/result and the CP switch
+  // check (IOReturn), then switches by the CP and by the CPU, address spaces made, freed, live and peak, the last
+  // failure (IOReturn; bit 31: a free) and the step a failed make stopped at.
+  if (&native_adreno_table_switches) {
+    char row[200];
+    snprintf(row, sizeof row, "[gpu tables] mode %u aperture %x/%x check %x | cp %u cpu %u made %u freed %u live %u peak %u fail %x step %u | blocks %u took %u pool %u",
+             &native_adreno_cp_aperture ? native_adreno_cp_aperture[3] : 0, &native_adreno_cp_aperture ? native_adreno_cp_aperture[0] : 0,
+             &native_adreno_cp_aperture ? native_adreno_cp_aperture[1] : 0, &native_adreno_cp_aperture ? native_adreno_cp_aperture[2] : 0,
+             native_adreno_table_switches[0], native_adreno_table_switches[1], native_adreno_table_switches[2],
+             native_adreno_table_switches[3], native_adreno_table_switches[4], native_adreno_table_switches[5],
+             native_adreno_table_switches[6], native_adreno_table_switches[7], &native_adreno_table_blocks ? native_adreno_table_blocks[0] : 0,
+             &native_adreno_table_blocks ? native_adreno_table_blocks[1] : 0, &native_adreno_table_blocks ? native_adreno_table_blocks[2] : 0);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // [gpu cp image]: the GPU bank's registers before / after the CP switch check (SCTLR TCR TCR2 MAIR0 TTBR1 lo/hi CBAR FSR, then the kit
+  // status), and a fault the switch left: FAR lo/hi, FSYNR0, the status after clearing (0x100|kit).
+  if (&native_adreno_cp_image) {
+    char row[300];
+    const volatile uint32_t *v = native_adreno_cp_image;
+    snprintf(row, sizeof row, "[gpu cp image] %x %x %x %x %x %x %x %x k%u | %x %x %x %x %x %x %x %x k%u | far %x:%x fsynr %x after %x",
+             v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[16], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15], v[17],
+             v[19], v[18], v[20], v[21]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // [gpu windows]: per client window the mappings that fell outside it (count, last size KiB, last end MiB), the latest failed mount (stage 1 no address
+  // space, 2 core open, 3 window scope; status; queue base; count), then one line per process other than the render server: why its Metal device failed.
   if (&native_adreno_window_overflow && &native_adreno_mount_fail) {
     char row[300];
-    snprintf(row, sizeof row, "[gpu windows] ovf %u/%uK/%uM %u/%uK/%uM %u/%uK/%uM %u/%uK/%uM | mount fail stage %u st %x slot %u n %u",
+    snprintf(row, sizeof row, "[gpu windows] ovf %u/%uK/%uM %u/%uK/%uM %u/%uK/%uM %u/%uK/%uM | mount fail stage %u st %x qbase %u n %u",
              native_adreno_window_overflow[0][0], native_adreno_window_overflow[0][1], native_adreno_window_overflow[0][2],
              native_adreno_window_overflow[1][0], native_adreno_window_overflow[1][1], native_adreno_window_overflow[1][2],
              native_adreno_window_overflow[2][0], native_adreno_window_overflow[2][1], native_adreno_window_overflow[2][2],
@@ -633,6 +834,13 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_adreno_coherent_skips ? native_adreno_coherent_skips[3] : 0,
              (unsigned long long)(&native_gpu_idle_sleeps ? native_gpu_idle_sleeps : 0), (unsigned long long)(&native_gpu_idle_spins ? native_gpu_idle_spins : 0),
              (unsigned long long)(&native_gpu_idle_timeouts ? native_gpu_idle_timeouts : 0));
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // The SMMU table walk coherence proof (GpuPowerProbe walkProbe) and the table pages published since: by ordering alone, cleaned.
+  if (&native_gpu_walk_row && native_gpu_walk_row[0] && &native_adreno_walk_coherent) {
+    char row[160];
+    snprintf(row, sizeof row, "[walk] %.70s | on=%u ordered=%u cleaned=%u", native_gpu_walk_row, native_adreno_walk_coherent[0],
+             native_adreno_walk_coherent[1], native_adreno_walk_coherent[2]);
     at = put(out, at, cap, row, sizeof row);
   }
   // Edge contacts (drivers/ShengHidInput edge::): wrapper installed, contacts begun, of them from an edge, events skipped.
@@ -667,6 +875,20 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_adreno_wc_audit[0], native_adreno_wc_audit[1], native_adreno_wc_audit[2], native_adreno_wc_audit[5],
              (unsigned long long)(native_adreno_reassert_ticks * 1000 / f), (unsigned long long)native_adreno_cache_stats[3],
              (unsigned long long)(native_adreno_cache_stats[0] * 1000 / f), (unsigned long long)(native_adreno_cache_stats[1] >> 20));
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // [maint]: the GPU driver's CPU cache maintenance by the phase that asked for it, passes/KiB: pool setup, allocation, map, submission,
+  // unmap, completion, SMMU table pages, diagnostics; then the imports whose pages were all non-cacheable (no maintenance) and the others.
+  if (&native_adreno_maint_phase && &native_adreno_pool_stats_uncached) {
+    char row[300];
+    const volatile uint64_t (*p)[2] = native_adreno_maint_phase;
+    snprintf(row, sizeof row, "[maint] pool %llu/%llu alloc %llu/%llu map %llu/%llu submit %llu/%llu unmap %llu/%llu complete %llu/%llu "
+             "table %llu/%llu diag %llu/%llu | imports uncached %u cached %u",
+             (unsigned long long)p[0][0], (unsigned long long)p[0][1], (unsigned long long)p[1][0], (unsigned long long)p[1][1],
+             (unsigned long long)p[2][0], (unsigned long long)p[2][1], (unsigned long long)p[3][0], (unsigned long long)p[3][1],
+             (unsigned long long)p[4][0], (unsigned long long)p[4][1], (unsigned long long)p[5][0], (unsigned long long)p[5][1],
+             (unsigned long long)p[6][0], (unsigned long long)p[6][1], (unsigned long long)p[7][0], (unsigned long long)p[7][1],
+             native_adreno_pool_stats_uncached[1], native_adreno_pool_stats_uncached[0]);
     at = put(out, at, cap, row, sizeof row);
   }
   // CPU clusters and L3 as voted (CpuFreqProbe, refreshed every round) and the GPU's initial HFI perf/bandwidth vote.
@@ -1349,7 +1571,7 @@ static void writer(void *arg, wait_result_t result) {
   boot_log_state = 1;
   // The window exists once NativeUfs has read the root layout; until then the open is refused ("no root layout").
   while (!native_ufs_log_open(&first, &blocks, &why)) {
-    if (strcmp(why, "no root layout")) {boot_log_state = 3; return;}
+    if (strcmp(why, "no root layout")) {boot_log_open_refusal = why; boot_log_state = 3; return;}
     IOSleep(1000);
   }
   boot_log_first_lba = first;
@@ -1359,7 +1581,7 @@ static void writer(void *arg, wait_result_t result) {
     export_region = (uint32_t)native_ufs_export_blocks();
     IOLockUnlock(export_lock);
   }
-  struct boot_log_header h;
+  static struct boot_log_header h;
   memset(&h, 0, sizeof h);
   memcpy(h.magic, "SHLOG001", 8);
   h.version = 4; h.header_bytes = sizeof h;
@@ -1381,6 +1603,7 @@ static void writer(void *arg, wait_result_t result) {
   uint32_t diag_at = 0;
   if (&boot_diag_scan && &boot_diag_stream) PE_parse_boot_argn("sheng-diag-export", &diag_at, sizeof diag_at);
   uint32_t errors = 0;
+  boot_log_live = &h;
   boot_log_state = 2;
   for (;;) {
     const unsigned now = (unsigned)((log_ticks() - start) / f);
@@ -1428,6 +1651,33 @@ static void writer(void *arg, wait_result_t result) {
   }
 }
 
+// Called by the panic screen (scripts/xnu-panic-screen.c) once the message is in boot_progress_panic_text, with interrupts masked and the
+// other CPUs still running: the message buffer with the panic text appended, then a header (state 5) that makes it visible, written
+// through NativeUfs's panic path. Only the first call writes; a panic before the writer opened its window writes nothing.
+void boot_log_panic_flush(void) {
+  static volatile int done;
+  struct boot_log_header *live = boot_log_live;
+  if (done || !live || !boot_log_panic_buffer || !&native_ufs_log_panic || !native_ufs_log_panic()) return;
+  done = 1;
+  uint32_t n = copy_msgbuf(boot_log_panic_buffer);
+  const uint32_t cap = LogMsgBlocks * LogBlock;
+  if (&boot_progress_panic_text && boot_progress_panic_text[0]) {
+    uint32_t len = (uint32_t)strnlen(boot_progress_panic_text, 2048);
+    if (n > cap - len - 10) n = cap - len - 10;   // a full buffer loses its newest lines to the panic text
+    memcpy(boot_log_panic_buffer + n, "\n[panic] ", 9);
+    memcpy(boot_log_panic_buffer + n + 9, boot_progress_panic_text, len);
+    n += 9 + len;
+    boot_log_panic_buffer[n++] = '\n';
+  }
+  struct boot_log_header h = *live;
+  h.msg_bytes = n; h.rounds++; h.state = 5;
+  native_ufs_log_write(LogMsgFirst, LogMsgBlocks, boot_log_panic_buffer);
+  memset(boot_log_panic_buffer, 0, LogBlock);
+  memcpy(boot_log_panic_buffer, &h, sizeof h);
+  native_ufs_log_write(0, 1, boot_log_panic_buffer);
+  native_ufs_log_sync();
+}
+
 // Called by the board page's monitor once a second; starts the writer the first time when sheng-log=1.
 void boot_log_tick(unsigned now) {
   (void)now;
@@ -1448,7 +1698,11 @@ void boot_log_tick(unsigned now) {
   if (!&native_ufs_log_open || !&native_ufs_log_write || !&native_ufs_log_sync) return;
   boot_log_buffer = (uint8_t *)IOMallocAligned(LogMsgBlocks * LogBlock, LogBlock);
   if (!boot_log_buffer) return;
+  boot_log_panic_buffer = (uint8_t *)IOMallocAligned(LogMsgBlocks * LogBlock, LogBlock);
   export_lock = IOLockAlloc();
+#if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
+  boot_process_start();
+#endif
   thread_t thread;
   if (kernel_thread_start_priority(writer, 0, BASEPRI_KERNEL, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }

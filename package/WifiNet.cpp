@@ -28,7 +28,7 @@ extern "C" {
 }
 #include <net/if_types.h>
 #include <netinet/in.h>
-#include <sys/mbuf.h>
+#include <sys/kpi_mbuf.h>
 #include <kern/locks.h>
 #include <kern/thread.h>
 #include <kern/thread_call.h>
