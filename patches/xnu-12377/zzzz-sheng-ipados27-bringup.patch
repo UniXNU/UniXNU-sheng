@@ -1073,7 +1073,7 @@ index 51fdc9d..8f83d0a 100644
  #else
  #define CACHE_ATTRINDX_RT CACHE_ATTRINDX_POSTED_COMBINED_REORDERED
 diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
-index d6fff49..3a14357 100644
+index d6fff49..4c6700f 100644
 --- a/osfmk/arm64/sleh.c
 +++ b/osfmk/arm64/sleh.c
 @@ -1663,7 +1663,7 @@ user_fault_matches_pac_error_code(vm_offset_t fault_addr, uint64_t pc, bool data
@@ -1093,7 +1093,7 @@ index d6fff49..3a14357 100644
 + * Sampling profile for the board log (sheng): every interrupt records the interrupted task's pid and PC, user (EL0) or kernel, in a
 + * ring of the last 32K samples, packed as pid << 48 | kernel << 47 | pc & (2^47 - 1). The log writer ranks them per process.
 + */
-+#define SHENG_PROF_SAMPLES 32768
++#define SHENG_PROF_SAMPLES 1024
 +uint64_t sheng_prof_ring[SHENG_PROF_SAMPLES];
 +uint32_t sheng_prof_head;
 +uint32_t sheng_prof_cpu[8];

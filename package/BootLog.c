@@ -381,11 +381,11 @@ static size_t put(char *out, size_t at, size_t cap, const char *text, size_t max
   return at;
 }
 // The kernel's sampling profile (sleh_irq on iPadOS 27): one packed word per interrupt, pid << 48 | kernel << 47 | pc.
-extern uint64_t sheng_prof_ring[32768] __attribute__((weak_import));
+extern uint64_t sheng_prof_ring[1024] __attribute__((weak_import));
 extern uint32_t sheng_prof_head __attribute__((weak_import));
 extern uint32_t sheng_prof_cpu[8] __attribute__((weak_import));
 extern void proc_name(int pid, char *buf, int size);
-static uint64_t prof_snap[32768], prof_rank[65536];
+static uint64_t prof_snap[1024], prof_rank[2048];
 static void prof_sort(uint64_t *v, size_t n) {
   for (size_t start = n / 2; start-- > 0;)
     for (size_t root = start;;) {size_t c = 2 * root + 1; if (c >= n) break; if (c + 1 < n && v[c + 1] > v[c]) ++c; if (v[root] >= v[c]) break;
@@ -736,7 +736,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // own threads, idle included). [prof N]: for the three busiest, user and kernel samples and their hottest PCs (u/k, low 40 bits).
   if (&sheng_prof_head && &sheng_prof_ring) {
     const uint32_t head = sheng_prof_head;
-    const size_t n = head < 32768 ? head : 32768;
+    const size_t n = head < 1024 ? head : 1024;
     if (n) {
       memcpy(prof_snap, sheng_prof_ring, n * sizeof(uint64_t));
       prof_sort(prof_snap, n);
