@@ -769,12 +769,16 @@ void micFail(int s) {native_mic_stats[0] = -s;}
 
 // The codec's 1.8 V rail (vreg_l15b_1p8) through active TCS 2 of the apps RSC (0: the WiFi bring-up, 1: the DSP's proxy votes).
 bool micRail() {
-    static uint8_t db[0x20000];
+    // A copy of the command database, held only while the rail is voted (a static copy would sit in the kernel's __DATA).
+    constexpr size_t kDbSize = 0x20000;
+    struct CmdDbCopy {uint8_t *bytes = static_cast<uint8_t *>(IOMallocData(kDbSize)); ~CmdDbCopy() {if (bytes) IOFreeData(bytes, kDbSize);}} copy;
+    uint8_t *const db = copy.bytes;
+    if (!db) return false;
     Region dbw, rsc;
-    if (!mapRegion(0x81c60000ULL, sizeof db, dbw)) return false;
-    for (size_t i = 0; i < sizeof db; i += 4) {const uint32_t w = rd32(dbw.va, (uint32_t)i); memcpy(db + i, &w, 4);}
+    if (!mapRegion(0x81c60000ULL, kDbSize, dbw)) return false;
+    for (size_t i = 0; i < kDbSize; i += 4) {const uint32_t w = rd32(dbw.va, (uint32_t)i); memcpy(db + i, &w, 4);}
     QcomRpmhResource res;
-    if (qcom_cmd_db_find(db, sizeof db, "ldob15", &res)) return false;
+    if (qcom_cmd_db_find(db, kDbSize, "ldob15", &res)) return false;
     native_mic_stats[2] = 1;
     if (!mapRegion(0x17a20000ULL, 0x10000, rsc)) return false;
     const QcomRscLayout layout = qcom_rsc_layout(rd32(rsc.va, 0));

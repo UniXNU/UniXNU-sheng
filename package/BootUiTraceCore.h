@@ -7,6 +7,12 @@
 #define BT_FRAMES 18   /* the banner shows 8; the boot log's deep rows the rest (a blocked thread's caller names what it waits for) */
 #define BT_ROWS 14
 #define BT_HALF 60
+#ifndef BT_USER_ADDRESS_BITS
+#define BT_USER_ADDRESS_BITS 39
+#endif
+#ifndef BT_STRIP_USER_PC
+#define BT_STRIP_USER_PC(value) (value)
+#endif
 struct bt_entry {
  uint64_t pc,lr,fp,frames[BT_FRAMES],regs[8],trap;
  int peer;unsigned peer_code;
@@ -16,7 +22,7 @@ struct bt_entry {
 struct bt_groups {struct bt_entry entries[BT_MAX_GROUPS];unsigned count,threads,read_failures;};
 typedef int (*bt_reader)(void *,uint64_t,void *,unsigned);
 static int bt_user(uint64_t address,unsigned size) {
- return address>=4096 && address<(UINT64_C(1)<<39) && size<=(UINT64_C(1)<<39)-address;
+ return address>=4096 && address<(UINT64_C(1)<<BT_USER_ADDRESS_BITS) && size<=(UINT64_C(1)<<BT_USER_ADDRESS_BITS)-address;
 }
 static void bt_walk_n(struct bt_entry *e,bt_reader read,void *context,uint64_t *frames,unsigned limit) {
  uint64_t fp=e->fp;
@@ -24,6 +30,7 @@ static void bt_walk_n(struct bt_entry *e,bt_reader read,void *context,uint64_t *
   uint64_t pair[2]={0};
   if(!bt_user(fp,sizeof(pair)) || (fp&15)){e->error=2;break;}
   if(read(context,fp,pair,sizeof(pair))){e->error=1;break;}
+  pair[1]=BT_STRIP_USER_PC(pair[1]);
   if(pair[1] && !bt_user(pair[1],4)){e->error=2;break;}
   frames[i]=pair[1];
   if(!pair[0])break;

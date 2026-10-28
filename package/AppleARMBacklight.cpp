@@ -273,6 +273,7 @@ class ShengBacklight : public IOService {
     // why the event source actions cast statically. No loaded kext looks this class up (AppleSPU, AppleEmbeddedLightSensor and
     // AppleM68Buttons do, and are not part of this kernel), and the service is never freed.
     static inline const OSMetaClass *gAppleClass = nullptr;
+    static inline bool gImpersonating = false;
     static const OSMetaClass *appleMetaClass(const OSMetaClassBase *) {return gAppleClass;}
     bool impersonate() {
         enum {kSlots = 320, kGetMetaClass = 7};
@@ -280,6 +281,12 @@ class ShengBacklight : public IOService {
         gAppleClass = name ? OSMetaClass::getMetaClassWithName(name) : nullptr;
         OSSafeReleaseNULL(name);
         if (!gAppleClass) return false;
+#if __has_feature(ptrauth_calls)
+        // arm64e: the vtable pointer and its entries are signed, so a copied vtable would not authenticate. getMetaClass itself
+        // answers the AppleARMBacklight metaclass once this flag is set (its definition below the class).
+        __atomic_store_n(&gImpersonating, true, __ATOMIC_RELEASE);
+        return true;
+#endif
         uintptr_t *copy = static_cast<uintptr_t *>(IOMalloc(kSlots * sizeof(uintptr_t)));
         if (!copy) return false;
         memcpy(copy, *reinterpret_cast<uintptr_t **>(this), kSlots * sizeof(uintptr_t));
@@ -358,7 +365,22 @@ public:
         return kIOReturnSuccess;
     }
 };
+#if __has_feature(ptrauth_calls)
+// OSDefineMetaClassAndStructors(ShengBacklight, IOService) with getMetaClass answering the AppleARMBacklight metaclass after impersonate().
+ShengBacklight::MetaClass ShengBacklight::gMetaClass;
+const OSMetaClass * const ShengBacklight::metaClass = &ShengBacklight::gMetaClass;
+const OSMetaClass * const ShengBacklight::superClass = &IOService::gMetaClass;
+ShengBacklight::ShengBacklight(const OSMetaClass *meta) : IOService(meta) {}
+ShengBacklight::~ShengBacklight() {}
+const OSMetaClass *ShengBacklight::getMetaClass() const
+{
+    return __atomic_load_n(&gImpersonating, __ATOMIC_ACQUIRE) && gAppleClass ? gAppleClass : &gMetaClass;
+}
+OSMetaClassConstructorInit(ShengBacklight, IOService, )
+OSDefineDefaultStructors(ShengBacklight, IOService)
+#else
 OSDefineMetaClassAndStructors(ShengBacklight, IOService)
+#endif
 
 // Called by BacklightProbe.cpp once this file's classes are registered (its static initializer runs between preModLoad and postModLoad).
 // The service starts with the engines' level reads in flight and publishes itself when they are answered.
