@@ -4,6 +4,8 @@ Prints one line "OBJ <path>" per object. The module lays out its generated inclu
 import subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from kernel_target import TRIPLE
 
 module = Path(sys.argv[1]).resolve()
 out = Path(sys.argv[2]).resolve()
@@ -11,7 +13,7 @@ out.mkdir(parents=True, exist_ok=True)
 subprocess.run(['bash', str(module / 'tools/prepare.sh')], check=True, stdout=subprocess.DEVNULL)
 clang = subprocess.run(['xcrun', '-f', 'clang'], check=True, capture_output=True, text=True).stdout.strip()
 resource = subprocess.run([clang, '-print-resource-dir'], check=True, capture_output=True, text=True).stdout.strip() + '/include'
-flags = ['-target', 'arm64-apple-ios17.0', '-mkernel', '-O2', '-g0', '-ffreestanding', '-fno-builtin', '-fno-common', '-fno-strict-aliasing', '-fwrapv',
+flags = ['-target', TRIPLE, '-mkernel', '-O2', '-g0', '-ffreestanding', '-fno-builtin', '-fno-common', '-fno-strict-aliasing', '-fwrapv',
          '-fno-stack-protector', '-Wno-incompatible-pointer-types', '-Wno-error', '-fno-delete-null-pointer-checks', '-mgeneral-regs-only', '-momit-leaf-frame-pointer', '-std=gnu11', '-w',
          '-DCONFIG_ATH12K_DEBUG', '-nostdinc', '-isystem', str(module / 'shim/libc'), '-isystem', resource, '-include', 'lx_pci.h',
          '-I', str(module / 'shim/include'), '-I', str(module / 'include'), '-I', str(module / 'out/pinned'), '-I', str(module / 'src')]
