@@ -200,6 +200,7 @@ extern volatile uint32_t native_adreno_cp_aperture[4] __attribute__((weak_import
 extern volatile uint32_t native_adreno_cp_image[22] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_window_overflow[4][3] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_client_stats[5][6] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_client_bytes[5][2] __attribute__((weak_import));
 struct native_adreno_asker_record {char name[20]; uint32_t reads;};
 extern struct native_adreno_asker_record native_adreno_metal_askers[12] __attribute__((weak_import));
 extern char native_gpu_coherence_row[120] __attribute__((weak_import));
@@ -1417,13 +1418,15 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     at = put(out, at, cap, row, sizeof row);
   }
   if (&native_adreno_client_stats) {
-    // per client slot: live objects/peak, refused BoAllocs, last refusal status and bytes, highest mapped end in the window (MiB)
-    char row[200];
+    // per client slot: live objects/peak, refused BoAllocs, last refusal status and bytes, highest mapped end in the window (MiB),
+    // MiB of its own BOs live/peak
+    char row[260];
     int n = snprintf(row, sizeof row, "[gpu objects]");
     for (unsigned k = 0; k < 5; ++k)
       if (native_adreno_client_stats[k][1] || native_adreno_client_stats[k][2])
         n += snprintf(row + n, sizeof row - n, " s%u %u/%u r%u %x/%u w%uM", k, native_adreno_client_stats[k][0], native_adreno_client_stats[k][1],
-                      native_adreno_client_stats[k][2], native_adreno_client_stats[k][3], native_adreno_client_stats[k][4], native_adreno_client_stats[k][5]);
+                      native_adreno_client_stats[k][2], native_adreno_client_stats[k][3], native_adreno_client_stats[k][4], native_adreno_client_stats[k][5]),
+      n += &native_adreno_client_bytes ? snprintf(row + n, sizeof row - n, " o%u/%uM", native_adreno_client_bytes[k][0], native_adreno_client_bytes[k][1]) : 0;
     at = put(out, at, cap, row, sizeof row);
   }
   if (&native_adreno_fence_wait && native_adreno_fence_wait[0]) {
