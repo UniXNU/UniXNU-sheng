@@ -27,6 +27,7 @@ static uint32_t diag_count, diag_skipped_count;
 static char *diag_note;   // diag-skipped.txt
 static size_t diag_note_used;
 volatile uint32_t boot_diag_files, boot_diag_skipped, boot_diag_errors;
+volatile uint32_t boot_diag_alloc;   // the scan's allocations that failed: 1 the file table, 2 the note
 
 // In the order of their worth: the format strings of earlier runs are on the host already, and the crash reports are rarely needed.
 // A root may be a single file: the render server's shader priming state (PrimeShaders.h) in its persistent cache directory, small and
@@ -135,10 +136,12 @@ static int worth(const void *a, const void *b) {
 
 // The stream's length (without the 16-byte blob header) for at most budget bytes, after scanning the roots; 0 when nothing could be read.
 uint64_t boot_diag_scan(uint64_t budget) {
-  // The table is 1.3 MB: i84edf75a1 got none from IOMallocData ([diag] status=-8, the scan's only zero return); it comes from page
-  // allocations, as the export's staging does (IOMallocAligned, 256 KiB, which works).
+  // The scan's only zero return is a failed allocation ([diag] status=-8 in i84edf75a1 and, with the table from page memory,
+  // in id02fe1633): both come from page allocations, as the export's staging does (IOMallocAligned, 256 KiB, which works), and
+  // boot_diag_alloc names the one that failed.
   if (!diag_files) diag_files = IOMallocAligned(sizeof(struct diag_file) * DiagMaxFiles, PAGE_SIZE);
-  if (!diag_note) diag_note = IOMallocData(DiagNote);
+  if (!diag_note) diag_note = IOMallocAligned(DiagNote, PAGE_SIZE);
+  boot_diag_alloc = (diag_files ? 0 : 1) | (diag_note ? 0 : 2);
   if (!diag_files || !diag_note) return 0;
   diag_count = diag_skipped_count = 0; diag_note_used = 0; diag_note[0] = 0;
   const char *note_name = "diag-skipped.txt";
