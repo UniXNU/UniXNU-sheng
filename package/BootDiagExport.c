@@ -135,7 +135,9 @@ static int worth(const void *a, const void *b) {
 
 // The stream's length (without the 16-byte blob header) for at most budget bytes, after scanning the roots; 0 when nothing could be read.
 uint64_t boot_diag_scan(uint64_t budget) {
-  if (!diag_files) diag_files = IOMallocData(sizeof(struct diag_file) * DiagMaxFiles);
+  // The table is 1.3 MB: i84edf75a1 got none from IOMallocData ([diag] status=-8, the scan's only zero return); it comes from page
+  // allocations, as the export's staging does (IOMallocAligned, 256 KiB, which works).
+  if (!diag_files) diag_files = IOMallocAligned(sizeof(struct diag_file) * DiagMaxFiles, PAGE_SIZE);
   if (!diag_note) diag_note = IOMallocData(DiagNote);
   if (!diag_files || !diag_note) return 0;
   diag_count = diag_skipped_count = 0; diag_note_used = 0; diag_note[0] = 0;
@@ -173,7 +175,7 @@ static int put_head(boot_diag_emit_t emit, void *arg, const char *path, uint32_t
 // Emits the stream the last scan measured; each file goes out at its scanned size (zero-filled when it shrank or could not be read, cut
 // when it grew), so the length always equals boot_diag_scan's. Returns the first nonzero emit result.
 int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
-  uint8_t *chunk = IOMallocData(DiagChunk);
+  uint8_t *chunk = IOMallocAligned(DiagChunk, PAGE_SIZE);
   if (!chunk) return -1;
   vfs_context_t ctx = vfs_context_kernel();
   int rc = emit("M2VCACH1", 8, arg);
@@ -219,6 +221,6 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   // The note last, at the size the scan reserved.
   if (!rc) rc = put_head(emit, arg, "diag-skipped.txt", 0100644, 0, 0, DiagNote);
   if (!rc) {memset(diag_note + diag_note_used, 0, DiagNote - diag_note_used); rc = emit(diag_note, DiagNote, arg);}
-  IOFreeData(chunk, DiagChunk);
+  IOFreeAligned(chunk, DiagChunk);
   return rc;
 }

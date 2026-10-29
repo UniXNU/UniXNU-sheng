@@ -108,8 +108,6 @@ extern volatile uint32_t native_adreno_fence_pending[8] __attribute__((weak_impo
 extern volatile uint32_t native_adreno_wptr_fence[4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_wait_outer[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_export_stats[4] __attribute__((weak_import));
-extern volatile uint64_t native_adreno_import_stats[3] __attribute__((weak_import));
-extern uint64_t native_ufs_import_blocks(void) __attribute__((weak_import));
 extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import));
 extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
 extern volatile uint32_t native_wifi_stats[29] __attribute__((weak_import));
@@ -951,14 +949,6 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     char row[120];
     snprintf(row, sizeof row, "[export] pieces=%u refused=%u generation=%u bytes=%u | complete generation=%u bytes=%u", native_adreno_export_stats[0],
              native_adreno_export_stats[1], native_adreno_export_stats[2], native_adreno_export_stats[3], export_ready, export_ready_bytes);
-    at = put(out, at, cap, row, sizeof row);
-  }
-  // The pipeline caches compiled ahead on the host (the import region the render server reads through the GPU driver).
-  if (&native_adreno_import_stats && (native_adreno_import_stats[0] || native_adreno_import_stats[1])) {
-    char row[120];
-    snprintf(row, sizeof row, "[pipeline import] reads=%llu refused=%llu MiB=%llu region MiB=%llu", (unsigned long long)native_adreno_import_stats[0],
-             (unsigned long long)native_adreno_import_stats[1], (unsigned long long)(native_adreno_import_stats[2] >> 20),
-             (unsigned long long)(&native_ufs_import_blocks ? native_ufs_import_blocks() >> 8 : 0));
     at = put(out, at, cap, row, sizeof row);
   }
   // WiFi bring-up (WifiProbe.cpp): stage, GCC votes, PCIe0 GDSC, halted branches, WLAN_EN/SW_CTRL/PERST# pins, LTSSM, root port ID, link.
