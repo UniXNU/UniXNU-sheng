@@ -99,9 +99,6 @@
 "sleep-disabled" = 1
 # No Apple PMGR or SEP: report a virtual platform, so AMFI does not wait for an ApplePMGRNub.
 "vmm-present" = 1
-# What kern.hv_vmm_present tells userland (the source-built kernel's hvg_sysctl.c): the tablet is real hardware. With vmm-present
-# alone MobileGestalt answered IsVirtualDevice and QuartzCore drew a 64-bit half-float framebuffer (i623fa0abd).
-"vmm-present-userland" = 0
 # The kernel is built with CONFIG_VNODES=1024 (xsmall), so desiredvnodes clips to 1024; the desktop keeps about 1950 vnodes live and
 # vnode jetsam then kills daemons several times a second. XNU reads this value before it clips: memory/64K + 1024 for the owned 4864 MiB.
 "kern.maxvnodes" = 78848

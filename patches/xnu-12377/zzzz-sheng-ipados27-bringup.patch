@@ -19,29 +19,6 @@ index 87ca424..2156540 100644
  	native_mobile_graphics_load_probe();
  	native_iogpu_load_probe();
  #if defined(XNU_ADRENO_FIRMWARE_PROBE) && XNU_ADRENO_FIRMWARE_PROBE
-diff --git a/bsd/kern/hvg_sysctl.c b/bsd/kern/hvg_sysctl.c
-index fb0b67c..ed52f93 100644
---- a/bsd/kern/hvg_sysctl.c
-+++ b/bsd/kern/hvg_sysctl.c
-@@ -140,7 +140,17 @@ sysctl_vmm_present(__unused struct sysctl_oid *oidp,
- 
- #if defined(__arm64__)
- 	extern int IODTGetDefault(const char *key, void *infoAddr, unsigned int infoSize );
--	(void) IODTGetDefault("vmm-present", &vmm_present, sizeof(vmm_present));
-+	extern bool sysctl_req_from_kernel(const struct sysctl_req *req);
-+	/*
-+	 * A board that sets vmm-present for the kernel's sake (sheng: AMFI must not wait for an ApplePMGRNub the board does not have)
-+	 * but runs on real hardware answers processes with vmm-present-userland: MobileGestalt reads this sysctl for IsVirtualDevice,
-+	 * and QuartzCore draws a virtual device's framebuffer in 64-bit half float (IOMFBDisplay::framebuffer_pixel_format). AMFI reads
-+	 * it through kernel_sysctlbyname and keeps vmm-present (i318baa87: "AMFI: No PMGR?" when it was given the userland answer).
-+	 */
-+	if (sysctl_req_from_kernel(req) ||
-+	    IODTGetDefault("vmm-present-userland", &vmm_present, sizeof(vmm_present)) != 0) {
-+		(void) IODTGetDefault("vmm-present", &vmm_present, sizeof(vmm_present));
-+	}
- #elif defined(__x86_64__)
- 	extern boolean_t cpuid_vmm_present(void);
- 	vmm_present = cpuid_vmm_present();
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 index a4f494d..52c1448 100644
 --- a/bsd/kern/kern_exec.c
@@ -383,24 +360,10 @@ index b1ac3ad..7e93e95 100644
  		corpse_source = vm_map_is_corpse_source(get_task_map(task));
  	}
 diff --git a/bsd/kern/kern_newsysctl.c b/bsd/kern/kern_newsysctl.c
-index 20d071c..ad7f00f 100644
+index 20d071c..7b0e929 100644
 --- a/bsd/kern/kern_newsysctl.c
 +++ b/bsd/kern/kern_newsysctl.c
-@@ -1602,6 +1602,13 @@ sysctl_new_kernel(struct sysctl_req *req, void *p, size_t l)
- 	return 0;
- }
- 
-+/* Whether a request came from the kernel (kernel_sysctl, kernel_sysctlbyname) rather than a process (hvg_sysctl.c). */
-+bool
-+sysctl_req_from_kernel(const struct sysctl_req *req)
-+{
-+	return req->oldfunc == sysctl_old_kernel;
-+}
-+
- int
- kernel_sysctl(struct proc *p, int *name, size_t namelen, void *old, size_t *oldlenp, void *new, size_t newlen)
- {
-@@ -1920,7 +1927,13 @@ found:
+@@ -1920,7 +1920,13 @@ found:
  	lck_rw_done(&sysctl_geometry_lock);
  
  #if CONFIG_MACF
