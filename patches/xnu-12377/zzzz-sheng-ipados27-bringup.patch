@@ -19,6 +19,26 @@ index 87ca424..2156540 100644
  	native_mobile_graphics_load_probe();
  	native_iogpu_load_probe();
  #if defined(XNU_ADRENO_FIRMWARE_PROBE) && XNU_ADRENO_FIRMWARE_PROBE
+diff --git a/bsd/kern/hvg_sysctl.c b/bsd/kern/hvg_sysctl.c
+index fb0b67c..c3dfc46 100644
+--- a/bsd/kern/hvg_sysctl.c
++++ b/bsd/kern/hvg_sysctl.c
+@@ -140,7 +140,14 @@ sysctl_vmm_present(__unused struct sysctl_oid *oidp,
+ 
+ #if defined(__arm64__)
+ 	extern int IODTGetDefault(const char *key, void *infoAddr, unsigned int infoSize );
+-	(void) IODTGetDefault("vmm-present", &vmm_present, sizeof(vmm_present));
++	/*
++	 * A board that sets vmm-present for the kernel's sake (sheng: AMFI must not wait for an ApplePMGRNub the board does not have)
++	 * but runs on real hardware answers userland with vmm-present-userland: MobileGestalt reads this sysctl for IsVirtualDevice,
++	 * and QuartzCore draws a virtual device's framebuffer in 64-bit half float (IOMFBDisplay::framebuffer_pixel_format).
++	 */
++	if (IODTGetDefault("vmm-present-userland", &vmm_present, sizeof(vmm_present)) != 0) {
++		(void) IODTGetDefault("vmm-present", &vmm_present, sizeof(vmm_present));
++	}
+ #elif defined(__x86_64__)
+ 	extern boolean_t cpuid_vmm_present(void);
+ 	vmm_present = cpuid_vmm_present();
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 index a4f494d..52c1448 100644
 --- a/bsd/kern/kern_exec.c
