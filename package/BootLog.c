@@ -176,9 +176,8 @@ extern volatile uint32_t native_adreno_recovery[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recovery_fault[5] __attribute__((weak_import));
 extern uint32_t native_gpu_restart[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_stats_uncached[2] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_bo_memory[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import));
-extern volatile uint32_t native_adreno_pool_stats[8] __attribute__((weak_import));
-extern volatile uint32_t native_adreno_pool_chunks[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wc_audit[6] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_submit_ibs[4] __attribute__((weak_import));
 extern volatile uint32_t native_touch_edge_stats[4] __attribute__((weak_import));
@@ -220,8 +219,6 @@ extern volatile uint32_t native_cpufreq_gov[9] __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_boosts __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_frame[2] __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_throttle[9] __attribute__((weak_import));
-extern volatile uint32_t native_adreno_pool_status __attribute__((weak_import));
-extern volatile uint32_t native_adreno_pool_wc __attribute__((weak_import));
 extern volatile uint64_t native_adreno_fence_phys __attribute__((weak_import));
 extern int (*native_adreno_dram_read32)(uint64_t, uint32_t *) __attribute__((weak_import));
 extern int (*native_adreno_cached_read32)(uint64_t, uint32_t *) __attribute__((weak_import));
@@ -706,13 +703,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
     if (native_adreno_vm_kind_us[0][0] || native_adreno_vm_kind_us[1][0] || native_adreno_vm_kind_us[2][0]) at = put(out, at, cap, row, sizeof row);
   }
-  if (&native_adreno_pool_stats) {
+  // [bo memory]: user BOs from the system (count, spans, refused, last refusal status, MiB live and peak), kernel-mapped BOs, import spans.
+  if (&native_adreno_bo_memory) {
     char row[240];
-    snprintf(row, sizeof row, "[bo pool] %u MiB (last reserve status %x, wc %x): %u BOs from it, %u fell back, in use %u MiB (peak %u) | chunks %u live %u made %u freed %u refused | scattered: %u BOs %u spans | import spans %u",
-             native_adreno_pool_stats[0], native_adreno_pool_status, &native_adreno_pool_wc ? native_adreno_pool_wc : 0, native_adreno_pool_stats[1], native_adreno_pool_stats[2], native_adreno_pool_stats[3],
-             native_adreno_pool_stats[4], &native_adreno_pool_chunks ? native_adreno_pool_chunks[0] : 0, &native_adreno_pool_chunks ? native_adreno_pool_chunks[1] : 0,
-             &native_adreno_pool_chunks ? native_adreno_pool_chunks[2] : 0, &native_adreno_pool_chunks ? native_adreno_pool_chunks[3] : 0,
-             native_adreno_pool_stats[5], native_adreno_pool_stats[6], native_adreno_pool_stats[7]);
+    snprintf(row, sizeof row, "[bo memory] system %u BOs %u spans, refused %u (last %x), live %u MiB (peak %u) | kernel %u BOs | import spans %u",
+             native_adreno_bo_memory[0], native_adreno_bo_memory[1], native_adreno_bo_memory[2], native_adreno_bo_memory[3],
+             native_adreno_bo_memory[4], native_adreno_bo_memory[5], native_adreno_bo_memory[6], native_adreno_bo_memory[7]);
     at = put(out, at, cap, row, sizeof row);
   }
   // GPU clients: name opens/refused/closes, live slot (- none), highest GPU address its mappings reached (MiB), last refusal.
@@ -908,14 +904,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              (unsigned long long)(native_adreno_cache_stats[0] * 1000 / f), (unsigned long long)(native_adreno_cache_stats[1] >> 20));
     at = put(out, at, cap, row, sizeof row);
   }
-  // [maint]: the GPU driver's CPU cache maintenance by the phase that asked for it, passes/KiB: pool setup, allocation, map, submission,
+  // [maint]: the GPU driver's CPU cache maintenance by the phase that asked for it, passes/KiB: allocation, map, submission,
   // unmap, completion, SMMU table pages, diagnostics; then the imports whose pages were all non-cacheable (no maintenance) and the others.
   if (&native_adreno_maint_phase && &native_adreno_pool_stats_uncached) {
     char row[300];
     const volatile uint64_t (*p)[2] = native_adreno_maint_phase;
-    snprintf(row, sizeof row, "[maint] pool %llu/%llu alloc %llu/%llu map %llu/%llu submit %llu/%llu unmap %llu/%llu complete %llu/%llu "
+    snprintf(row, sizeof row, "[maint] alloc %llu/%llu map %llu/%llu submit %llu/%llu unmap %llu/%llu complete %llu/%llu "
              "table %llu/%llu diag %llu/%llu | imports uncached %u cached %u",
-             (unsigned long long)p[0][0], (unsigned long long)p[0][1], (unsigned long long)p[1][0], (unsigned long long)p[1][1],
+             (unsigned long long)p[1][0], (unsigned long long)p[1][1],
              (unsigned long long)p[2][0], (unsigned long long)p[2][1], (unsigned long long)p[3][0], (unsigned long long)p[3][1],
              (unsigned long long)p[4][0], (unsigned long long)p[4][1], (unsigned long long)p[5][0], (unsigned long long)p[5][1],
              (unsigned long long)p[6][0], (unsigned long long)p[6][1], (unsigned long long)p[7][0], (unsigned long long)p[7][1],
