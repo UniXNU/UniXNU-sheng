@@ -172,6 +172,8 @@ extern volatile uint32_t native_adreno_table_pages[4] __attribute__((weak_import
 extern unsigned NativeAdrenoGpuContextInputBits(void) __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recovery[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recovery_fault[5] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_fault_place[4] __attribute__((weak_import));
+extern char native_adreno_fault_owner[20] __attribute__((weak_import));
 extern uint32_t native_gpu_restart[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_stats_uncached[2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_bo_memory[8] __attribute__((weak_import));
@@ -813,6 +815,15 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_adreno_recovery_fault ? native_adreno_recovery_fault[3] : 0, &native_adreno_recovery_fault ? native_adreno_recovery_fault[2] : 0,
              &native_adreno_recovery_fault ? native_adreno_recovery_fault[4] : 0);
     at = put(out, at, cap, row, sizeof row);
+    // Where the last fault was in the guilty VM (NativeAdrenoPublish.cpp native_adreno_fault_place): its process, the address, the mapping
+    // at or below it (start, KiB) and how far past that mapping's end the address is, and the next mapping's start.
+    if (&native_adreno_fault_place && native_adreno_fault_place[3]) {
+      const uint64_t start = native_adreno_fault_place[0], bytes = native_adreno_fault_place[1], at_ = native_adreno_fault_place[3];
+      snprintf(row, sizeof row, "[gpu fault place] %.20s far %llx | below %llx %lluK past end %lld | next %llx", native_adreno_fault_owner,
+               (unsigned long long)at_, (unsigned long long)start, (unsigned long long)(bytes >> 10),
+               start ? (long long)(at_ - (start + bytes)) : 0LL, (unsigned long long)native_adreno_fault_place[2]);
+      at = put(out, at, cap, row, sizeof row);
+    }
   }
   // [gpu cp image]: the GPU bank's registers before / after the CP switch check (SCTLR TCR TCR2 MAIR0 TTBR1 lo/hi CBAR FSR, then the kit
   // status), and a fault the switch left: FAR lo/hi, FSYNR0, the status after clearing (0x100|kit).
