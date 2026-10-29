@@ -288,6 +288,7 @@ static uint32_t diag_first, diag_bytes;
 static int diag_owned;
 volatile int boot_diag_status;
 extern volatile uint32_t boot_diag_files __attribute__((weak_import));
+extern volatile uint32_t boot_diag_alloc __attribute__((weak_import));
 extern volatile uint32_t boot_diag_skipped __attribute__((weak_import));
 extern volatile uint32_t boot_diag_errors __attribute__((weak_import));
 extern uint64_t boot_diag_scan(uint64_t) __attribute__((weak_import));
@@ -1529,8 +1530,9 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   if (boot_diag_status) {
     char row[120];
-    snprintf(row, sizeof row, "[diag] status=%d files=%u skipped=%u errors=%u bytes=%u first=%u", boot_diag_status, &boot_diag_files ? boot_diag_files : 0,
-             &boot_diag_skipped ? boot_diag_skipped : 0, &boot_diag_errors ? boot_diag_errors : 0, diag_bytes, diag_first);
+    snprintf(row, sizeof row, "[diag] status=%d files=%u skipped=%u errors=%u bytes=%u first=%u alloc=%u", boot_diag_status, &boot_diag_files ? boot_diag_files : 0,
+             &boot_diag_skipped ? boot_diag_skipped : 0, &boot_diag_errors ? boot_diag_errors : 0, diag_bytes, diag_first,
+             &boot_diag_alloc ? boot_diag_alloc : 0);
     at = put(out, at, cap, row, sizeof row);
   }
   // The signed-text fixups given as text-fixupN boot arguments: how many parsed and how many page writes they made.
