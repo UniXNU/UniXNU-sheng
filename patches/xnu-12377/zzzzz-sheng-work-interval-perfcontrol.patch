@@ -1,0 +1,161 @@
+diff --git a/bsd/kern/sys_work_interval.c b/bsd/kern/sys_work_interval.c
+index 527f029..0d97e92 100644
+--- a/bsd/kern/sys_work_interval.c
++++ b/bsd/kern/sys_work_interval.c
+@@ -295,6 +295,28 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
+ 		if (uap->arg == USER_ADDR_NULL || uap->work_interval_id == 0) {
+ 			return EINVAL;
+ 		}
++		{
++			/* The OS's instance record, 96 bytes: [0] interval id, [8] instance id, [0x10] start, [0x18] finish, [0x20] deadline,
++			 * [0x28] complexity, [0x30] the interval's create flags, the rest telemetry. A start names the instance (the library
++			 * skips an update or finish on an unnamed one). The performance controller sees them; nothing here may fail the caller. */
++			uint64_t record[6] = {0};
++			if (uap->len < sizeof(record) || copyin(uap->arg, record, sizeof(record)) != 0) {
++				break;
++			}
++			struct kern_work_interval_instance_args instance_args = {
++				.op               = operation,
++				.work_interval_id = uap->work_interval_id,
++				.instance_id      = record[1],
++				.start            = record[2],
++				.finish           = record[3],
++				.deadline         = record[4],
++				.complexity       = record[5],
++			};
++			if (kern_work_interval_instance_ctl(current_thread(), &instance_args) == KERN_SUCCESS &&
++			    operation == 6 && instance_args.instance_id != record[1]) {
++				(void)copyout(&instance_args.instance_id, uap->arg + sizeof(uint64_t), sizeof(uint64_t));
++			}
++		}
+ 		break;
+ 
+ 	default:
+diff --git a/osfmk/arm/machine_routines_common.c b/osfmk/arm/machine_routines_common.c
+index 2254a39..964fee0 100644
+--- a/osfmk/arm/machine_routines_common.c
++++ b/osfmk/arm/machine_routines_common.c
+@@ -39,6 +39,7 @@
+ #include <kern/machine.h>
+ #include <kern/thread.h>
+ #include <kern/thread_group.h>
++#include <kern/work_interval.h>
+ #include <kern/policy_internal.h>
+ #include <kern/processor.h>
+ #include <kern/sched_hygiene.h>
+@@ -792,6 +793,41 @@ machine_work_interval_notify(thread_t thread,
+ }
+ 
+ 
++/* An interval instance start (6), update (7) or finish (8): the controller gets the instance, and names it on a start. */
++void
++machine_work_interval_ctl(thread_t thread, struct kern_work_interval_instance_args *args)
++{
++	static uint64_t instance_counter;
++
++	if (args->op == 6 && args->instance_id == 0) {
++		args->instance_id = os_atomic_inc(&instance_counter, relaxed);
++	}
++	if (sched_perfcontrol_work_interval_ctl == sched_perfcontrol_work_interval_ctl_default) {
++		return;
++	}
++	perfcontrol_state_t state = FIND_PERFCONTROL_STATE(thread);
++	struct perfcontrol_work_interval_instance instance = {
++		.ctl              = args->op == 6 ? WORK_INTERVAL_START : (args->op == 7 ? WORK_INTERVAL_UPDATE : WORK_INTERVAL_FINISH),
++		.create_flags     = args->create_flags,
++		.complexity       = args->complexity,
++		.thread_id        = thread->thread_id,
++		.work_interval_id = args->work_interval_id,
++		.instance_id      = args->instance_id,
++		.start            = args->start,
++		.finish           = args->finish,
++		.deadline         = args->deadline,
++	};
++#if CONFIG_THREAD_GROUPS
++	struct thread_group *tg = thread_group_get(thread);
++	instance.thread_group_id = thread_group_get_id(tg);
++	instance.thread_group_data = thread_group_get_machine_data(tg);
++#endif
++	sched_perfcontrol_work_interval_ctl(state, &instance);
++	if (args->op == 6 && instance.instance_id) {
++		args->instance_id = instance.instance_id;
++	}
++}
++
+ void
+ machine_perfcontrol_deadline_passed(uint64_t deadline)
+ {
+diff --git a/osfmk/kern/machine.h b/osfmk/kern/machine.h
+index 0330d76..d64ff5b 100644
+--- a/osfmk/kern/machine.h
++++ b/osfmk/kern/machine.h
+@@ -140,6 +140,8 @@ extern void machine_max_runnable_latency(uint64_t bg_max_latency,
+     uint64_t realtime_max_latency);
+ 
+ extern void machine_work_interval_notify(thread_t thread, struct kern_work_interval_args* kwi_args);
++struct kern_work_interval_instance_args;
++extern void machine_work_interval_ctl(thread_t thread, struct kern_work_interval_instance_args *args);
+ 
+ 
+ extern void machine_perfcontrol_deadline_passed(uint64_t deadline);
+diff --git a/osfmk/kern/work_interval.c b/osfmk/kern/work_interval.c
+index 8e22ab1..7e4f0fd 100644
+--- a/osfmk/kern/work_interval.c
++++ b/osfmk/kern/work_interval.c
+@@ -1049,6 +1049,24 @@ work_interval_thread_terminate(thread_t thread)
+ 	return KERN_SUCCESS;
+ }
+ 
++/*
++ * sheng: an interval instance operation from the thread that joined the interval. The performance controller registered with
++ * sched_perfcontrol_register_callbacks (work_interval_ctl) is told; without one the call only succeeds.
++ */
++kern_return_t
++kern_work_interval_instance_ctl(thread_t thread, struct kern_work_interval_instance_args *args)
++{
++	assert(thread == current_thread());
++	struct work_interval *work_interval = thread->th_work_interval;
++
++	if (work_interval == NULL || work_interval->wi_id != args->work_interval_id) {
++		return KERN_INVALID_ARGUMENT;
++	}
++	args->create_flags = work_interval->wi_create_flags;
++	machine_work_interval_ctl(thread, args);
++	return KERN_SUCCESS;
++}
++
+ kern_return_t
+ kern_work_interval_notify(thread_t thread, struct kern_work_interval_args* kwi_args)
+ {
+diff --git a/osfmk/kern/work_interval.h b/osfmk/kern/work_interval.h
+index 21adaca..1861c8b 100644
+--- a/osfmk/kern/work_interval.h
++++ b/osfmk/kern/work_interval.h
+@@ -51,6 +51,18 @@ struct kern_work_interval_args {
+ 	uint16_t urgency;
+ };
+ 
++/* An interval instance operation (the OS's work_interval_instance_start 6, update 7, finish 8). */
++struct kern_work_interval_instance_args {
++	uint32_t op;
++	uint32_t create_flags;      /* out: the interval's own flags */
++	uint64_t work_interval_id;
++	uint64_t instance_id;       /* out on start, in on update and finish */
++	uint64_t start;
++	uint64_t finish;
++	uint64_t deadline;
++	uint64_t complexity;
++};
++
+ struct kern_work_interval_create_args {
+ 	uint64_t        wica_id;          /* out param */
+ 	mach_port_name_t wica_port;        /* out param */
+@@ -131,6 +143,8 @@ kern_work_interval_join(thread_t thread, mach_port_name_t port_name);
+ extern kern_return_t
+ kern_work_interval_notify(thread_t thread, struct kern_work_interval_args* kwi_args);
+ extern kern_return_t
++kern_work_interval_instance_ctl(thread_t thread, struct kern_work_interval_instance_args *args);
++extern kern_return_t
+ kern_work_interval_set_name(mach_port_name_t port_name, char *name, size_t len);
+ extern kern_return_t
+ kern_work_interval_set_workload_id(mach_port_name_t port_name,

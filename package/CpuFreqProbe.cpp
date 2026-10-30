@@ -30,6 +30,14 @@
 // domain included: the render server also runs on the A510 cores (i566 profile: 23 % of backboardd's samples on cpus 0-2) and they
 // sat at 307 MHz. i565 held the P domains at the top during frames and counted a domain's busy share as the sum of its CPUs: d1 then
 // never left 2803 MHz (99 % busy), so both are gone; a touch still holds the P domains at the top.
+// Mode 5 replaces the touch boost, the frame floor and the hispeed jump with what the scheduler's performance-control interface offers
+// (sched_perfcontrol_register_callbacks, the interface a performance controller uses; no controller is registered on this board):
+// the OS's interval instance calls (work_interval_instance_start, update, finish, which the kernel patch forwards as work_interval_ctl)
+// carry the start, deadline and finish of a frame or an audio cycle. A finish that used more than 85 % of its budget asks the domain
+// the calling CPU belongs to for 1.15 x its frequency, one over the deadline for 1.5 x, held 250 ms and then released; one under 60 %
+// asks for nothing. A HID delivery interval (type 4) starting holds the P domains at 60 % of their highest level for 100 ms. Between
+// those the domain follows its busiest CPU with schedutil's formula (1.25 x busy x frequency, no jump at 90 %) and steps down after 2
+// windows. Counters per interval type: native_perf_wi. This is our controller on that interface, not Apple's CLPC (closed source).
 // Throttle count: in a window where a domain's busiest CPU was at least half busy, its domain state (the frequency the hardware
 // runs, which also drops while the whole cluster idles) under 80 % of the vote counts as a throttled window, with the lowest seen.
 #include <IOKit/IOService.h>
@@ -50,7 +58,13 @@ volatile uint32_t native_cpufreq_boosts;
 volatile uint32_t native_cpufreq_frame[2];
 // Mode 4, per domain: busy windows (busiest CPU >= 50 %), throttled ones among them, lowest domain state (MHz) in a throttled one
 volatile uint32_t native_cpufreq_throttle[9];
+// Mode 5, per work interval type (create flags >> 28): [0] instance starts, [1] updates, [2] finishes, [3] finishes over their deadline
+volatile uint32_t native_perf_wi[8][4];
+// Mode 5: [0] asks for 1.5 x (missed), [1] for 1.15 x (over 85 % of the budget), [2] finishes under 60 %, [3] HID delivery holds,
+// [4] finishes with a deadline, [5] their budget use summed in per mille, [6] finishes without a deadline, [7] calls from an unnamed type
+volatile uint32_t native_perf_ctl[8];
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
+int cpu_number(void);
 extern volatile uint32_t native_hid_input_events[8] __attribute__((weak_import));
 uint64_t sheng_cpu_idle_mach(int cpu);
 }
@@ -197,6 +211,70 @@ void setLevel(unsigned d, unsigned at) {
     w.votedKHz = gLevels[d].khz[at];
 }
 
+// Mode 5: what the interval callbacks ask of the governor thread, per domain. All words are aligned, read and written whole.
+volatile uint32_t gFrameKHz[3];
+volatile uint64_t gFrameUntil[3], gHintUntil[3];
+volatile uint32_t gCurKHz[3];
+
+struct PerfInstance {   // perfcontrol_work_interval_instance, osfmk/arm/machine_routines.h
+    uint32_t ctl;       // 0 start, 1 update, 2 finish
+    uint32_t createFlags;
+    uint64_t complexity, threadId, workIntervalId, instanceId, start, finish, deadline, threadGroupId;
+    void *threadGroupData;
+};
+struct PerfCallbacks {  // sched_perfcontrol_callbacks, version 7 reads up to workIntervalCtl
+    unsigned long version;
+    void *offcore, *contextSwitch, *oncore, *maxRunnableLatency, *workIntervalNotify, *threadGroupInit, *threadGroupDeinit, *deadlinePassed, *csw,
+        *stateUpdate, *threadGroupFlagsUpdate;
+    void (*workIntervalCtl)(void *state, PerfInstance *instance);
+    void *threadGroupBlocked, *threadGroupUnblocked, *runningTimerExpire;
+};
+
+void perfWorkIntervalCtl(void *, PerfInstance *instance) {
+    const unsigned type = (instance->createFlags >> 28) & 7, op = instance->ctl > 2 ? 2 : instance->ctl;
+    __atomic_fetch_add(&native_perf_wi[type][op], 1, __ATOMIC_RELAXED);
+    const uint64_t now = mach_absolute_time();
+    const int cpu = cpu_number();
+    const unsigned d = cpu >= 0 && cpu < (int)(sizeof kCpuDomain / sizeof kCpuDomain[0]) ? (unsigned)kCpuDomain[cpu] : 1;
+    if (op == 0) {
+        if (type == 4) {   // WORK_INTERVAL_TYPE_HID_DELIVERY: an input event is being delivered
+            uint64_t hold = 0;
+            nanoseconds_to_absolutetime(100000000ull, &hold);
+            gHintUntil[1] = now + hold;
+            gHintUntil[2] = now + hold;
+            __atomic_fetch_add(&native_perf_ctl[3], 1, __ATOMIC_RELAXED);
+        }
+        return;
+    }
+    if (op != 2) return;
+    const uint64_t start = instance->start, finish = instance->finish ? instance->finish : now, deadline = instance->deadline;
+    if (!start || deadline <= start || finish < start) {
+        __atomic_fetch_add(&native_perf_ctl[6], 1, __ATOMIC_RELAXED);
+        return;
+    }
+    const uint64_t permille = (finish - start) * 1000 / (deadline - start);
+    __atomic_fetch_add(&native_perf_ctl[4], 1, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&native_perf_ctl[5], permille > 4000 ? 4000 : (uint32_t)permille, __ATOMIC_RELAXED);
+    const uint32_t cur = gCurKHz[d];
+    uint32_t ask = 0;
+    if (permille > 1000) {
+        __atomic_fetch_add(&native_perf_wi[type][3], 1, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&native_perf_ctl[0], 1, __ATOMIC_RELAXED);
+        ask = cur + cur / 2;
+    } else if (permille > 850) {
+        __atomic_fetch_add(&native_perf_ctl[1], 1, __ATOMIC_RELAXED);
+        ask = cur + cur * 15 / 100;
+    } else if (permille < 600) {
+        __atomic_fetch_add(&native_perf_ctl[2], 1, __ATOMIC_RELAXED);
+    }
+    if (ask) {
+        uint64_t hold = 0;
+        nanoseconds_to_absolutetime(250000000ull, &hold);
+        gFrameKHz[d] = ask;
+        gFrameUntil[d] = now + hold;
+    }
+}
+
 void governorThread(void *, wait_result_t) {
     uint64_t lastIdle[kCpus] = {}, lastT = mach_absolute_time();
     for (unsigned c = 0; c < kCpus; ++c) lastIdle[c] = sheng_cpu_idle_mach((int)c);
@@ -215,12 +293,13 @@ void governorThread(void *, wait_result_t) {
         const uint64_t t = mach_absolute_time(), dt = t - lastT;
         lastT = t;
         if (!dt) continue;
-        if (boostAbs && &native_hid_input_events && native_hid_input_events[6] != touches) {
+        const bool apple = gMode >= 5;
+        if (!apple && boostAbs && &native_hid_input_events && native_hid_input_events[6] != touches) {
             touches = native_hid_input_events[6];
             if (t >= boostEnd) native_cpufreq_boosts = native_cpufreq_boosts + 1;
             boostEnd = t + boostAbs;
         }
-        if (frameAbs && &native_adreno_method_stats) {
+        if (!apple && frameAbs && &native_adreno_method_stats) {
             const uint32_t now = native_adreno_method_stats[5][0];
             recent = ((recent << 1) | (now != submits)) & 15;
             submits = now;
@@ -257,7 +336,7 @@ void governorThread(void *, wait_result_t) {
                 ready[d] = true;
             }
             unsigned want = l.count - 1;
-            if (busy[d] < 900) {
+            if (apple || busy[d] < 900) {
                 const uint64_t need = l.khz[cur[d]] * busy[d] * 125 / 100000;
                 want = 0;
                 while (want + 1 < l.count && l.khz[want] < need) ++want;
@@ -273,7 +352,14 @@ void governorThread(void *, wait_result_t) {
             }
             if (framing)
                 while (want + 1 < l.count && (uint64_t)l.khz[want] * 100 < (uint64_t)l.khz[l.count - 1] * gFramePct) ++want;
-            if (d > 0) {
+            if (apple) {
+                const uint64_t floorKHz = t < gHintUntil[d] ? (uint64_t)l.khz[l.count - 1] * 60 / 100 : 0;
+                unsigned floorAt = 0;
+                const uint64_t askKHz = t < gFrameUntil[d] ? gFrameKHz[d] : 0;
+                const uint64_t floorNeed = floorKHz > askKHz ? floorKHz : askKHz;
+                while (floorAt + 1 < l.count && l.khz[floorAt] < floorNeed) ++floorAt;
+                if (floorNeed && want < floorAt) want = floorAt;
+            } else if (d > 0) {
                 quiet[d] = busy[d] < 100 ? quiet[d] + 1 : 0;
                 if (boost) want = l.count - 1;
                 else if (quiet[d] < 12)
@@ -282,10 +368,11 @@ void governorThread(void *, wait_result_t) {
             if (want > cur[d]) {
                 cur[d] = want; down[d] = 0; setLevel(d, want); ++changes[d];
             } else if (want < cur[d]) {
-                if (++down[d] >= 4) {cur[d] = want; down[d] = 0; setLevel(d, want); ++changes[d];}
+                if (++down[d] >= (apple ? 2u : 4u)) {cur[d] = want; down[d] = 0; setLevel(d, want); ++changes[d];}
             } else {
                 down[d] = 0;
             }
+            gCurKHz[d] = l.khz[cur[d]];
             khzNs[d] += (uint64_t)l.khz[cur[d]] / 1000 * ns;
             busyNs[d] += busy[d] * ns / 10;
         }
@@ -341,5 +428,11 @@ extern "C" void sheng_cpufreq_probe(void) {
     if (mode >= 4) {
         thread_t thread = nullptr;
         if (kernel_thread_start(governorThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+    }
+    if (mode >= 5) {
+        static PerfCallbacks callbacks;
+        callbacks.version = 7;
+        callbacks.workIntervalCtl = perfWorkIntervalCtl;
+        sched_perfcontrol_register_callbacks(reinterpret_cast<sched_perfcontrol_callbacks_t>(&callbacks), 0);
     }
 }
