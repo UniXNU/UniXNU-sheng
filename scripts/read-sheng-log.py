@@ -212,13 +212,16 @@ def fetch(port_path, out, reboot, retries=6):
         unpack_export(gzip.decompress(pull(f'/run/{name}.bin', 1800))[:size], run_dir, name)
         run(f'rm -f /run/{name}.bin /run/l.gz')
 
-    if h.get('export_bytes') and h.get('export_below'):
-        region(h['export_first'], h['export_bytes'], 'export')
-    if h.get('diag_bytes') and h.get('export_below'):
-        region(h['diag_first'], h['diag_bytes'], 'diag')
-    if reboot:
-        port.send('/bin/rebootbl\n')
-        print('sent rebootbl: the tablet should come back in fastboot')
+    # A region that fails to unpack still sends the tablet back to fastboot; the error is raised after.
+    try:
+        if h.get('export_bytes') and h.get('export_below'):
+            region(h['export_first'], h['export_bytes'], 'export')
+        if h.get('diag_bytes') and h.get('export_below'):
+            region(h['diag_first'], h['diag_bytes'], 'diag')
+    finally:
+        if reboot:
+            port.send('/bin/rebootbl\n')
+            print('sent rebootbl: the tablet should come back in fastboot')
     return run_dir
 
 
