@@ -176,6 +176,19 @@ extern void *sheng_ipc_trace_task __attribute__((weak_import));
 extern void (*sheng_ipc_send_hook)(uint32_t, void *) __attribute__((weak_import));
 extern struct task *proc_task(proc_t);
 enum {IpcRing = 131072};
+// The client sampler (BootUiTraceProbe.c): kernel.client.bin is its ring in time order (16-byte header "CLI1", u32 total, u32 kept, u32 0;
+// then 128-byte records {u64 microseconds, i32 pid, u16 state, i16 priority, u32 context switches, i32 mach_msg peer pid, u64 CPU time
+// (mach units), u64 wait event, u64 frames[11] (pc, lr, nine callers)}); kernel.rings.txt has a C row per target (pid, shared cache
+// slide, main image address, name).
+struct cs_rec {uint64_t abs; int32_t pid; uint16_t state; int16_t pri; uint32_t cs; int32_t peer; uint64_t cpu, wait, frames[11];};
+struct cs_target {int pid; unsigned slide; uint64_t image; char name[32];};
+extern void boot_client_sampler_start(void) __attribute__((weak_import));
+extern struct cs_rec *boot_client_ring __attribute__((weak_import));
+extern volatile uint32_t boot_client_count __attribute__((weak_import));
+extern struct cs_target boot_client_targets[32] __attribute__((weak_import));
+extern volatile unsigned boot_client_target_count __attribute__((weak_import));
+enum {ClientRing = 131072};
+static uint32_t client_kept, client_keep;
 struct ipc_rec {uint64_t abs; uint32_t id; int32_t sender;};
 static struct ipc_rec *ipc_ring;
 static volatile uint32_t ipc_count;
@@ -191,8 +204,9 @@ static void ipc_hook(uint32_t id, void *sender_task) {
 }
 
 static void ipc_trace_tick(void) {
-  if (!&sheng_ipc_send_hook || !&sheng_ipc_trace_task) return;
   if (!&native_legacy_swapstat || native_legacy_swapstat[9] < 50) return;   // the home screen draws
+  if (&boot_client_sampler_start) boot_client_sampler_start();
+  if (!&sheng_ipc_send_hook || !&sheng_ipc_trace_task) return;
   if (!ipc_ring) {
     ipc_ring = IOMallocAligned(sizeof(struct ipc_rec) * IpcRing, PAGE_SIZE);
     if (!ipc_ring) return;
@@ -291,6 +305,11 @@ static void rings_build(void) {
       RT("D %llu %u %u %u %u %u\n", t, (unsigned)(v >> 56), (unsigned)((v >> 48) & 0xff), (unsigned)((v >> 40) & 0xff), (unsigned)((v >> 32) & 0xff), (unsigned)(v & 0xffffffffu));
     }
   }
+  if (&boot_client_target_count && boot_client_target_count) {
+    RT("# client sampler targets: C <pid> <shared cache slide hex> <main image address hex> <name> (samples %u, kernel.client.bin)\n", client_kept);
+    for (unsigned i = 0; i < boot_client_target_count && i < 32; ++i)
+      RT("C %d %x %llx %s\n", boot_client_targets[i].pid, boot_client_targets[i].slide, boot_client_targets[i].image, boot_client_targets[i].name);
+  }
   if (ipc_ring) {
     const uint32_t n = ipc_kept ? ipc_kept : ipc_count, kept = n > IpcRing ? IpcRing : n;
     RT("# ipc to backboardd: pid %d total %u kept %u (kernel.ipc.bin); P <pid> <name> for every sender in it\n", (int)ipc_bb_pid, n, kept);
@@ -340,12 +359,19 @@ uint64_t boot_diag_scan(uint64_t budget) {
   // The kernel's rings and the scene screenshots come before every file: they are this run's own record.
   rings_keep = shots_kept = 0;
   ipc_kept = ipc_count;
+  client_kept = (&boot_client_count && &boot_client_ring && boot_client_ring) ? boot_client_count : 0;
   rings_build();
   if (rings_text && rings_len) {
     const uint64_t cost = 24 + strlen("kernel.rings.txt") + rings_len;
     if (used + cost <= budget) {rings_keep = 1; used += cost;}
   }
   ipc_keep = 0;
+  client_keep = 0;
+  if (client_kept) {
+    const uint32_t kept = client_kept > ClientRing ? ClientRing : client_kept;
+    const uint64_t cost = 24 + strlen("kernel.client.bin") + 16 + (uint64_t)kept * sizeof(struct cs_rec);
+    if (used + cost <= budget) {client_keep = 1; used += cost;}
+  }
   if (ipc_ring && ipc_kept) {
     const uint32_t kept = ipc_kept > IpcRing ? IpcRing : ipc_kept;
     const uint64_t cost = 24 + strlen("kernel.ipc.bin") + 16 + (uint64_t)kept * sizeof(struct ipc_rec);
@@ -385,7 +411,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   if (!chunk) return -1;
   vfs_context_t ctx = vfs_context_kernel();
   int rc = emit("M2VCACH1", 8, arg);
-  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep;
+  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep;
   if (!rc) rc = emit(&root_len, 4, arg);
   if (!rc) rc = emit("/", 1, arg);
   if (!rc) rc = emit(&count, 4, arg);
@@ -427,6 +453,24 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
         memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
       }
       rc = emit(chunk, n * sizeof(struct ipc_rec), arg);
+      at += n;
+    }
+  }
+  if (!rc && client_keep) {
+    const uint32_t client_total = client_kept, kept = client_total > ClientRing ? ClientRing : client_total;
+    const uint32_t head[4] = {'C' | 'L' << 8 | 'I' << 16 | (uint32_t)'1' << 24, client_total, kept, 0};
+    rc = put_head(emit, arg, "kernel.client.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct cs_rec));
+    if (!rc) rc = emit(head, sizeof head, arg);
+    for (uint32_t at = 0; !rc && at < kept;) {   // oldest first, microseconds since boot
+      const uint32_t n = kept - at < 1024 ? kept - at : 1024;
+      for (uint32_t k = 0; k < n; ++k) {
+        struct cs_rec out = boot_client_ring[(client_total - kept + at + k) & (ClientRing - 1)];
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(out.abs, &ns);
+        out.abs = ns / 1000;
+        memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
+      }
+      rc = emit(chunk, n * sizeof(struct cs_rec), arg);
       at += n;
     }
   }
