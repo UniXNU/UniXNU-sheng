@@ -62,12 +62,12 @@ extern volatile uint64_t native_gop_virtual __attribute__((weak_import));
 extern void native_legacy_direct_snapshot(void) __attribute__((weak_import));   // direct scanout: copies the surface on screen into the boot memory
 extern void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
 static uint32_t shot_width, shot_height;   // the half-resolution screenshot; 0 when there is no scanout
-// Scene screenshots taken while the run goes (boot_diag_shot_tick): up to DiagShots of the panel at half resolution, kept in memory and
+// Scene screenshots taken while the run goes (boot_diag_shot_tick): up to DiagShots of the panel at quarter resolution, kept in memory and
 // exported as screen-<seconds of log time>.bgrx, so a scene that is gone by the export is still on file. They are analysed by code only.
-enum {DiagShots = 5};
+enum {DiagShots = 24};   // every 8 s from 90 s to 274 s at quarter resolution: the scene of each moment of the user's session
 static uint8_t *shot_data[DiagShots];
 static uint32_t shot_time[DiagShots], shot_w, shot_h, shot_taken;
-static const uint32_t shot_at[DiagShots] = {45, 65, 85, 105, 125};
+static const uint32_t shot_at[DiagShots] = {90, 98, 106, 114, 122, 130, 138, 146, 154, 162, 170, 178, 186, 194, 202, 210, 218, 226, 234, 242, 250, 258, 266, 274};
 // The kernel's rings, as text (kernel.rings.txt), formatted at the scan so its length is known and emitted as it was then.
 extern volatile uint64_t (*native_legacy_ring)[2] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_ring_cap __attribute__((weak_import));
@@ -186,7 +186,23 @@ enum {IpcRing = 524288, TouchRing = 65536};
 // (mach units), u64 wait event, u64 frames[11] (pc, lr, nine callers)}); kernel.rings.txt has a C row per target (pid, shared cache
 // slide, main image address, name). A record lasts until the next one of the same pid (unchanged blocked threads are not repeated).
 struct cs_rec {uint64_t abs; int32_t pid; uint16_t state; int16_t pri; uint32_t cs; int32_t peer; uint64_t cpu, wait, frames[11];};
-struct cs_target {int pid; unsigned slide; uint64_t image; char name[32];};
+struct cs_target {int pid; unsigned slide; uint64_t image, seen; char name[32];};
+// CPU occupancy (BootUiTraceProbe.c), kernel.cpus.bin: header "CPU1", total, kept, 0; then 40-byte records {u64 microseconds, i16 priority
+// of what runs on CPU 0..7, u8 idle thread on CPU 0..7, u8 processor state 0..7}.
+struct cs_cpu {uint64_t abs; int16_t pri[8]; uint8_t idle[8], state[8];};
+extern struct cs_cpu *boot_cpu_ring __attribute__((weak_import));
+extern volatile uint32_t boot_cpu_count __attribute__((weak_import));
+enum {CpuRing = 65536};
+static uint32_t cpu_kept, cpu_keep;
+// User client calls (HidInputProbe.cpp), kernel.ioc.bin: header "IOC1", total, kept, 0; then 32-byte records {u64 microseconds entered,
+// u32 microseconds waiting for the client's lock, u32 microseconds in the method, u32 selector, i32 pid, u64 class name address}; the
+// class names are the K rows of kernel.rings.txt.
+struct ioc_rec {uint64_t entered; uint32_t lock_us, call_us, selector; int32_t pid; uint64_t class_name;};
+extern struct ioc_rec *native_ioc_ring __attribute__((weak_import));
+extern volatile uint32_t native_ioc_count __attribute__((weak_import));
+extern void native_ioc_trace_start(const int *, unsigned) __attribute__((weak_import));
+enum {IocRing = 262144};
+static uint32_t ioc_kept, ioc_keep;
 extern void boot_client_sampler_start(void) __attribute__((weak_import));
 extern struct cs_rec *boot_client_ring __attribute__((weak_import));
 extern volatile uint32_t boot_client_count __attribute__((weak_import));
@@ -227,6 +243,11 @@ static void *ipc_task_of(const char *want, int *pid_out) {
 static void ipc_trace_tick(void) {
   if (!&native_legacy_swapstat || native_legacy_swapstat[9] < 50) return;   // the home screen draws
   if (&boot_client_sampler_start) boot_client_sampler_start();
+  if (&native_ioc_trace_start && &boot_client_target_count) {
+    int pids[32]; unsigned n = 0;
+    for (unsigned i = 0; i < boot_client_target_count && i < 32; ++i) pids[n++] = boot_client_targets[i].pid;
+    native_ioc_trace_start(pids, n);
+  }
   if (!&sheng_ipc_send_hook || !&sheng_ipc_trace_task || !&sheng_ipc_trace_task2) return;
   if (!ipc_ring) {
     ipc_ring = IOMallocAligned(sizeof(struct ipc_rec) * IpcRing, PAGE_SIZE);
@@ -249,15 +270,15 @@ void boot_diag_shot_tick(unsigned now) {
   PE_Video video = {};
   if (!(&native_gop_virtual && native_gop_virtual && !PE_current_console(&video) && video.v_depth == 32 && video.v_width >= 2 && video.v_height >= 2 &&
         video.v_width <= 16384 && video.v_height <= 16384 && video.v_rowBytes >= video.v_width * 4)) {++shot_taken; return;}
-  const uint32_t w = (uint32_t)video.v_width / 2, h = (uint32_t)video.v_height / 2;
+  const uint32_t w = (uint32_t)video.v_width / 4, h = (uint32_t)video.v_height / 4;
   const unsigned n = shot_taken++;
   shot_data[n] = IOMallocAligned((size_t)w * h * 4, PAGE_SIZE);
   if (!shot_data[n]) return;
   if (&native_legacy_direct_snapshot) native_legacy_direct_snapshot();
   for (uint32_t y = 0; y < h; ++y) {
     uint32_t *out = (uint32_t *)(shot_data[n] + (size_t)y * w * 4);
-    const uint32_t *in = (const uint32_t *)(uintptr_t)(native_gop_virtual + (uint64_t)y * 2 * video.v_rowBytes);
-    for (uint32_t x = 0; x < w; ++x) out[x] = in[x * 2];
+    const uint32_t *in = (const uint32_t *)(uintptr_t)(native_gop_virtual + (uint64_t)y * 4 * video.v_rowBytes);
+    for (uint32_t x = 0; x < w; ++x) out[x] = in[x * 4];
   }
   shot_w = w; shot_h = h; shot_time[n] = now;
 }
@@ -319,9 +340,25 @@ static void rings_build(void) {
     }
   }
   if (&boot_client_target_count && boot_client_target_count) {
-    RT("# client sampler targets: C <pid> <shared cache slide hex> <main image address hex> <name> (samples %u, kernel.client.bin)\n", client_kept);
-    for (unsigned i = 0; i < boot_client_target_count && i < 32; ++i)
-      RT("C %d %x %llx %s\n", boot_client_targets[i].pid, boot_client_targets[i].slide, boot_client_targets[i].image, boot_client_targets[i].name);
+    RT("# client sampler targets: C <pid> <shared cache slide hex> <main image address hex> <name> <first seen us> (samples %u, kernel.client.bin)\n", client_kept);
+    for (unsigned i = 0; i < boot_client_target_count && i < 32; ++i) {
+      uint64_t seen = 0;
+      absolutetime_to_nanoseconds(boot_client_targets[i].seen, &seen);
+      RT("C %d %x %llx %s %llu\n", boot_client_targets[i].pid, boot_client_targets[i].slide, boot_client_targets[i].image, boot_client_targets[i].name, seen / 1000);
+    }
+  }
+  if (ioc_kept) {
+    const uint32_t kept = ioc_kept > IocRing ? IocRing : ioc_kept;
+    RT("# user client calls: %u (kernel.ioc.bin); K <class name address hex> <class>\n", ioc_kept);
+    uint64_t seen[48]; unsigned seen_n = 0;
+    for (uint32_t i = 0; i < kept && seen_n < 48; ++i) {
+      const uint64_t name = native_ioc_ring[(ioc_kept - kept + i) & (IocRing - 1)].class_name;
+      unsigned k = 0;
+      while (k < seen_n && seen[k] != name) ++k;
+      if (k < seen_n || !name) continue;
+      seen[seen_n++] = name;
+      RT("K %llx %.60s\n", name, (const char *)(uintptr_t)name);
+    }
   }
   if (ipc_ring) {
     const uint32_t n = ipc_kept ? ipc_kept : ipc_count, kept = n > IpcRing ? IpcRing : n;
@@ -375,6 +412,8 @@ uint64_t boot_diag_scan(uint64_t budget) {
   rings_keep = shots_kept = 0;
   ipc_kept = ipc_count;
   client_kept = (&boot_client_count && &boot_client_ring && boot_client_ring) ? boot_client_count : 0;
+  cpu_kept = (&boot_cpu_count && &boot_cpu_ring && boot_cpu_ring) ? boot_cpu_count : 0;
+  ioc_kept = (&native_ioc_count && &native_ioc_ring && native_ioc_ring) ? native_ioc_count : 0;
   rings_build();
   if (rings_text && rings_len) {
     const uint64_t cost = 24 + strlen("kernel.rings.txt") + rings_len;
@@ -383,6 +422,18 @@ uint64_t boot_diag_scan(uint64_t budget) {
   ipc_keep = 0;
   client_keep = 0;
   touch_keep = 0;
+  cpu_keep = 0;
+  if (cpu_kept) {
+    const uint32_t kept = cpu_kept > CpuRing ? CpuRing : cpu_kept;
+    const uint64_t cost = 24 + strlen("kernel.cpus.bin") + 16 + (uint64_t)kept * sizeof(struct cs_cpu);
+    if (used + cost <= budget) {cpu_keep = 1; used += cost;}
+  }
+  ioc_keep = 0;
+  if (ioc_kept) {
+    const uint32_t kept = ioc_kept > IocRing ? IocRing : ioc_kept;
+    const uint64_t cost = 24 + strlen("kernel.ioc.bin") + 16 + (uint64_t)kept * sizeof(struct ioc_rec);
+    if (used + cost <= budget) {ioc_keep = 1; used += cost;}
+  }
   touch_kept = (&native_touch_report_count && &native_touch_report_ring && native_touch_report_ring) ? native_touch_report_count : 0;
   if (touch_kept) {
     const uint32_t kept = touch_kept > TouchRing ? TouchRing : touch_kept;
@@ -433,7 +484,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   if (!chunk) return -1;
   vfs_context_t ctx = vfs_context_kernel();
   int rc = emit("M2VCACH1", 8, arg);
-  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep + touch_keep;
+  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep + touch_keep + cpu_keep + ioc_keep;
   if (!rc) rc = emit(&root_len, 4, arg);
   if (!rc) rc = emit("/", 1, arg);
   if (!rc) rc = emit(&count, 4, arg);
@@ -475,6 +526,42 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
         memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
       }
       rc = emit(chunk, n * sizeof(struct ipc_rec), arg);
+      at += n;
+    }
+  }
+  if (!rc && cpu_keep) {
+    const uint32_t cpu_total = cpu_kept, kept = cpu_total > CpuRing ? CpuRing : cpu_total;
+    const uint32_t head[4] = {'C' | 'P' << 8 | 'U' << 16 | (uint32_t)'1' << 24, cpu_total, kept, 0};
+    rc = put_head(emit, arg, "kernel.cpus.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct cs_cpu));
+    if (!rc) rc = emit(head, sizeof head, arg);
+    for (uint32_t at = 0; !rc && at < kept;) {
+      const uint32_t n = kept - at < 4096 ? kept - at : 4096;
+      for (uint32_t k = 0; k < n; ++k) {
+        struct cs_cpu out = boot_cpu_ring[(cpu_total - kept + at + k) & (CpuRing - 1)];
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(out.abs, &ns);
+        out.abs = ns / 1000;
+        memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
+      }
+      rc = emit(chunk, n * sizeof(struct cs_cpu), arg);
+      at += n;
+    }
+  }
+  if (!rc && ioc_keep) {
+    const uint32_t ioc_total = ioc_kept, kept = ioc_total > IocRing ? IocRing : ioc_total;
+    const uint32_t head[4] = {'I' | 'O' << 8 | 'C' << 16 | (uint32_t)'1' << 24, ioc_total, kept, 0};
+    rc = put_head(emit, arg, "kernel.ioc.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct ioc_rec));
+    if (!rc) rc = emit(head, sizeof head, arg);
+    for (uint32_t at = 0; !rc && at < kept;) {
+      const uint32_t n = kept - at < 8192 ? kept - at : 8192;
+      for (uint32_t k = 0; k < n; ++k) {
+        struct ioc_rec out = native_ioc_ring[(ioc_total - kept + at + k) & (IocRing - 1)];
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(out.entered, &ns);
+        out.entered = ns / 1000;
+        memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
+      }
+      rc = emit(chunk, n * sizeof(struct ioc_rec), arg);
       at += n;
     }
   }
