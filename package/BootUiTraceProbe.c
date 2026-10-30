@@ -385,7 +385,14 @@ void *IOMallocAligned(vm_size_t,vm_offset_t);
 #define CS_RING 131072
 struct cs_rec {uint64_t abs;int32_t pid;uint16_t state;int16_t pri;uint32_t cs;int32_t peer;uint64_t cpu,wait,frames[11];};
 _Static_assert(sizeof(struct cs_rec)==128,"client sample");
-struct cs_target {int pid;unsigned slide;uint64_t image;char name[32];};
+struct cs_target {int pid;unsigned slide;uint64_t image,seen;char name[32];};   // seen: when the sampler first found it (mach units)
+// CPU occupancy at every tick: per CPU the priority of what runs there, whether it is the idle thread, and the processor state; a
+// runnable client next to eight busy CPUs is CPU contention. kernel.cpus.bin.
+struct cs_cpu {uint64_t abs;int16_t pri[8];uint8_t idle[8],state[8];};
+_Static_assert(sizeof(struct cs_cpu)==40,"cpu sample");
+#define CS_CPU_RING 65536
+struct cs_cpu *boot_cpu_ring;
+volatile uint32_t boot_cpu_count;
 struct cs_rec *boot_client_ring;
 volatile uint32_t boot_client_count;
 struct cs_target boot_client_targets[32];
@@ -420,7 +427,7 @@ static void cs_note_target(task_t task,int pid,const char *name) {
  for(unsigned i=0;i<n && i<32;++i)if(boot_client_targets[i].pid==pid)return;
  if(n>=32)return;
  struct cs_target *t=&boot_client_targets[n];memset(t,0,sizeof(*t));
- t->pid=pid;t->slide=(unsigned)task->task_shared_region_slide;strlcpy(t->name,name,sizeof(t->name));
+ t->pid=pid;t->slide=(unsigned)task->task_shared_region_slide;t->seen=mach_absolute_time();strlcpy(t->name,name,sizeof(t->name));
  vm_map_t map=NULL;
  if(task_lock_try(task)){map=task->map;if(map)vm_map_reference(map);task_unlock(task);}
  if(map) {
@@ -486,9 +493,18 @@ static void cs_sample(unsigned slot) {
 static void cs_thread(void *arg,wait_result_t result) {
  (void)arg;(void)result;
  for(unsigned tick=0;;++tick) {
-  if(tick%250==0)cs_refresh();
+  if(tick%25==0)cs_refresh();   // every 100 ms: an app's launch shows within that
   cs_tick=tick;
   for(unsigned i=0;i<CS_TARGETS;++i)cs_sample(i);
+  if(boot_cpu_ring) {
+   struct cs_cpu c;memset(&c,0,sizeof(c));c.abs=mach_absolute_time();
+   for(int cpu=0;cpu<8;++cpu) {
+    processor_t p=cpu_to_processor(cpu);
+    if(p==PROCESSOR_NULL)continue;
+    c.pri[cpu]=(int16_t)p->current_pri;c.idle[cpu]=p->active_thread==p->idle_thread;c.state[cpu]=(uint8_t)p->state;   // pointers only compared
+   }
+   const uint32_t n=boot_cpu_count;boot_cpu_ring[n&(CS_CPU_RING-1)]=c;boot_cpu_count=n+1;
+  }
   delay_for_interval(4,NSEC_PER_MSEC);
  }
 }
@@ -498,6 +514,8 @@ void boot_client_sampler_start(void) {
  if(!ring)return;
  memset(ring,0,sizeof(struct cs_rec)*CS_RING);
  boot_client_ring=ring;
+ struct cs_cpu *cpus=(struct cs_cpu *)IOMallocAligned(sizeof(struct cs_cpu)*CS_CPU_RING,4096);
+ if(cpus){memset(cpus,0,sizeof(struct cs_cpu)*CS_CPU_RING);boot_cpu_ring=cpus;}
  thread_t thread=THREAD_NULL;
  if(kernel_thread_start_priority(cs_thread,NULL,BASEPRI_KERNEL,&thread)==KERN_SUCCESS)thread_deallocate(thread);
 }
