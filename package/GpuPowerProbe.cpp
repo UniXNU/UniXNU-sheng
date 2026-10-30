@@ -1647,6 +1647,8 @@ void gpuStart() {
     const IOReturn attached = gRing.attach(&rio, &cache, const_cast<uint8_t *>(gGpuCpu[1]), gGpuBuffers[1].bytes,
         gGpuBuffers[1].iova, const_cast<uint8_t *>(gGpuCpu[2]), gGpuBuffers[2].bytes, gGpuBuffers[2].iova);
     if (attached) {snprintf(row, sizeof row, "C4 ring attach %x", unsigned(attached)); setRow(7, row); return;}
+    // sheng-gpu-timeline=0 turns off the CP counter stamps around each job's buffers (the board's ring is this one, not the service's).
+    {unsigned timeline = 0; const bool given = PE_parse_boot_argn("sheng-gpu-timeline", &timeline, sizeof timeline); gRing.setTimeline(!given || timeline != 0);}
     gpuWr64(A740_CP_BV_RB_RPTR_ADDR, gGpuBuffers[2].iova + 8);   // rbmemptr(bv_rptr)
     gpuWr(A740_CP_SQE_CNTL, 1);
     // 5. a7xx_patch_pwrup_reglist (preemption list only; IFPC is off) and a7xx_cp_init through the ring.
