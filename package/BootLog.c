@@ -227,6 +227,8 @@ extern volatile uint32_t native_cpufreq_gov[9] __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_boosts __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_frame[2] __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_throttle[9] __attribute__((weak_import));
+extern volatile uint32_t native_perf_wi[8][4] __attribute__((weak_import));
+extern volatile uint32_t native_perf_ctl[8] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_fence_phys __attribute__((weak_import));
 extern int (*native_adreno_dram_read32)(uint64_t, uint32_t *) __attribute__((weak_import));
 extern int (*native_adreno_cached_read32)(uint64_t, uint32_t *) __attribute__((weak_import));
@@ -967,8 +969,24 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
         at = put(out, at, cap, row, sizeof row);
       }
     }
+    if (&native_perf_wi && &native_perf_ctl) {
+      // the OS's interval instances by type (0 default, 1 audio, 2 render server, 3 CA client, 4 HID delivery, 5 media, 6 ARKit, 7 compositor): start/update/finish/over deadline
+      size_t n = (size_t)snprintf(row, sizeof row, "[perf wi]");
+      unsigned seen = 0;
+      for (unsigned t = 0; t < 8 && n < sizeof row - 36; ++t) {
+        const volatile uint32_t *w = native_perf_wi[t];
+        if (!(w[0] | w[1] | w[2] | w[3])) continue;
+        n += (size_t)snprintf(row + n, sizeof row - n, " t%u:%u/%u/%u/%u", t, w[0], w[1], w[2], w[3]);
+        seen = 1;
+      }
+      if (seen) at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[perf ctl] asks x1.5=%u x1.15=%u slack=%u hid hold=%u | finishes with deadline=%u mean use=%u permille, without=%u",
+               native_perf_ctl[0], native_perf_ctl[1], native_perf_ctl[2], native_perf_ctl[3], native_perf_ctl[4],
+               native_perf_ctl[4] ? native_perf_ctl[5] / native_perf_ctl[4] : 0, native_perf_ctl[6]);
+      if (seen || native_perf_ctl[3]) at = put(out, at, cap, row, sizeof row);
+    }
     if (&native_gpu_dcvs && native_gpu_dcvs[0]) {
-      snprintf(row, sizeof row, "[gpu dcvs] level=%u changes=%u failed=%u busy=%u%% at 220:%u 295:%u 348:%u 401:%u 475:%u 550:%u 615:%u 680:%u boosts touch=%u wake=%u",
+      snprintf(row, sizeof row, "[gpu dcvs] level=%u changes=%u failed=%u busy=%u%% at 220:%u 295:%u 348:%u 401:%u 475:%u 550:%u 615:%u 680:%u boosts late-frame=%u wake=%u",
                native_gpu_dcvs[1], native_gpu_dcvs[2], native_gpu_dcvs[3], native_gpu_dcvs[4], native_gpu_dcvs[5], native_gpu_dcvs[6],
                native_gpu_dcvs[7], native_gpu_dcvs[8], native_gpu_dcvs[9], native_gpu_dcvs[10], native_gpu_dcvs[11], native_gpu_dcvs[12],
                native_gpu_dcvs[13], native_gpu_dcvs[14]);
