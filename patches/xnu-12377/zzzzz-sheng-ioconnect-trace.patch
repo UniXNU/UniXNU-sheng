@@ -1,0 +1,37 @@
+diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
+index f256633..300f94d 100644
+--- a/iokit/Kernel/IOUserClient.cpp
++++ b/iokit/Kernel/IOUserClient.cpp
+@@ -6629,18 +6629,32 @@ is_io_device_tree_entry_exists_with_name(
+ }
+ } /* extern "C" */
+ 
++/*
++ * sheng: board diagnostics hook for user client calls: the client, the selector, the time the call came in, the time it got the
++ * client's IPC lock and the time it returned (mach units). Unset unless the board code installs it; it must not block.
++ */
++extern "C" {
++void (*sheng_ioconnect_hook)(void *client, uint32_t selector, uint64_t entered, uint64_t locked, uint64_t returned);
++}
++
+ IOReturn
+ IOUserClient::callExternalMethod(uint32_t selector, IOExternalMethodArguments * args)
+ {
+ 	IOReturn ret;
++	void (*hook)(void *, uint32_t, uint64_t, uint64_t, uint64_t) = sheng_ioconnect_hook;
++	const uint64_t entered = hook ? mach_absolute_time() : 0;
+ 
+ 	ipcEnter(defaultLocking ? (defaultLockingSingleThreadExternalMethod ? kIPCLockWrite : kIPCLockRead) : kIPCLockNone);
++	const uint64_t locked = hook ? mach_absolute_time() : 0;
+ 	if (uc2022) {
+ 		ret = ((IOUserClient2022 *) this)->externalMethod(selector, (IOExternalMethodArgumentsOpaque *) args);
+ 	} else {
+ 		ret = externalMethod(selector, args);
+ 	}
+ 	ipcExit(defaultLocking ? (defaultLockingSingleThreadExternalMethod ? kIPCLockWrite : kIPCLockRead) : kIPCLockNone);
++	if (hook) {
++		hook(this, selector, entered, locked, mach_absolute_time());
++	}
+ 
+ 	return ret;
+ }
