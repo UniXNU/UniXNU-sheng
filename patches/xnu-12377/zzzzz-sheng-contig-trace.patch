@@ -1,0 +1,34 @@
+diff --git a/osfmk/vm/vm_resident.c b/osfmk/vm/vm_resident.c
+index 8bebebb..56301b9 100644
+--- a/osfmk/vm/vm_resident.c
++++ b/osfmk/vm/vm_resident.c
+@@ -8385,7 +8385,13 @@ done_scanning:
+ /*
+  *	Allocate a list of contiguous, wired pages.
+  */
+-__mockable kern_return_t
++__mockable /*
++ * sheng: board diagnostics hook for physically contiguous allocations: pages asked for, whether they were found, when the search began
++ * and ended (mach units) and the caller's kernel backtrace. Unset unless the board code installs it; it must not block.
++ */
++void (*sheng_contig_hook)(unsigned int npages, int found, uint64_t began, uint64_t ended, const uintptr_t *frames, unsigned int count);
++
++kern_return_t
+ cpm_allocate(
+ 	vm_size_t       size,
+ 	vm_page_t       *list,
+@@ -8412,7 +8418,14 @@ cpm_allocate(
+ 	 *	list large enough to satisfy the request;
+ 	 *	the region will be physically contiguous.
+ 	 */
++	void (*sheng_hook)(unsigned int, int, uint64_t, uint64_t, const uintptr_t *, unsigned int) = sheng_contig_hook;
++	const uint64_t sheng_began = sheng_hook ? mach_absolute_time() : 0;
+ 	pages = vm_page_find_contiguous(npages, max_pnum, pnum_mask, wire, flags);
++	if (sheng_hook) {
++		uintptr_t frames[8] = {0};
++		const unsigned int count = backtrace(frames, 8, NULL, NULL);
++		sheng_hook(npages, pages != VM_PAGE_NULL, sheng_began, mach_absolute_time(), frames, count);
++	}
+ 
+ 	if (pages == VM_PAGE_NULL) {
+ 		return KERN_NO_SPACE;
