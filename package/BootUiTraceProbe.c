@@ -373,7 +373,8 @@ unsigned boot_cpu_kick(char *out,unsigned size) {
 // thread of each target process: the thread state (TH_RUN 4, TH_WAIT 1; 0x8000 when it sits on a run queue, runnable but not on a CPU),
 // priority, context switches, CPU time, wait event, user pc and lr with nine caller frames, and for a thread in mach_msg2 the pid of the
 // process its message goes to (-1 otherwise). Records go into a ring that BootDiagExport.c writes as kernel.client.bin; the targets
-// with their shared cache slide and main image address go to kernel.rings.txt for symbolization. Targets are found by name once a second
+// with their shared cache slide and main image address go to kernel.rings.txt for symbolization. A blocked thread that has not switched
+// since its last record is skipped (a heartbeat once a second), so the ring covers the whole run. Targets are found by name once a second
 // and held by a task reference; no lock is held while user memory is read.
 struct proc;typedef struct proc *proc_t;   // proc_best_name comes from vm/vm_protos.h
 int proc_pid(proc_t);
@@ -392,6 +393,10 @@ volatile unsigned boot_client_target_count;
 static const char *const cs_names[CS_TARGETS]={"SpringBoard","WidgetRenderer_","InputUI","Preferences","MobileSafari","PosterBoard"};
 static task_t cs_task[CS_TARGETS],cs_found_task[CS_TARGETS];
 static int cs_pid[CS_TARGETS],cs_found_pid[CS_TARGETS];
+// A blocked thread that did not switch since the last record of its slot is not recorded again (at most once a second, as a heartbeat):
+// the reader treats a record as lasting until the next one of the same pid.
+static uint32_t cs_last_cs[CS_TARGETS],cs_last_tick[CS_TARGETS],cs_tick;
+static uint16_t cs_last_state[CS_TARGETS];
 static unsigned cs_started;
 
 static int cs_select(proc_t p,void *arg) {
@@ -472,6 +477,8 @@ static void cs_sample(unsigned slot) {
  }
  if(space)is_release(space);
  vm_map_deallocate(map);
+ if((r.state&1) && !(r.state&0x8000) && r.cs==cs_last_cs[slot] && r.state==cs_last_state[slot] && cs_tick-cs_last_tick[slot]<250)return;
+ cs_last_cs[slot]=r.cs;cs_last_state[slot]=r.state;cs_last_tick[slot]=cs_tick;
  const uint32_t n=boot_client_count;
  boot_client_ring[n&(CS_RING-1)]=r;
  boot_client_count=n+1;
@@ -480,6 +487,7 @@ static void cs_thread(void *arg,wait_result_t result) {
  (void)arg;(void)result;
  for(unsigned tick=0;;++tick) {
   if(tick%250==0)cs_refresh();
+  cs_tick=tick;
   for(unsigned i=0;i<CS_TARGETS;++i)cs_sample(i);
   delay_for_interval(4,NSEC_PER_MSEC);
  }
