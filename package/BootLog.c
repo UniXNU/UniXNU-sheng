@@ -137,7 +137,7 @@ extern volatile uint32_t native_dpu_pipes[54] __attribute__((weak_import));
 extern volatile uint32_t native_dpu_more[40] __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_smmu[24] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_surfaces[14] __attribute__((weak_import));
-extern volatile uint32_t native_legacy_direct[9] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_direct[23] __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_state __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_check[8] __attribute__((weak_import));
 extern uint32_t native_ufs_dpu_live(unsigned reg) __attribute__((weak_import));
@@ -172,11 +172,13 @@ extern volatile uint32_t native_adreno_table_pages[4] __attribute__((weak_import
 extern unsigned NativeAdrenoGpuContextInputBits(void) __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recovery[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recovery_fault[5] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_recover_trace[4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_fault_place[4] __attribute__((weak_import));
 extern char native_adreno_fault_owner[20] __attribute__((weak_import));
 extern uint32_t native_gpu_restart[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_stats_uncached[2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_bo_memory[8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_bo_contig[2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wc_audit[6] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_submit_ibs[4] __attribute__((weak_import));
@@ -708,9 +710,10 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // [bo memory]: user BOs from the system (count, spans, refused, last refusal status, MiB live and peak), kernel-mapped BOs, import spans.
   if (&native_adreno_bo_memory) {
     char row[240];
-    snprintf(row, sizeof row, "[bo memory] system %u BOs %u spans, refused %u (last %x), live %u MiB (peak %u) | kernel %u BOs | import spans %u",
+    snprintf(row, sizeof row, "[bo memory] system %u BOs %u spans, refused %u (last %x), live %u MiB (peak %u) | kernel %u BOs | import spans %u | contiguous %u refused %u",
              native_adreno_bo_memory[0], native_adreno_bo_memory[1], native_adreno_bo_memory[2], native_adreno_bo_memory[3],
-             native_adreno_bo_memory[4], native_adreno_bo_memory[5], native_adreno_bo_memory[6], native_adreno_bo_memory[7]);
+             native_adreno_bo_memory[4], native_adreno_bo_memory[5], native_adreno_bo_memory[6], native_adreno_bo_memory[7],
+             &native_adreno_bo_contig ? native_adreno_bo_contig[0] : 0, &native_adreno_bo_contig ? native_adreno_bo_contig[1] : 0);
     at = put(out, at, cap, row, sizeof row);
   }
   // GPU clients: name opens/refused/closes, live slot (- none), highest GPU address its mappings reached (MiB), last refusal.
@@ -815,6 +818,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_adreno_recovery_fault ? native_adreno_recovery_fault[3] : 0, &native_adreno_recovery_fault ? native_adreno_recovery_fault[2] : 0,
              &native_adreno_recovery_fault ? native_adreno_recovery_fault[4] : 0);
     at = put(out, at, cap, row, sizeof row);
+    // Where the last recover() stopped: step (1 fence read, 2 restart hook, 3 table write, 4 nop, 5 replay vm, 6 replay submit), the status there, fence, last submitted.
+    if (&native_adreno_recover_trace && native_adreno_recover_trace[0]) {
+      snprintf(row, sizeof row, "[gpu recover stop] step %u st %x fence %u last %u", native_adreno_recover_trace[0], native_adreno_recover_trace[1],
+               native_adreno_recover_trace[2], native_adreno_recover_trace[3]);
+      at = put(out, at, cap, row, sizeof row);
+    }
     // Where the last fault was in the guilty VM (NativeAdrenoPublish.cpp native_adreno_fault_place): its process, the address, the mapping
     // at or below it (start, KiB) and how far past that mapping's end the address is, and the next mapping's start.
     if (&native_adreno_fault_place && native_adreno_fault_place[3]) {
@@ -1145,15 +1154,15 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // Direct scanout (sheng-dpu-scanout): the display bank's stage 1 (NativeUfs), then the flips (NativeLegacyDisplay.cpp native_legacy_direct).
   if (&native_ufs_dpu_state && native_ufs_dpu_state) {
-    char row[360];
+    char row[640];
     const volatile uint32_t *c = native_ufs_dpu_check;
     int n = snprintf(row, sizeof row, "[direct scanout] bank %x ttbr0=%x tcr=%x fsr %x->%x far=%x%08x fsynr0=%x watched %uus now sctlr=%x fsr=%x",
                      native_ufs_dpu_state, c[0], c[1], c[2], c[3], c[5], c[4], c[6], c[7],
                      native_ufs_dpu_live ? native_ufs_dpu_live(0) : 0xdead, native_ufs_dpu_live ? native_ufs_dpu_live(1) : 0xdead);
     if (&native_legacy_direct) {
       const volatile uint32_t *d = native_legacy_direct;
-      n += snprintf(row + n, sizeof row - (size_t)n, " | flips %u mapped %u mapfail %u latch>50ms %u max %uus mean %uus released %u copied %u to boot %u",
-                    d[0], d[1], d[2], d[3], d[4], d[0] ? d[5] / d[0] : 0, d[6], d[7], d[8]);
+      n += snprintf(row + n, sizeof row - (size_t)n, " | flips %u mapped %u mapfail %u latch>50ms %u max %uus mean %uus released %u copied %u to boot %u shown checks %u changed %u rows %u | reused shown %u reused previous %u | first change after latch ms <2 %u <5 %u <10 %u <20 %u more %u | written then resubmitted %u | retired at next latch %u timeout %u by copy %u",
+                    d[0], d[1], d[2], d[3], d[4], d[0] ? d[5] / d[0] : 0, d[6], d[7], d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15], d[16], d[17], d[18], d[19], d[20], d[21], d[22]);
     }
     at = put(out, at, cap, row, sizeof row);
   }
