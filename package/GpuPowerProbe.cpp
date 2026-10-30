@@ -1707,22 +1707,22 @@ void gpuStart() {
 // level after 4 windows in a row (5 right after a step up) that would have needed at most 0.8 x the next lower level, and back to the
 // floor after 80 ms without work. `sheng-gpu-dcvs-min` is the floor level (default 3, 348 MHz). Each change is the same HFI
 // GX_BW_PERF_VOTE as the boot vote, with that level's bandwidth. OPP MHz in sheng-gmu's table order.
-// Two boosts, because the first frames of an animation are the ones a window-based governor serves at the floor (i560: the frames of an
-// app launch took 30-36 ms to finish at 348 MHz, the 10 s windows around them 348 MHz 94-100 % of the time): work after the idle drop
-// starts at the lowest level at or above max(2 x now, 578 MHz) for 50 ms, and a touch report holds the top level until
-// `sheng-gpu-dcvs-boost-ms` (default 1000, 0 = off) after the last one. [13] counts the touch boosts started.
+// Two boosts, as the msm devfreq driver has them: work after the idle drop starts at the lowest level at or above max(2 x now, 578 MHz)
+// for 50 ms (msm_devfreq_active boosts by 2 for the polling period), and a flip that found the GPU still writing its frame (the display
+// driver's fence wait, native_legacy_direct[9]) asks for 2 x the current frequency for 50 ms, the case msm's dma-fence deadline hint
+// boosts for. [13] counts the late-frame boosts started, [14] the wake boosts. No input event raises the GPU.
 constexpr uint32_t kGpuMHz[9] = {0, 220, 295, 348, 401, 475, 550, 615, 680};
 constexpr unsigned kGpuTop = 8;
 extern "C" {
 // [0] 1 running, [1] level now, [2] changes, [3] failed votes, [4] busy % over the last 10 s, [5..12] % of those 10 s at levels 1..8,
-// [13] touch boosts, [14] wake boosts
+// [13] late-frame boosts, [14] wake boosts
 volatile uint32_t native_gpu_dcvs[15];
 // Every level change, the newest 256: [0] time (us since boot), [1] from << 56 | to << 48 | reason << 40 | window busy % << 32 | the MHz the window
 // would have needed (32 bits). Reasons: 1 busy over 85 % or 50 ms without a break, 2 more frequency needed, 3 one step down, 4 idle for 80 ms,
-// 5 touch boost, 6 wake boost, 7 raised to the floor, 8 the vote failed.
+// 5 late-frame boost, 6 wake boost, 7 raised to the floor, 8 the vote failed.
 volatile uint64_t native_gpu_dcvs_log[256][2];
 volatile uint32_t native_gpu_dcvs_log_count;
-extern volatile uint32_t native_hid_input_events[8] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_direct[13] __attribute__((weak_import));
 }
 uint64_t gpuBusyTicks() {
     ShengGmuIo &io = gColdDevice.io;
@@ -1764,10 +1764,9 @@ void gpuDcvsThread(void *, wait_result_t) {
     uint64_t lastBusy = gpuBusyTicks(), lastT = mach_absolute_time(), idleSince = lastT;
     uint64_t runNs = 0, winBusy = 0, winNs = 0, atLevel[kGpuTop + 1] = {};
     unsigned down = 0, hold = 0;
-    uint64_t boostAbs = 0, touchEnd = 0, wakeEnd = 0, wakeAbs = 0;
-    nanoseconds_to_absolutetime((uint64_t)bootArg("sheng-gpu-dcvs-boost-ms", 1000) * 1000000, &boostAbs);
+    uint64_t lateEnd = 0, wakeEnd = 0, wakeAbs = 0;
     nanoseconds_to_absolutetime(50000000ull, &wakeAbs);
-    uint32_t touches = &native_hid_input_events ? native_hid_input_events[6] : 0;
+    uint32_t held = &native_legacy_direct ? native_legacy_direct[9] : 0;
     bool idle = false;
     for (;;) {
         IOSleep(16);
@@ -1803,13 +1802,18 @@ void gpuDcvsThread(void *, wait_result_t) {
         if (active && idle) {
             idle = false; wakeEnd = t + wakeAbs; native_gpu_dcvs[14] = native_gpu_dcvs[14] + 1;
         }
-        if (boostAbs && &native_hid_input_events && native_hid_input_events[6] != touches) {
-            touches = native_hid_input_events[6];
-            if (t >= touchEnd) native_gpu_dcvs[13] = native_gpu_dcvs[13] + 1;
-            touchEnd = t + boostAbs;
+        // A flip that found the GPU still writing its frame is a deadline about to be missed (the display driver's fence wait, the case a
+        // dma-fence deadline hint boosts for): twice the current frequency for 50 ms.
+        if (&native_legacy_direct && native_legacy_direct[9] != held) {
+            held = native_legacy_direct[9];
+            if (t >= lateEnd) native_gpu_dcvs[13] = native_gpu_dcvs[13] + 1;
+            lateEnd = t + wakeAbs;
         }
-        if (t < touchEnd) {want = kGpuTop;reason = 5;}
-        else if (t < wakeEnd) {
+        if (t < lateEnd) {
+            const unsigned late = gpuLevelFor(kGpuMHz[cur] * 2);
+            if (want < late) {want = late;reason = 5;}
+        }
+        if (t < wakeEnd) {
             const unsigned wake = gpuLevelFor(kGpuMHz[cur] * 2 > 578 ? kGpuMHz[cur] * 2 : 578);
             if (want < wake) {want = wake;reason = 6;}
         }
