@@ -146,7 +146,8 @@ __attribute__((noinline)) void native_hid_live_checkpoint(IOService *device) {
     __asm__ volatile("" ::: "memory");
 }
 // The time (mach units) of every touch report handed to the HID event driver (event 6), the newest 65536, for the export's touch timeline.
-// Allocated by the probe (a static array of this size does not fit the kernel's data segment).
+// Allocated by BootDiagExport.c once the home screen draws (a static array of this size does not fit the kernel's data segment;
+// an allocation in the boot-time probe was in both images that stopped early in boot, i3ccf8f4a6 and i3f12fdf1a).
 volatile uint64_t *native_touch_report_ring;
 volatile uint32_t native_touch_report_count;
 void native_hid_input_observed(unsigned event,int result) {
@@ -163,7 +164,6 @@ void native_hid_input_probe(void) {
     if(!PE_parse_boot_argn("offline-hid-input",&enabled,sizeof(enabled)) || enabled!=1)return;
     if(native_hid_stage)return;
     native_hid_stage=1;
-    native_touch_report_ring=(volatile uint64_t *)IOMallocZero(sizeof(uint64_t)*65536);
     native_hid_load_status=OSKextLoadKextWithIdentifier("com.apple.iokit.IOHIDFamily");
     if(!native_hid_load_status)
         native_hid_matching_load_status=OSKext::loadKextWithIdentifier("com.apple.iokit.IOHIDEventDriver",
