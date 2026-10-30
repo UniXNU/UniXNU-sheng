@@ -62,6 +62,33 @@ extern volatile uint64_t native_gop_virtual __attribute__((weak_import));
 extern void native_legacy_direct_snapshot(void) __attribute__((weak_import));   // direct scanout: copies the surface on screen into the boot memory
 extern void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
 static uint32_t shot_width, shot_height;   // the half-resolution screenshot; 0 when there is no scanout
+// Scene screenshots taken while the run goes (boot_diag_shot_tick): up to DiagShots of the panel at half resolution, kept in memory and
+// exported as screen-<seconds of log time>.bgrx, so a scene that is gone by the export is still on file. They are analysed by code only.
+enum {DiagShots = 5};
+static uint8_t *shot_data[DiagShots];
+static uint32_t shot_time[DiagShots], shot_w, shot_h, shot_taken;
+static const uint32_t shot_at[DiagShots] = {45, 65, 85, 105, 125};
+// The kernel's rings, as text (kernel.rings.txt), formatted at the scan so its length is known and emitted as it was then.
+extern volatile uint64_t native_legacy_ring[256][2] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_ring_count __attribute__((weak_import));
+extern volatile uint64_t native_legacy_snap[64][2] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_snap_count __attribute__((weak_import));
+extern volatile uint32_t native_legacy_swapstat[16] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_tl[256][6] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_tl_count __attribute__((weak_import));
+extern volatile uint64_t native_adreno_stall_log[32][8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_stall_log_count __attribute__((weak_import));
+extern volatile uint64_t native_gpu_dcvs_log[256][2] __attribute__((weak_import));
+extern volatile uint32_t native_gpu_dcvs_log_count __attribute__((weak_import));
+extern volatile uint32_t native_gop_wait_ring_count __attribute__((weak_import));
+extern volatile uint64_t native_gop_wait_ring[64][3] __attribute__((weak_import));
+extern volatile uint32_t native_gop_wait_reasons[4] __attribute__((weak_import));
+extern char *PE_boot_args(void);
+extern char boot_log_autoreset_text[200];
+enum {DiagRings = 131072};
+static char *rings_text;
+static size_t rings_len;
+static uint32_t rings_keep, shots_kept;
 
 static void note(const char *text, const char *path, int error) {
   if (!diag_note) return;
@@ -135,6 +162,91 @@ static int worth(const void *a, const void *b) {
   return -strcmp(x->path, y->path);
 }
 
+// Called once per log round with the seconds of log time: takes the next scene screenshot when it is due.
+void boot_diag_shot_tick(unsigned now) {
+  if (shot_taken >= DiagShots || now < shot_at[shot_taken]) return;
+  PE_Video video = {};
+  if (!(&native_gop_virtual && native_gop_virtual && !PE_current_console(&video) && video.v_depth == 32 && video.v_width >= 2 && video.v_height >= 2 &&
+        video.v_width <= 16384 && video.v_height <= 16384 && video.v_rowBytes >= video.v_width * 4)) {++shot_taken; return;}
+  const uint32_t w = (uint32_t)video.v_width / 2, h = (uint32_t)video.v_height / 2;
+  const unsigned n = shot_taken++;
+  shot_data[n] = IOMallocAligned((size_t)w * h * 4, PAGE_SIZE);
+  if (!shot_data[n]) return;
+  if (&native_legacy_direct_snapshot) native_legacy_direct_snapshot();
+  for (uint32_t y = 0; y < h; ++y) {
+    uint32_t *out = (uint32_t *)(shot_data[n] + (size_t)y * w * 4);
+    const uint32_t *in = (const uint32_t *)(uintptr_t)(native_gop_virtual + (uint64_t)y * 2 * video.v_rowBytes);
+    for (uint32_t x = 0; x < w; ++x) out[x] = in[x * 2];
+  }
+  shot_w = w; shot_h = h; shot_time[n] = now;
+}
+
+#define RT(...) do {if (rings_len + 160 < DiagRings) {int n_ = snprintf(rings_text + rings_len, DiagRings - rings_len, __VA_ARGS__); if (n_ > 0) rings_len += (size_t)n_;}} while (0)
+// One text file with every kernel ring of the batch: lines are "<tag> fields", 64-bit microseconds on the uptime clock the render
+// server's traces use (CLOCK_UPTIME_RAW), so rows join by time.
+static void rings_build(void) {
+  if (!rings_text) rings_text = IOMallocAligned(DiagRings, PAGE_SIZE);
+  rings_len = 0;
+  if (!rings_text) return;
+  const char *args = PE_boot_args();
+  const size_t alen = args ? strlen(args) : 0;
+  RT("# boot-args seen by the kernel: length %lu first32 [%.32s] last32 [%s]\n", (unsigned long)alen, args ? args : "", alen > 32 ? args + alen - 32 : (args ? args : ""));
+  RT("# autoreset: %s\n", boot_log_autoreset_text);
+  if (&native_legacy_ring_count) {
+    const uint32_t n = native_legacy_ring_count;
+    RT("# swap ring: S <us> <event 1 validated 2 fence wait 3 fence passed 4 flip 5 latch 6 retire 7 copy offer 8 blank> <slot or -1> <validated depth> <fences out> <tag> (total %u)\n", n);
+    for (uint32_t i = n > 256 ? n - 256 : 0; i < n; ++i) {
+      const uint64_t t = native_legacy_ring[i & 255][0], v = native_legacy_ring[i & 255][1];
+      RT("S %llu %u %d %u %u %x\n", t, (unsigned)(v >> 56), (int)((v >> 48) & 0xff) - 1, (unsigned)((v >> 40) & 0xff), (unsigned)((v >> 24) & 0xff), (unsigned)(v & 0xffffff));
+    }
+    if (&native_legacy_snap_count && native_legacy_snap_count) {
+      RT("# swap snapshot: the 64 events before the first validation to flip over 100 ms\n");
+      for (unsigned i = 0; i < 64; ++i) {
+        const uint64_t t = native_legacy_snap[i][0], v = native_legacy_snap[i][1];
+        RT("N %llu %u %d %u %u %x\n", t, (unsigned)(v >> 56), (int)((v >> 48) & 0xff) - 1, (unsigned)((v >> 40) & 0xff), (unsigned)((v >> 24) & 0xff), (unsigned)(v & 0xffffff));
+      }
+    }
+    RT("# swap stats: validated %u kicks %u refused(transferred %u not ready %u no head %u latch in flight %u) fence waits %u copy %u blank %u flips %u latches %u retires %u slow(>100ms) %u longest %uus total %uus max depth %u\n",
+       native_legacy_swapstat[0], native_legacy_swapstat[1], native_legacy_swapstat[2], native_legacy_swapstat[3], native_legacy_swapstat[4], native_legacy_swapstat[5],
+       native_legacy_swapstat[6], native_legacy_swapstat[7], native_legacy_swapstat[8], native_legacy_swapstat[9], native_legacy_swapstat[10], native_legacy_swapstat[11],
+       native_legacy_swapstat[12], native_legacy_swapstat[13], native_legacy_swapstat[14], native_legacy_swapstat[15]);
+  }
+  if (&native_adreno_tl_count) {
+    const uint32_t n = native_adreno_tl_count;
+    RT("# gpu timeline: T <fence> <buffers> <submit us> <cp start ticks> <cp end ticks> (19.2 MHz) <level at submit> <ring status 1 attached 2 stamps 4 page 8 acquired 16 read> (total %u; raw words, zero when the CP wrote nothing)\n", n);
+    for (uint32_t i = n > 256 ? n - 256 : 0; i < n; ++i) {
+      const volatile uint64_t *r = native_adreno_tl[i & 255];
+      RT("T %u %u %llu %llu %llu %u %u\n", (unsigned)(r[0] & 0xffffffffu), (unsigned)((r[0] >> 32) & 0x03ffffffu), r[1], r[2], r[3], (unsigned)r[4], (unsigned)(r[0] >> 58));
+    }
+  }
+  if (&native_adreno_stall_log_count) {
+    const uint32_t n = native_adreno_stall_log_count;
+    RT("# gpu stall ring: X <us> <fence> <event 0 ended 1 kick 3 drain 4 snapshot> <timed-out waits> <pending us> <rptr w before, rptr w after (hex)> <client queue> <first handle> <buffers> (total %u)\n", n);
+    for (uint32_t i = n > 32 ? n - 32 : 0; i < n; ++i) {
+      const volatile uint64_t *r = native_adreno_stall_log[i & 31];
+      RT("X %llu %u %u %u %llu %llx %llx %llx %u\n", r[0], (unsigned)r[1], (unsigned)(r[2] & 0xff), (unsigned)(r[2] >> 8), r[3], r[4], r[5], r[6] & 0xffffffffffffull, (unsigned)(r[6] >> 48));
+    }
+  }
+  if (&native_gpu_dcvs_log_count) {
+    const uint32_t n = native_gpu_dcvs_log_count;
+    RT("# gpu dcvs ring: D <us> <from level> <to level> <reason 1 busy 2 need 3 down 4 idle 5 touch 6 wake 7 floor 8 vote failed> <window busy %%> <needed MHz> (total %u)\n", n);
+    for (uint32_t i = n > 256 ? n - 256 : 0; i < n; ++i) {
+      const uint64_t t = native_gpu_dcvs_log[i & 255][0], v = native_gpu_dcvs_log[i & 255][1];
+      RT("D %llu %u %u %u %u %u\n", t, (unsigned)(v >> 56), (unsigned)((v >> 48) & 0xff), (unsigned)((v >> 40) & 0xff), (unsigned)((v >> 32) & 0xff), (unsigned)(v & 0xffffffffu));
+    }
+  }
+  if (&native_gop_wait_ring_count) {
+    const uint32_t n = native_gop_wait_ring_count;
+    RT("# scanout waits that ended without a swap after 100 ms or more (the object waited on is the presenter's swap slot): W <us> <waited ms> <reason 0 deadline 1 interrupted 2 other> <pid> <swap offered> <delivered> <online> <requested ms> (total %u; reasons: deadline %u interrupted %u other %u woken with a swap %u)\n",
+       n, native_gop_wait_reasons[0], native_gop_wait_reasons[1], native_gop_wait_reasons[2], native_gop_wait_reasons[3]);
+    for (uint32_t i = n > 64 ? n - 64 : 0; i < n; ++i) {
+      const volatile uint64_t *r = native_gop_wait_ring[i & 63];
+      RT("W %llu %llu %u %u %u %u %u %u\n", r[0], (r[1] & 0xffffffffffffffull) / 1000000, (unsigned)(r[1] >> 56), (unsigned)(r[2] & 0xffffffffu), (unsigned)((r[2] >> 32) & 1),
+         (unsigned)((r[2] >> 33) & 1), (unsigned)((r[2] >> 34) & 1), (unsigned)(r[2] >> 40));
+    }
+  }
+}
+
 // The stream's length (without the 16-byte blob header) for at most budget bytes, after scanning the roots; 0 when nothing could be read.
 uint64_t boot_diag_scan(uint64_t budget) {
   // The scan's only zero return is a failed allocation ([diag] status=-8 in i84edf75a1 and, with the table from page memory,
@@ -153,6 +265,18 @@ uint64_t boot_diag_scan(uint64_t budget) {
       video.v_width <= 16384 && video.v_height <= 16384 && video.v_rowBytes >= video.v_width * 4) {
     const uint64_t cost = 24 + strlen("screen.bgrx") + 16 + (uint64_t)(video.v_width / 2) * (video.v_height / 2) * 4;
     if (used + cost <= budget) {shot_width = (uint32_t)video.v_width / 2; shot_height = (uint32_t)video.v_height / 2; used += cost;}
+  }
+  // The kernel's rings and the scene screenshots come before every file: they are this run's own record.
+  rings_keep = shots_kept = 0;
+  rings_build();
+  if (rings_text && rings_len) {
+    const uint64_t cost = 24 + strlen("kernel.rings.txt") + rings_len;
+    if (used + cost <= budget) {rings_keep = 1; used += cost;}
+  }
+  for (unsigned i = 0; i < DiagShots; ++i) {
+    if (!shot_data[i]) continue;
+    const uint64_t cost = 24 + strlen("screen-000.bgrx") + 16 + (uint64_t)shot_w * shot_h * 4;
+    if (used + cost <= budget) {++shots_kept; used += cost;} else shot_time[i] = 0xffffffffu;
   }
   vfs_context_t ctx = vfs_context_kernel();
   for (unsigned i = 0; i < sizeof diag_roots / sizeof diag_roots[0]; ++i) scan(diag_roots[i], 0, i, ctx);
@@ -183,7 +307,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   if (!chunk) return -1;
   vfs_context_t ctx = vfs_context_kernel();
   int rc = emit("M2VCACH1", 8, arg);
-  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0);
+  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept;
   if (!rc) rc = emit(&root_len, 4, arg);
   if (!rc) rc = emit("/", 1, arg);
   if (!rc) rc = emit(&count, 4, arg);
@@ -201,6 +325,23 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
       for (uint32_t x = 0; x < shot_width; ++x) out[x] = live ? in[x * 2] : 0;
       rc = emit(chunk, row, arg);
     }
+  }
+  if (!rc && rings_keep) {
+    rc = put_head(emit, arg, "kernel.rings.txt", 0100644, 0, 0, rings_len);
+    for (size_t at = 0; !rc && at < rings_len;) {
+      const uint32_t n = rings_len - at < 65536 ? (uint32_t)(rings_len - at) : 65536;
+      rc = emit(rings_text + at, n, arg);
+      at += n;
+    }
+  }
+  for (unsigned i = 0; !rc && i < DiagShots; ++i) {
+    if (!shot_data[i] || shot_time[i] == 0xffffffffu) continue;
+    char name[24];
+    snprintf(name, sizeof name, "screen-%03u.bgrx", shot_time[i] % 1000);
+    const uint32_t row = shot_w * 4, head[4] = {'S' | 'H' << 8 | 'O' << 16 | (uint32_t)'T' << 24, shot_w, shot_h, row};
+    rc = put_head(emit, arg, name, 0100644, 0, 0, 16 + (uint64_t)row * shot_h);
+    if (!rc) rc = emit(head, sizeof head, arg);
+    for (uint32_t y = 0; !rc && y < shot_h; ++y) rc = emit(shot_data[i] + (size_t)y * row, row, arg);
   }
   for (uint32_t i = 0; !rc && i < diag_count; ++i) {
     const struct diag_file *f = &diag_files[i];
