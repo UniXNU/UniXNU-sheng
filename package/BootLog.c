@@ -137,7 +137,14 @@ extern volatile uint32_t native_dpu_pipes[54] __attribute__((weak_import));
 extern volatile uint32_t native_dpu_more[40] __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_smmu[24] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_surfaces[14] __attribute__((weak_import));
-extern volatile uint32_t native_legacy_direct[23] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_direct[38] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_dtrace[160] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_dchg[8][6] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_dfrozen __attribute__((weak_import));
+extern volatile uint32_t native_legacy_dcount __attribute__((weak_import));
+extern volatile uint64_t native_legacy_dphys[4] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_import_big[16 * 3] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_import_big_count __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_state __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_check[8] __attribute__((weak_import));
 extern uint32_t native_ufs_dpu_live(unsigned reg) __attribute__((weak_import));
@@ -1154,17 +1161,38 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // Direct scanout (sheng-dpu-scanout): the display bank's stage 1 (NativeUfs), then the flips (NativeLegacyDisplay.cpp native_legacy_direct).
   if (&native_ufs_dpu_state && native_ufs_dpu_state) {
-    char row[640];
+    char row[900];
     const volatile uint32_t *c = native_ufs_dpu_check;
     int n = snprintf(row, sizeof row, "[direct scanout] bank %x ttbr0=%x tcr=%x fsr %x->%x far=%x%08x fsynr0=%x watched %uus now sctlr=%x fsr=%x",
                      native_ufs_dpu_state, c[0], c[1], c[2], c[3], c[5], c[4], c[6], c[7],
                      native_ufs_dpu_live ? native_ufs_dpu_live(0) : 0xdead, native_ufs_dpu_live ? native_ufs_dpu_live(1) : 0xdead);
     if (&native_legacy_direct) {
       const volatile uint32_t *d = native_legacy_direct;
-      n += snprintf(row + n, sizeof row - (size_t)n, " | flips %u mapped %u mapfail %u latch>50ms %u max %uus mean %uus released %u copied %u to boot %u shown checks %u changed %u rows %u | reused shown %u reused previous %u | first change after latch ms <2 %u <5 %u <10 %u <20 %u more %u | written then resubmitted %u | retired at next latch %u timeout %u by copy %u",
-                    d[0], d[1], d[2], d[3], d[4], d[0] ? d[5] / d[0] : 0, d[6], d[7], d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15], d[16], d[17], d[18], d[19], d[20], d[21], d[22]);
+      n += snprintf(row + n, sizeof row - (size_t)n, " | flips %u mapped %u mapfail %u latch>50ms %u max %uus mean %uus released %u copied %u to boot %u shown checks %u changed %u rows %u | reused shown %u reused previous %u | first change after latch ms <2 %u <5 %u <10 %u <20 %u more %u | written then resubmitted %u | retired at next latch %u timeout %u by copy %u | new vs shown rows equal, shown unchanged: 63+ %u 48+ %u 16+ %u fewer %u, shown changed: 63+ %u 48+ %u 16+ %u fewer %u | held for the GPU %u total %uus longest %uus gave up %u | changes with the GPU busy %u idle %u of %u",
+                    d[0], d[1], d[2], d[3], d[4], d[0] ? d[5] / d[0] : 0, d[6], d[7], d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15], d[16], d[17], d[18], d[19], d[20], d[21], d[22], d[23], d[24], d[25], d[26], d[27], d[28], d[29], d[30], d[31], d[32], d[33], d[34], d[35], d[36], d[37]);
     }
     at = put(out, at, cap, row, sizeof row);
+    if (&native_legacy_dtrace && &native_legacy_dcount && native_legacy_dcount >= 160) {
+      // Event order of 96 events: F = swap flipped to the slot, L = latched, C = the surface on screen changed; @ the microseconds since the first.
+      char tr[3000];
+      const uint32_t total = native_legacy_dcount, start = total % 160, first = native_legacy_dtrace[start] >> 4;
+      int m = snprintf(tr, sizeof tr, "[direct trace] base %u slots %llx %llx %llx %llx big imports %u: ", first, native_legacy_dphys[0], native_legacy_dphys[1], native_legacy_dphys[2], native_legacy_dphys[3], native_adreno_import_big_count);
+      for (unsigned k = 0; k < 16 && &native_adreno_import_big && k < native_adreno_import_big_count; ++k)
+        m += snprintf(tr + m, sizeof tr - (size_t)m, "%llx>%llx(%lluM) ", native_adreno_import_big[3 * k], native_adreno_import_big[3 * k + 1], native_adreno_import_big[3 * k + 2] >> 20);
+      m += snprintf(tr + m, sizeof tr - (size_t)m, "| ");
+      for (unsigned i = 0; i < 160 && m < (int)sizeof tr - 16; ++i) {
+        const uint32_t v = native_legacy_dtrace[(start + i) % 160];
+        m += snprintf(tr + m, sizeof tr - (size_t)m, "%c%u@%u ", "FLC?"[(v >> 2) & 3], v & 3, ((v >> 4) - first) & 0xfffffffu);
+      }
+      at = put(out, at, cap, tr, sizeof tr);
+    }
+    if (&native_legacy_dchg && native_legacy_dcount) {
+      char ch[420];
+      int k = snprintf(ch, sizeof ch, "[direct changes] first changes (us slot rows first-last busy-fences):");
+      for (unsigned i = 0; i < 8 && k < (int)sizeof ch - 60; ++i)
+        if (native_legacy_dchg[i][0]) k += snprintf(ch + k, sizeof ch - (size_t)k, " %u s%u r%u %u-%u b%d", native_legacy_dchg[i][0], native_legacy_dchg[i][1], native_legacy_dchg[i][2], native_legacy_dchg[i][3], native_legacy_dchg[i][4], (int)native_legacy_dchg[i][5]);
+      at = put(out, at, cap, ch, sizeof ch);
+    }
   }
   // The display streams in the apps SMMU as the boot loader left them (NativeUfs, sheng-dpu=2): per stream group|bank, SMR, S2CR, CBAR,
   // CBA2R, SCTLR, TTBR0, TCR, FSR.
