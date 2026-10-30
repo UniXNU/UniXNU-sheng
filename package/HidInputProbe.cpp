@@ -10,6 +10,7 @@
 #include <libkern/c++/OSKext.h>
 #include <pexpert/pexpert.h>
 #include <mach/kmod.h>
+#include <mach/mach_time.h>
 extern kmod_info_t g_kernel_kmod_info;
 extern "C" void native_hid_static_init(void) __asm__("__GLOBAL__sub_I_NativeHidInput.cpp");
 extern "C" IOService *native_hid_input_allocate(void);
@@ -144,8 +145,17 @@ __attribute__((noinline)) void native_hid_live_checkpoint(IOService *device) {
     }
     __asm__ volatile("" ::: "memory");
 }
+// The time (mach units) of every touch report handed to the HID event driver (event 6), the newest 65536, for the export's touch timeline.
+// Allocated by the probe (a static array of this size does not fit the kernel's data segment).
+volatile uint64_t *native_touch_report_ring;
+volatile uint32_t native_touch_report_count;
 void native_hid_input_observed(unsigned event,int result) {
     if(event<8){native_hid_input_events[event]=native_hid_input_events[event]+1;native_hid_input_results[event]=result;}
+    if(event==6 && native_touch_report_ring) {
+        const uint32_t n=native_touch_report_count;
+        native_touch_report_ring[n&65535]=mach_absolute_time();
+        native_touch_report_count=n+1;
+    }
 }
 __attribute__((noinline)) void native_hid_checkpoint(void) { __asm__ volatile("" ::: "memory"); }
 void native_hid_input_probe(void) {
@@ -153,6 +163,7 @@ void native_hid_input_probe(void) {
     if(!PE_parse_boot_argn("offline-hid-input",&enabled,sizeof(enabled)) || enabled!=1)return;
     if(native_hid_stage)return;
     native_hid_stage=1;
+    native_touch_report_ring=(volatile uint64_t *)IOMallocZero(sizeof(uint64_t)*65536);
     native_hid_load_status=OSKextLoadKextWithIdentifier("com.apple.iokit.IOHIDFamily");
     if(!native_hid_load_status)
         native_hid_matching_load_status=OSKext::loadKextWithIdentifier("com.apple.iokit.IOHIDEventDriver",
