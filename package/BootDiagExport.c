@@ -165,45 +165,54 @@ static int worth(const void *a, const void *b) {
 }
 
 // IPC trace: every message sent to a port of backboardd (the render server's process), the question being what wakes its render thread
-// before a slow frame. The kernel calls sheng_ipc_send_hook (the xnu patch) with the destination port locked; this records the time, the
-// message id and the sender's pid in a ring, kernel.ipc.bin is the ring in time order (16-byte header "IPC1", u32 total, u32 kept, u32 0;
-// then {u64 microseconds, u32 message id, i32 sender pid (0 kernel)}), and kernel.rings.txt names the pids. The tick below finds
-// backboardd's pid by name.
+// before a slow frame. The kernel calls sheng_ipc_send_hook (the xnu patch) with the destination port locked for the messages to the
+// task in sheng_ipc_trace_task; this records the time, the message id and the sender's pid in a ring. kernel.ipc.bin is the ring in time
+// order (16-byte header "IPC1", u32 total, u32 kept, u32 0; then {u64 microseconds, u32 message id, i32 sender pid (0 kernel)}), and
+// kernel.rings.txt names the pids. The hook goes in only once the home screen draws (50 flips), so it cannot touch the boot's startup
+// (the first run with it, i7d94e5078, stopped at the logo with SpringBoard committing nothing; the cause is not known).
 extern uint64_t mach_absolute_time(void);
 extern void absolutetime_to_nanoseconds(uint64_t, uint64_t *);
-extern void (*sheng_ipc_send_hook)(uint32_t, int, int, uint32_t) __attribute__((weak_import));
+extern void *sheng_ipc_trace_task __attribute__((weak_import));
+extern void (*sheng_ipc_send_hook)(uint32_t, void *) __attribute__((weak_import));
+extern struct task *proc_task(proc_t);
 enum {IpcRing = 131072};
 struct ipc_rec {uint64_t abs; uint32_t id; int32_t sender;};
 static struct ipc_rec *ipc_ring;
 static volatile uint32_t ipc_count;
-static volatile int ipc_bb_pid;
+static uint32_t ipc_kept;   // the count the export measured, so the file it writes has the length it announced
+static int ipc_bb_pid;
 static unsigned ipc_scans;
 
-static void ipc_hook(uint32_t id, int sender, int receiver, uint32_t flags) {
-  (void)flags;
-  if (receiver != ipc_bb_pid || receiver <= 0) return;
+static void ipc_hook(uint32_t id, void *sender_task) {
   const uint32_t n = __atomic_fetch_add(&ipc_count, 1, __ATOMIC_RELAXED);
   struct ipc_rec *r = &ipc_ring[n & (IpcRing - 1)];
-  r->abs = mach_absolute_time(); r->id = id; r->sender = sender;
+  proc_t proc = sender_task ? (proc_t)get_bsdtask_info((task_t)sender_task) : NULL;
+  r->abs = mach_absolute_time(); r->id = id; r->sender = sender_task ? (proc ? proc_pid(proc) : -1) : 0;
 }
 
 static void ipc_trace_tick(void) {
-  if (!&sheng_ipc_send_hook) return;
+  if (!&sheng_ipc_send_hook || !&sheng_ipc_trace_task) return;
+  if (!&native_legacy_swapstat || native_legacy_swapstat[9] < 50) return;   // the home screen draws
   if (!ipc_ring) {
     ipc_ring = IOMallocAligned(sizeof(struct ipc_rec) * IpcRing, PAGE_SIZE);
     if (!ipc_ring) return;
     memset(ipc_ring, 0, sizeof(struct ipc_rec) * IpcRing);
   }
-  if (ipc_bb_pid <= 0 || (++ipc_scans % 8) == 0) {   // a restarted backboardd has a new pid
-    int found = 0;
-    for (int pid = 1; pid < 1500 && !found; ++pid) {
-      char name[32] = {0};
-      proc_name(pid, name, sizeof name);
-      if (!strcmp(name, "backboardd")) found = pid;
-    }
-    if (found) ipc_bb_pid = found;
+  if (ipc_bb_pid > 0 && (++ipc_scans % 8) != 0) return;   // a restarted backboardd has a new pid and task
+  int found = 0;
+  for (int pid = 1; pid < 512 && !found; ++pid) {
+    char name[32] = {0};
+    proc_name(pid, name, sizeof name);
+    if (!strcmp(name, "backboardd")) found = pid;
   }
-  if (ipc_bb_pid > 0 && !sheng_ipc_send_hook) sheng_ipc_send_hook = ipc_hook;
+  if (!found) return;
+  proc_t proc = proc_find(found);
+  if (!proc) return;
+  void *task = proc_task(proc);
+  proc_rele(proc);
+  ipc_bb_pid = found;
+  if (task && sheng_ipc_trace_task != task) sheng_ipc_trace_task = task;   // only compared, never followed
+  if (!sheng_ipc_send_hook) sheng_ipc_send_hook = ipc_hook;
 }
 
 // Called once per log round with the seconds of log time: takes the next scene screenshot when it is due.
@@ -283,11 +292,11 @@ static void rings_build(void) {
     }
   }
   if (ipc_ring) {
-    const uint32_t n = ipc_count, kept = n > IpcRing ? IpcRing : n;
+    const uint32_t n = ipc_kept ? ipc_kept : ipc_count, kept = n > IpcRing ? IpcRing : n;
     RT("# ipc to backboardd: pid %d total %u kept %u (kernel.ipc.bin); P <pid> <name> for every sender in it\n", (int)ipc_bb_pid, n, kept);
     int seen[64]; unsigned seen_n = 0;
     for (uint32_t i = 0; i < kept && seen_n < 64; ++i) {
-      const int pid = ipc_ring[i].sender;
+      const int pid = ipc_ring[(n - kept + i) & (IpcRing - 1)].sender;
       unsigned k = 0;
       while (k < seen_n && seen[k] != pid) ++k;
       if (k < seen_n) continue;
@@ -330,14 +339,15 @@ uint64_t boot_diag_scan(uint64_t budget) {
   }
   // The kernel's rings and the scene screenshots come before every file: they are this run's own record.
   rings_keep = shots_kept = 0;
+  ipc_kept = ipc_count;
   rings_build();
   if (rings_text && rings_len) {
     const uint64_t cost = 24 + strlen("kernel.rings.txt") + rings_len;
     if (used + cost <= budget) {rings_keep = 1; used += cost;}
   }
   ipc_keep = 0;
-  if (ipc_ring && ipc_count) {
-    const uint32_t kept = ipc_count > IpcRing ? IpcRing : ipc_count;
+  if (ipc_ring && ipc_kept) {
+    const uint32_t kept = ipc_kept > IpcRing ? IpcRing : ipc_kept;
     const uint64_t cost = 24 + strlen("kernel.ipc.bin") + 16 + (uint64_t)kept * sizeof(struct ipc_rec);
     if (used + cost <= budget) {ipc_keep = 1; used += cost;}
   }
@@ -403,14 +413,14 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
     }
   }
   if (!rc && ipc_keep) {
-    const uint32_t total = ipc_count, kept = total > IpcRing ? IpcRing : total;
-    const uint32_t head[4] = {'I' | 'P' << 8 | 'C' << 16 | (uint32_t)'1' << 24, total, kept, 0};
+    const uint32_t ipc_total = ipc_kept, kept = ipc_total > IpcRing ? IpcRing : ipc_total;   // the measured count: newer records wait for the next export
+    const uint32_t head[4] = {'I' | 'P' << 8 | 'C' << 16 | (uint32_t)'1' << 24, ipc_total, kept, 0};
     rc = put_head(emit, arg, "kernel.ipc.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct ipc_rec));
     if (!rc) rc = emit(head, sizeof head, arg);
     for (uint32_t at = 0; !rc && at < kept;) {   // oldest first, microseconds since boot
       uint32_t n = kept - at < 4096 ? kept - at : 4096;
       for (uint32_t k = 0; k < n; ++k) {
-        const struct ipc_rec *r = &ipc_ring[(total - kept + at + k) & (IpcRing - 1)];
+        const struct ipc_rec *r = &ipc_ring[(ipc_total - kept + at + k) & (IpcRing - 1)];
         uint64_t ns = 0;
         absolutetime_to_nanoseconds(r->abs, &ns);
         struct ipc_rec out = {ns / 1000, r->id, r->sender};
