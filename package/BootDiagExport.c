@@ -203,6 +203,30 @@ extern volatile uint32_t native_ioc_count __attribute__((weak_import));
 extern void native_ioc_trace_start(const int *, unsigned) __attribute__((weak_import));
 enum {IocRing = 262144};
 static uint32_t ioc_kept, ioc_keep;
+// The GPU driver's calls (NativeAdrenoPublish.cpp), kernel.gpucalls.bin: header "GPU1", total, kept, 0; then 32-byte records {u64
+// microseconds entered, u32 microseconds in the driver, u32 of those waiting for the device lock, u16 ABI method, u16 0, i32 pid, u32
+// status, u32 KiB of an allocation}.
+struct gpu_call_rec {uint64_t entered; uint32_t us, lock_us; uint16_t method, flags; int32_t pid; uint32_t status, kib;};
+extern struct gpu_call_rec *native_adreno_call_ring __attribute__((weak_import));
+extern volatile uint32_t native_adreno_call_count __attribute__((weak_import));
+enum {GpuCallRing = 262144};
+static uint32_t gpucall_kept, gpucall_keep;
+// Physically contiguous allocations (the xnu hook in cpm_allocate), kernel.contig.bin: header "CTG1", total, kept, 0; then 72-byte records
+// {u64 microseconds began, u32 microseconds searching, u32 pages | found << 31, i32 pid, u32 frames, u64 kernel return addresses[6]};
+// kernel.rings.txt has the running address of boot_diag_shot_tick for the slide.
+struct contig_rec {uint64_t began; uint32_t us, pages; int32_t pid; uint32_t count; uint64_t frames[6];};
+extern void (*sheng_contig_hook)(unsigned int, int, uint64_t, uint64_t, const uintptr_t *, unsigned int) __attribute__((weak_import));
+enum {ContigRing = 8192};
+static struct contig_rec *contig_ring;
+static volatile uint32_t contig_count;
+static uint32_t contig_kept, contig_keep;
+static void contig_hook(unsigned int pages, int found, uint64_t began, uint64_t ended, const uintptr_t *frames, unsigned int count) {
+  const uint32_t n = __atomic_fetch_add(&contig_count, 1, __ATOMIC_RELAXED);
+  struct contig_rec *r = &contig_ring[n & (ContigRing - 1)];
+  r->began = began; r->us = (uint32_t)(ended - began); r->pages = pages | (found ? 0x80000000u : 0); r->pid = proc_selfpid();
+  r->count = count;
+  for (unsigned i = 0; i < 6; ++i) r->frames[i] = i < count ? (uint64_t)frames[i] : 0;
+}
 extern void boot_client_sampler_start(void) __attribute__((weak_import));
 extern struct cs_rec *boot_client_ring __attribute__((weak_import));
 extern volatile uint32_t boot_client_count __attribute__((weak_import));
@@ -243,6 +267,19 @@ static void *ipc_task_of(const char *want, int *pid_out) {
 static void ipc_trace_tick(void) {
   if (!&native_legacy_swapstat || native_legacy_swapstat[9] < 50) return;   // the home screen draws
   if (&boot_client_sampler_start) boot_client_sampler_start();
+  // Everything below allocates only now, once the home screen draws: nothing of this trace runs during startup.
+  if (&sheng_contig_hook && !contig_ring) {
+    contig_ring = IOMallocAligned(sizeof(struct contig_rec) * ContigRing, PAGE_SIZE);
+    if (contig_ring) {memset(contig_ring, 0, sizeof(struct contig_rec) * ContigRing); sheng_contig_hook = contig_hook;}
+  }
+  if (&native_adreno_call_ring && !native_adreno_call_ring) {
+    struct gpu_call_rec *calls = IOMallocAligned(sizeof(struct gpu_call_rec) * GpuCallRing, PAGE_SIZE);
+    if (calls) {memset(calls, 0, sizeof(struct gpu_call_rec) * GpuCallRing); native_adreno_call_ring = calls;}
+  }
+  if (&native_touch_report_ring && !native_touch_report_ring) {
+    uint64_t *touches = IOMallocAligned(sizeof(uint64_t) * TouchRing, PAGE_SIZE);
+    if (touches) {memset(touches, 0, sizeof(uint64_t) * TouchRing); native_touch_report_ring = touches;}
+  }
   if (&native_ioc_trace_start && &boot_client_target_count) {
     int pids[32]; unsigned n = 0;
     for (unsigned i = 0; i < boot_client_target_count && i < 32; ++i) pids[n++] = boot_client_targets[i].pid;
@@ -360,6 +397,18 @@ static void rings_build(void) {
       RT("K %llx %.60s\n", name, (const char *)(uintptr_t)name);
     }
   }
+  {
+    // Names of every pid in the user client, GPU call and contiguous allocation rings: N <pid> <name>.
+    int seen[160]; unsigned seen_n = 0;
+    #define NOTE_PID(p_) do {const int p__ = (p_); unsigned k_ = 0; while (k_ < seen_n && seen[k_] != p__) ++k_; \
+      if (k_ == seen_n && seen_n < 160 && p__ > 0) {seen[seen_n++] = p__; char nm_[32] = {0}; proc_name(p__, nm_, sizeof nm_); RT("N %d %s\n", p__, nm_);}} while (0)
+    RT("# pid names (user client, GPU call and contiguous allocation rings): N <pid> <name>; kernel reference boot_diag_shot_tick=%llx\n",
+       (unsigned long long)(uintptr_t)&boot_diag_shot_tick);
+    if (ioc_kept) {const uint32_t kept = ioc_kept > IocRing ? IocRing : ioc_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(native_ioc_ring[(ioc_kept - kept + i) & (IocRing - 1)].pid);}
+    if (gpucall_kept) {const uint32_t kept = gpucall_kept > GpuCallRing ? GpuCallRing : gpucall_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(native_adreno_call_ring[(gpucall_kept - kept + i) & (GpuCallRing - 1)].pid);}
+    if (contig_kept) {const uint32_t kept = contig_kept > ContigRing ? ContigRing : contig_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(contig_ring[(contig_kept - kept + i) & (ContigRing - 1)].pid);}
+    #undef NOTE_PID
+  }
   if (ipc_ring) {
     const uint32_t n = ipc_kept ? ipc_kept : ipc_count, kept = n > IpcRing ? IpcRing : n;
     RT("# ipc to backboardd (receiver 1, pid %d) and SpringBoard (receiver 2, pid %d): total %u kept %u (kernel.ipc.bin); P <pid> <name> for every sender in it\n",
@@ -414,6 +463,8 @@ uint64_t boot_diag_scan(uint64_t budget) {
   client_kept = (&boot_client_count && &boot_client_ring && boot_client_ring) ? boot_client_count : 0;
   cpu_kept = (&boot_cpu_count && &boot_cpu_ring && boot_cpu_ring) ? boot_cpu_count : 0;
   ioc_kept = (&native_ioc_count && &native_ioc_ring && native_ioc_ring) ? native_ioc_count : 0;
+  gpucall_kept = (&native_adreno_call_count && &native_adreno_call_ring && native_adreno_call_ring) ? native_adreno_call_count : 0;
+  contig_kept = contig_ring ? contig_count : 0;
   rings_build();
   if (rings_text && rings_len) {
     const uint64_t cost = 24 + strlen("kernel.rings.txt") + rings_len;
@@ -427,6 +478,18 @@ uint64_t boot_diag_scan(uint64_t budget) {
     const uint32_t kept = cpu_kept > CpuRing ? CpuRing : cpu_kept;
     const uint64_t cost = 24 + strlen("kernel.cpus.bin") + 16 + (uint64_t)kept * sizeof(struct cs_cpu);
     if (used + cost <= budget) {cpu_keep = 1; used += cost;}
+  }
+  gpucall_keep = 0;
+  if (gpucall_kept) {
+    const uint32_t kept = gpucall_kept > GpuCallRing ? GpuCallRing : gpucall_kept;
+    const uint64_t cost = 24 + strlen("kernel.gpucalls.bin") + 16 + (uint64_t)kept * sizeof(struct gpu_call_rec);
+    if (used + cost <= budget) {gpucall_keep = 1; used += cost;}
+  }
+  contig_keep = 0;
+  if (contig_kept) {
+    const uint32_t kept = contig_kept > ContigRing ? ContigRing : contig_kept;
+    const uint64_t cost = 24 + strlen("kernel.contig.bin") + 16 + (uint64_t)kept * sizeof(struct contig_rec);
+    if (used + cost <= budget) {contig_keep = 1; used += cost;}
   }
   ioc_keep = 0;
   if (ioc_kept) {
@@ -484,7 +547,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   if (!chunk) return -1;
   vfs_context_t ctx = vfs_context_kernel();
   int rc = emit("M2VCACH1", 8, arg);
-  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep + touch_keep + cpu_keep + ioc_keep;
+  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep + touch_keep + cpu_keep + ioc_keep + gpucall_keep + contig_keep;
   if (!rc) rc = emit(&root_len, 4, arg);
   if (!rc) rc = emit("/", 1, arg);
   if (!rc) rc = emit(&count, 4, arg);
@@ -526,6 +589,44 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
         memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
       }
       rc = emit(chunk, n * sizeof(struct ipc_rec), arg);
+      at += n;
+    }
+  }
+  if (!rc && gpucall_keep) {
+    const uint32_t total = gpucall_kept, kept = total > GpuCallRing ? GpuCallRing : total;
+    const uint32_t head[4] = {'G' | 'P' << 8 | 'U' << 16 | (uint32_t)'1' << 24, total, kept, 0};
+    rc = put_head(emit, arg, "kernel.gpucalls.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct gpu_call_rec));
+    if (!rc) rc = emit(head, sizeof head, arg);
+    for (uint32_t at = 0; !rc && at < kept;) {
+      const uint32_t n = kept - at < 8192 ? kept - at : 8192;
+      for (uint32_t k = 0; k < n; ++k) {
+        struct gpu_call_rec out = native_adreno_call_ring[(total - kept + at + k) & (GpuCallRing - 1)];
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(out.entered, &ns);
+        out.entered = ns / 1000;
+        memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
+      }
+      rc = emit(chunk, n * sizeof(struct gpu_call_rec), arg);
+      at += n;
+    }
+  }
+  if (!rc && contig_keep) {
+    const uint32_t total = contig_kept, kept = total > ContigRing ? ContigRing : total;
+    const uint32_t head[4] = {'C' | 'T' << 8 | 'G' << 16 | (uint32_t)'1' << 24, total, kept, 0};
+    rc = put_head(emit, arg, "kernel.contig.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct contig_rec));
+    if (!rc) rc = emit(head, sizeof head, arg);
+    for (uint32_t at = 0; !rc && at < kept;) {
+      const uint32_t n = kept - at < 2048 ? kept - at : 2048;
+      for (uint32_t k = 0; k < n; ++k) {
+        struct contig_rec out = contig_ring[(total - kept + at + k) & (ContigRing - 1)];
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(out.began, &ns);
+        out.began = ns / 1000;
+        absolutetime_to_nanoseconds(out.us, &ns);
+        out.us = (uint32_t)(ns / 1000);
+        memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
+      }
+      rc = emit(chunk, n * sizeof(struct contig_rec), arg);
       at += n;
     }
   }
