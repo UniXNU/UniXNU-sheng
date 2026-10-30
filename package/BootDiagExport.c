@@ -69,12 +69,14 @@ static uint8_t *shot_data[DiagShots];
 static uint32_t shot_time[DiagShots], shot_w, shot_h, shot_taken;
 static const uint32_t shot_at[DiagShots] = {45, 65, 85, 105, 125};
 // The kernel's rings, as text (kernel.rings.txt), formatted at the scan so its length is known and emitted as it was then.
-extern volatile uint64_t native_legacy_ring[256][2] __attribute__((weak_import));
+extern volatile uint64_t (*native_legacy_ring)[2] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_ring_cap __attribute__((weak_import));
 extern volatile uint32_t native_legacy_ring_count __attribute__((weak_import));
 extern volatile uint64_t native_legacy_snap[64][2] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_snap_count __attribute__((weak_import));
 extern volatile uint32_t native_legacy_swapstat[16] __attribute__((weak_import));
-extern volatile uint64_t native_adreno_tl[256][6] __attribute__((weak_import));
+extern volatile uint64_t (*native_adreno_tl)[6] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_tl_cap __attribute__((weak_import));
 extern volatile uint32_t native_adreno_tl_count __attribute__((weak_import));
 extern volatile uint64_t native_adreno_stall_log[32][8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_stall_log_count __attribute__((weak_import));
@@ -85,7 +87,7 @@ extern volatile uint64_t native_gop_wait_ring[64][3] __attribute__((weak_import)
 extern volatile uint32_t native_gop_wait_reasons[4] __attribute__((weak_import));
 extern char *PE_boot_args(void);
 extern char boot_log_autoreset_text[200];
-enum {DiagRings = 131072};
+enum {DiagRings = 4194304};
 static char *rings_text;
 static size_t rings_len;
 static uint32_t rings_keep, shots_kept;
@@ -192,11 +194,12 @@ static void rings_build(void) {
   const size_t alen = args ? strlen(args) : 0;
   RT("# boot-args seen by the kernel: length %lu first32 [%.32s] last32 [%s]\n", (unsigned long)alen, args ? args : "", alen > 32 ? args + alen - 32 : (args ? args : ""));
   RT("# autoreset: %s\n", boot_log_autoreset_text);
-  if (&native_legacy_ring_count) {
+  if (&native_legacy_ring_count && &native_legacy_ring_cap && native_legacy_ring_cap) {
     const uint32_t n = native_legacy_ring_count;
     RT("# swap ring: S <us> <event 1 validated 2 fence wait 3 fence passed 4 flip 5 latch 6 retire 7 copy offer 8 blank> <slot or -1> <validated depth> <fences out> <tag> (total %u)\n", n);
-    for (uint32_t i = n > 256 ? n - 256 : 0; i < n; ++i) {
-      const uint64_t t = native_legacy_ring[i & 255][0], v = native_legacy_ring[i & 255][1];
+    const uint32_t cap = native_legacy_ring_cap;
+    for (uint32_t i = n > cap ? n - cap : 0; i < n; ++i) {
+      const uint64_t t = native_legacy_ring[i & (cap - 1)][0], v = native_legacy_ring[i & (cap - 1)][1];
       RT("S %llu %u %d %u %u %x\n", t, (unsigned)(v >> 56), (int)((v >> 48) & 0xff) - 1, (unsigned)((v >> 40) & 0xff), (unsigned)((v >> 24) & 0xff), (unsigned)(v & 0xffffff));
     }
     if (&native_legacy_snap_count && native_legacy_snap_count) {
@@ -211,11 +214,12 @@ static void rings_build(void) {
        native_legacy_swapstat[6], native_legacy_swapstat[7], native_legacy_swapstat[8], native_legacy_swapstat[9], native_legacy_swapstat[10], native_legacy_swapstat[11],
        native_legacy_swapstat[12], native_legacy_swapstat[13], native_legacy_swapstat[14], native_legacy_swapstat[15]);
   }
-  if (&native_adreno_tl_count) {
+  if (&native_adreno_tl_count && &native_adreno_tl_cap && native_adreno_tl_cap) {
     const uint32_t n = native_adreno_tl_count;
     RT("# gpu timeline: T <fence> <buffers> <submit us> <cp start ticks> <cp end ticks> (19.2 MHz) <level at submit> <ring status 1 attached 2 stamps 4 page 8 acquired 16 read> (total %u; raw words, zero when the CP wrote nothing)\n", n);
-    for (uint32_t i = n > 256 ? n - 256 : 0; i < n; ++i) {
-      const volatile uint64_t *r = native_adreno_tl[i & 255];
+    const uint32_t cap = native_adreno_tl_cap;
+    for (uint32_t i = n > cap ? n - cap : 0; i < n; ++i) {
+      const volatile uint64_t *r = native_adreno_tl[i & (cap - 1)];
       RT("T %u %u %llu %llu %llu %u %u\n", (unsigned)(r[0] & 0xffffffffu), (unsigned)((r[0] >> 32) & 0x03ffffffu), r[1], r[2], r[3], (unsigned)r[4], (unsigned)(r[0] >> 58));
     }
   }
