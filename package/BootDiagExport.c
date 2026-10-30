@@ -59,6 +59,7 @@ static const char *const diag_roots[] = {
   "/private/var/mobile/Library/Logs/CrashReporter",
 };
 extern volatile uint64_t native_gop_virtual __attribute__((weak_import));
+extern void native_legacy_direct_snapshot(void) __attribute__((weak_import));   // direct scanout: copies the surface on screen into the boot memory
 extern void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
 static uint32_t shot_width, shot_height;   // the half-resolution screenshot; 0 when there is no scanout
 
@@ -189,6 +190,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   if (!rc && shot_width) {
     // Every second pixel of every second row, read from the scanout mapping the display presenter set up.
     PE_Video video = {};
+    if (&native_legacy_direct_snapshot) native_legacy_direct_snapshot();
     const uint32_t row = shot_width * 4, head[4] = {'S' | 'H' << 8 | 'O' << 16 | (uint32_t)'T' << 24, shot_width, shot_height, row};
     const bool live = !PE_current_console(&video) && video.v_width / 2 == shot_width && video.v_height / 2 == shot_height;
     rc = put_head(emit, arg, "screen.bgrx", 0100644, 0, 0, 16 + (uint64_t)row * shot_height);
