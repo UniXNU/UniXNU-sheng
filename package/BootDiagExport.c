@@ -233,7 +233,7 @@ static void rings_build(void) {
   }
   if (&native_gpu_dcvs_log_count) {
     const uint32_t n = native_gpu_dcvs_log_count;
-    RT("# gpu dcvs ring: D <us> <from level> <to level> <reason 1 busy 2 need 3 down 4 idle 5 late frame 6 wake 7 floor 8 vote failed> <window busy %%> <needed MHz> (total %u)\n", n);
+    RT("# gpu dcvs ring: D <us> <from level> <to level> <reason 1 busy 2 need 3 down 4 idle 5 touch 6 wake 7 floor 8 vote failed> <window busy %%> <needed MHz> (total %u)\n", n);
     for (uint32_t i = n > 256 ? n - 256 : 0; i < n; ++i) {
       const uint64_t t = native_gpu_dcvs_log[i & 255][0], v = native_gpu_dcvs_log[i & 255][1];
       RT("D %llu %u %u %u %u %u\n", t, (unsigned)(v >> 56), (unsigned)((v >> 48) & 0xff), (unsigned)((v >> 40) & 0xff), (unsigned)((v >> 32) & 0xff), (unsigned)(v & 0xffffffffu));
