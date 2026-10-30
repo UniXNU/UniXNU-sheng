@@ -90,7 +90,7 @@ extern char boot_log_autoreset_text[200];
 enum {DiagRings = 4194304};
 static char *rings_text;
 static size_t rings_len;
-static uint32_t rings_keep, shots_kept;
+static uint32_t rings_keep, shots_kept, ipc_keep;
 
 static void note(const char *text, const char *path, int error) {
   if (!diag_note) return;
@@ -164,8 +164,51 @@ static int worth(const void *a, const void *b) {
   return -strcmp(x->path, y->path);
 }
 
+// IPC trace: every message sent to a port of backboardd (the render server's process), the question being what wakes its render thread
+// before a slow frame. The kernel calls sheng_ipc_send_hook (the xnu patch) with the destination port locked; this records the time, the
+// message id and the sender's pid in a ring, kernel.ipc.bin is the ring in time order (16-byte header "IPC1", u32 total, u32 kept, u32 0;
+// then {u64 microseconds, u32 message id, i32 sender pid (0 kernel)}), and kernel.rings.txt names the pids. The tick below finds
+// backboardd's pid by name.
+extern uint64_t mach_absolute_time(void);
+extern void absolutetime_to_nanoseconds(uint64_t, uint64_t *);
+extern void (*sheng_ipc_send_hook)(uint32_t, int, int, uint32_t) __attribute__((weak_import));
+enum {IpcRing = 131072};
+struct ipc_rec {uint64_t abs; uint32_t id; int32_t sender;};
+static struct ipc_rec *ipc_ring;
+static volatile uint32_t ipc_count;
+static volatile int ipc_bb_pid;
+static unsigned ipc_scans;
+
+static void ipc_hook(uint32_t id, int sender, int receiver, uint32_t flags) {
+  (void)flags;
+  if (receiver != ipc_bb_pid || receiver <= 0) return;
+  const uint32_t n = __atomic_fetch_add(&ipc_count, 1, __ATOMIC_RELAXED);
+  struct ipc_rec *r = &ipc_ring[n & (IpcRing - 1)];
+  r->abs = mach_absolute_time(); r->id = id; r->sender = sender;
+}
+
+static void ipc_trace_tick(void) {
+  if (!&sheng_ipc_send_hook) return;
+  if (!ipc_ring) {
+    ipc_ring = IOMallocAligned(sizeof(struct ipc_rec) * IpcRing, PAGE_SIZE);
+    if (!ipc_ring) return;
+    memset(ipc_ring, 0, sizeof(struct ipc_rec) * IpcRing);
+  }
+  if (ipc_bb_pid <= 0 || (++ipc_scans % 8) == 0) {   // a restarted backboardd has a new pid
+    int found = 0;
+    for (int pid = 1; pid < 1500 && !found; ++pid) {
+      char name[32] = {0};
+      proc_name(pid, name, sizeof name);
+      if (!strcmp(name, "backboardd")) found = pid;
+    }
+    if (found) ipc_bb_pid = found;
+  }
+  if (ipc_bb_pid > 0 && !sheng_ipc_send_hook) sheng_ipc_send_hook = ipc_hook;
+}
+
 // Called once per log round with the seconds of log time: takes the next scene screenshot when it is due.
 void boot_diag_shot_tick(unsigned now) {
+  ipc_trace_tick();
   if (shot_taken >= DiagShots || now < shot_at[shot_taken]) return;
   PE_Video video = {};
   if (!(&native_gop_virtual && native_gop_virtual && !PE_current_console(&video) && video.v_depth == 32 && video.v_width >= 2 && video.v_height >= 2 &&
@@ -239,6 +282,21 @@ static void rings_build(void) {
       RT("D %llu %u %u %u %u %u\n", t, (unsigned)(v >> 56), (unsigned)((v >> 48) & 0xff), (unsigned)((v >> 40) & 0xff), (unsigned)((v >> 32) & 0xff), (unsigned)(v & 0xffffffffu));
     }
   }
+  if (ipc_ring) {
+    const uint32_t n = ipc_count, kept = n > IpcRing ? IpcRing : n;
+    RT("# ipc to backboardd: pid %d total %u kept %u (kernel.ipc.bin); P <pid> <name> for every sender in it\n", (int)ipc_bb_pid, n, kept);
+    int seen[64]; unsigned seen_n = 0;
+    for (uint32_t i = 0; i < kept && seen_n < 64; ++i) {
+      const int pid = ipc_ring[i].sender;
+      unsigned k = 0;
+      while (k < seen_n && seen[k] != pid) ++k;
+      if (k < seen_n) continue;
+      seen[seen_n++] = pid;
+      char name[32] = {0};
+      if (pid > 0) proc_name(pid, name, sizeof name); else snprintf(name, sizeof name, "kernel");
+      RT("P %d %s\n", pid, name);
+    }
+  }
   if (&native_gop_wait_ring_count) {
     const uint32_t n = native_gop_wait_ring_count;
     RT("# scanout waits that ended without a swap after 100 ms or more (the object waited on is the presenter's swap slot): W <us> <waited ms> <reason 0 deadline 1 interrupted 2 other> <pid> <swap offered> <delivered> <online> <requested ms> (total %u; reasons: deadline %u interrupted %u other %u woken with a swap %u)\n",
@@ -276,6 +334,12 @@ uint64_t boot_diag_scan(uint64_t budget) {
   if (rings_text && rings_len) {
     const uint64_t cost = 24 + strlen("kernel.rings.txt") + rings_len;
     if (used + cost <= budget) {rings_keep = 1; used += cost;}
+  }
+  ipc_keep = 0;
+  if (ipc_ring && ipc_count) {
+    const uint32_t kept = ipc_count > IpcRing ? IpcRing : ipc_count;
+    const uint64_t cost = 24 + strlen("kernel.ipc.bin") + 16 + (uint64_t)kept * sizeof(struct ipc_rec);
+    if (used + cost <= budget) {ipc_keep = 1; used += cost;}
   }
   for (unsigned i = 0; i < DiagShots; ++i) {
     if (!shot_data[i]) continue;
@@ -335,6 +399,24 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
     for (size_t at = 0; !rc && at < rings_len;) {
       const uint32_t n = rings_len - at < 65536 ? (uint32_t)(rings_len - at) : 65536;
       rc = emit(rings_text + at, n, arg);
+      at += n;
+    }
+  }
+  if (!rc && ipc_keep) {
+    const uint32_t total = ipc_count, kept = total > IpcRing ? IpcRing : total;
+    const uint32_t head[4] = {'I' | 'P' << 8 | 'C' << 16 | (uint32_t)'1' << 24, total, kept, 0};
+    rc = put_head(emit, arg, "kernel.ipc.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct ipc_rec));
+    if (!rc) rc = emit(head, sizeof head, arg);
+    for (uint32_t at = 0; !rc && at < kept;) {   // oldest first, microseconds since boot
+      uint32_t n = kept - at < 4096 ? kept - at : 4096;
+      for (uint32_t k = 0; k < n; ++k) {
+        const struct ipc_rec *r = &ipc_ring[(total - kept + at + k) & (IpcRing - 1)];
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(r->abs, &ns);
+        struct ipc_rec out = {ns / 1000, r->id, r->sender};
+        memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
+      }
+      rc = emit(chunk, n * sizeof(struct ipc_rec), arg);
       at += n;
     }
   }

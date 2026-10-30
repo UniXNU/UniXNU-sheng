@@ -1,0 +1,32 @@
+diff --git a/osfmk/ipc/ipc_kmsg.c b/osfmk/ipc/ipc_kmsg.c
+index 190e5d2..27a25df 100644
+--- a/osfmk/ipc/ipc_kmsg.c
++++ b/osfmk/ipc/ipc_kmsg.c
+@@ -5125,6 +5125,13 @@ ipc_kmsg_copyin_from_kernel(
+  *		MACH_SEND_INVALID_DEST	   Caller still has message.
+  *      MACH_SEND_INVALID_OPTIONS  Caller still has message.
+  */
++/*
++ * sheng: board diagnostics hook, called for every message sent (user or kernel) with the destination port locked: the message id, the
++ * sender's pid (0 for the kernel), the pid of the task that holds the receive right (-1 when there is none) and flags (1: sent by the
++ * kernel). It must not block or take locks. Unset unless the board code installs it.
++ */
++void (*sheng_ipc_send_hook)(uint32_t msgh_id, int sender_pid, int receiver_pid, uint32_t flags);
++
+ mach_msg_return_t
+ ipc_kmsg_send(
+ 	ipc_kmsg_t              kmsg,
+@@ -5168,6 +5175,13 @@ ipc_kmsg_send(
+ 	assert(IP_VALID(port));
+ 	ip_mq_lock(port);
+ 
++	if (__improbable(sheng_ipc_send_hook != NULL)) {
++		ipc_space_t rspace = ip_get_receiver(port);
++		const int rpid = (rspace != NULL && rspace->is_task != TASK_NULL) ? task_pid(rspace->is_task) : -1;
++		const bool from_kernel = (options & MACH64_SEND_KERNEL) != 0;
++		sheng_ipc_send_hook(hdr->msgh_id, from_kernel ? 0 : task_pid(current_task()), rpid, from_kernel ? 1 : 0);
++	}
++
+ 	/*
+ 	 * If the destination has been guarded with a reply context, and the
+ 	 * sender is consuming a send-once right, then assume this is a reply
