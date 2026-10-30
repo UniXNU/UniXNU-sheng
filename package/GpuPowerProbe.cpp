@@ -1715,6 +1715,11 @@ extern "C" {
 // [0] 1 running, [1] level now, [2] changes, [3] failed votes, [4] busy % over the last 10 s, [5..12] % of those 10 s at levels 1..8,
 // [13] touch boosts, [14] wake boosts
 volatile uint32_t native_gpu_dcvs[15];
+// Every level change, the newest 256: [0] time (us since boot), [1] from << 56 | to << 48 | reason << 40 | window busy % << 32 | the MHz the window
+// would have needed (32 bits). Reasons: 1 busy over 85 % or 50 ms without a break, 2 more frequency needed, 3 one step down, 4 idle for 80 ms,
+// 5 touch boost, 6 wake boost, 7 raised to the floor, 8 the vote failed.
+volatile uint64_t native_gpu_dcvs_log[256][2];
+volatile uint32_t native_gpu_dcvs_log_count;
 extern volatile uint32_t native_hid_input_events[8] __attribute__((weak_import));
 }
 uint64_t gpuBusyTicks() {
@@ -1775,21 +1780,21 @@ void gpuDcvsThread(void *, wait_result_t) {
         const bool active = busyNs > 0 || gpuRd(A740_CP_RB_RPTR) != gpuRd(A740_CP_RB_WPTR);
         const uint64_t need = busyNs * kGpuMHz[cur] * 2 / ns;
         runNs = busyNs * 100 >= ns * 95 ? runNs + ns : 0;
-        unsigned want = cur;
+        unsigned want = cur, reason = 0;
         if (busyNs * 100 > ns * 85 || runNs >= 50000000ull) {
-            want = kGpuTop;
+            want = kGpuTop;reason = 1;
         } else if (gpuLevelFor(need * 11 / 10) > cur) {
-            want = gpuLevelFor(need * 11 / 10);
+            want = gpuLevelFor(need * 11 / 10);reason = 2;
         } else if (active) {
             if (cur > floor && need * 10 <= (uint64_t)kGpuMHz[cur - 1] * 8) {
-                if (++down >= 4 + hold) want = cur - 1;
+                if (++down >= 4 + hold) {want = cur - 1;reason = 3;}
             } else {
                 down = 0;
             }
         } else {
             uint64_t idle = 0;
             absolutetime_to_nanoseconds(t - idleSince, &idle);
-            if (idle >= 80000000ull) want = floor;
+            if (idle >= 80000000ull) {want = floor;reason = 4;}
         }
         if (active) idleSince = t;
         if (!active && want == floor) idle = true;
@@ -1801,14 +1806,22 @@ void gpuDcvsThread(void *, wait_result_t) {
             if (t >= touchEnd) native_gpu_dcvs[13] = native_gpu_dcvs[13] + 1;
             touchEnd = t + boostAbs;
         }
-        if (t < touchEnd) want = kGpuTop;
+        if (t < touchEnd) {want = kGpuTop;reason = 5;}
         else if (t < wakeEnd) {
             const unsigned wake = gpuLevelFor(kGpuMHz[cur] * 2 > 578 ? kGpuMHz[cur] * 2 : 578);
-            if (want < wake) want = wake;
+            if (want < wake) {want = wake;reason = 6;}
         }
-        if (want < floor) want = floor;
+        if (want < floor) {want = floor;reason = 7;}
         if (want != cur) {
-            if (gpuVote(want)) {hold = want > cur; cur = want; native_gpu_dcvs[1] = cur; native_gpu_dcvs[2] = native_gpu_dcvs[2] + 1;}
+            const bool voted = gpuVote(want);
+            const uint32_t slot = native_gpu_dcvs_log_count & 255;
+            uint64_t tns = 0;
+            absolutetime_to_nanoseconds(t, &tns);
+            native_gpu_dcvs_log[slot][0] = tns / 1000;
+            native_gpu_dcvs_log[slot][1] = (uint64_t)cur << 56 | (uint64_t)want << 48 | (uint64_t)(voted ? reason : 8) << 40 |
+                                           (uint64_t)(busyNs * 100 / ns) << 32 | (uint32_t)need;
+            native_gpu_dcvs_log_count = native_gpu_dcvs_log_count + 1;
+            if (voted) {hold = want > cur; cur = want; native_gpu_dcvs[1] = cur; native_gpu_dcvs[2] = native_gpu_dcvs[2] + 1;}
             else native_gpu_dcvs[3] = native_gpu_dcvs[3] + 1;
             down = 0;
         }
