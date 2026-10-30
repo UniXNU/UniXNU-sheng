@@ -137,14 +137,12 @@ extern volatile uint32_t native_dpu_pipes[54] __attribute__((weak_import));
 extern volatile uint32_t native_dpu_more[40] __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_smmu[24] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_surfaces[14] __attribute__((weak_import));
-extern volatile uint32_t native_legacy_direct[38] __attribute__((weak_import));
-extern volatile uint32_t native_legacy_dtrace[160] __attribute__((weak_import));
-extern volatile uint32_t native_legacy_dchg[8][6] __attribute__((weak_import));
-extern volatile uint32_t native_legacy_dfrozen __attribute__((weak_import));
-extern volatile uint32_t native_legacy_dcount __attribute__((weak_import));
-extern volatile uint64_t native_legacy_dphys[4] __attribute__((weak_import));
-extern volatile uint64_t native_adreno_import_big[16 * 3] __attribute__((weak_import));
-extern volatile uint32_t native_adreno_import_big_count __attribute__((weak_import));
+extern volatile uint32_t native_legacy_swapstat[16] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_tl_count __attribute__((weak_import));
+extern volatile uint32_t native_adreno_stall_log_count __attribute__((weak_import));
+extern volatile uint32_t native_gpu_dcvs_log_count __attribute__((weak_import));
+extern volatile uint32_t native_gop_wait_reasons[4] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_direct[13] __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_state __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_check[8] __attribute__((weak_import));
 extern uint32_t native_ufs_dpu_live(unsigned reg) __attribute__((weak_import));
@@ -304,6 +302,10 @@ extern volatile uint32_t boot_diag_skipped __attribute__((weak_import));
 extern volatile uint32_t boot_diag_errors __attribute__((weak_import));
 extern uint64_t boot_diag_scan(uint64_t) __attribute__((weak_import));
 extern int boot_diag_stream(int (*)(const void *, uint32_t, void *), void *) __attribute__((weak_import));
+extern void boot_diag_shot_tick(unsigned) __attribute__((weak_import));
+// What the autoreset did, for the export's kernel.rings.txt: armed with its seconds, the probe result, the round it fired, the rounds it was held
+// back because a log write failed.
+char boot_log_autoreset_text[200] = "not started";
 int boot_log_export_put(uint32_t generation, uint32_t total, uint32_t offset, const void *data, uint32_t size) {
   if (!export_lock || !generation || !total || !data || !size || offset > total || size > total - offset) return -1;
   IOLockLock(export_lock);
@@ -1161,38 +1163,30 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // Direct scanout (sheng-dpu-scanout): the display bank's stage 1 (NativeUfs), then the flips (NativeLegacyDisplay.cpp native_legacy_direct).
   if (&native_ufs_dpu_state && native_ufs_dpu_state) {
-    char row[900];
+    char row[600];
     const volatile uint32_t *c = native_ufs_dpu_check;
     int n = snprintf(row, sizeof row, "[direct scanout] bank %x ttbr0=%x tcr=%x fsr %x->%x far=%x%08x fsynr0=%x watched %uus now sctlr=%x fsr=%x",
                      native_ufs_dpu_state, c[0], c[1], c[2], c[3], c[5], c[4], c[6], c[7],
                      native_ufs_dpu_live ? native_ufs_dpu_live(0) : 0xdead, native_ufs_dpu_live ? native_ufs_dpu_live(1) : 0xdead);
     if (&native_legacy_direct) {
       const volatile uint32_t *d = native_legacy_direct;
-      n += snprintf(row + n, sizeof row - (size_t)n, " | flips %u mapped %u mapfail %u latch>50ms %u max %uus mean %uus released %u copied %u to boot %u shown checks %u changed %u rows %u | reused shown %u reused previous %u | first change after latch ms <2 %u <5 %u <10 %u <20 %u more %u | written then resubmitted %u | retired at next latch %u timeout %u by copy %u | new vs shown rows equal, shown unchanged: 63+ %u 48+ %u 16+ %u fewer %u, shown changed: 63+ %u 48+ %u 16+ %u fewer %u | held for the GPU %u total %uus longest %uus gave up %u | changes with the GPU busy %u idle %u of %u",
-                    d[0], d[1], d[2], d[3], d[4], d[0] ? d[5] / d[0] : 0, d[6], d[7], d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15], d[16], d[17], d[18], d[19], d[20], d[21], d[22], d[23], d[24], d[25], d[26], d[27], d[28], d[29], d[30], d[31], d[32], d[33], d[34], d[35], d[36], d[37]);
+      n += snprintf(row + n, sizeof row - (size_t)n, " | flips %u mapped %u mapfail %u latch>50ms %u max %uus mean %uus released %u copied %u to boot %u | held for the GPU %u total %uus longest %uus gave up %u",
+                    d[0], d[1], d[2], d[3], d[4], d[0] ? d[5] / d[0] : 0, d[6], d[7], d[8], d[9], d[10], d[11], d[12]);
     }
     at = put(out, at, cap, row, sizeof row);
-    if (&native_legacy_dtrace && &native_legacy_dcount && native_legacy_dcount >= 160) {
-      // Event order of 96 events: F = swap flipped to the slot, L = latched, C = the surface on screen changed; @ the microseconds since the first.
-      char tr[3000];
-      const uint32_t total = native_legacy_dcount, start = total % 160, first = native_legacy_dtrace[start] >> 4;
-      int m = snprintf(tr, sizeof tr, "[direct trace] base %u slots %llx %llx %llx %llx big imports %u: ", first, native_legacy_dphys[0], native_legacy_dphys[1], native_legacy_dphys[2], native_legacy_dphys[3], native_adreno_import_big_count);
-      for (unsigned k = 0; k < 16 && &native_adreno_import_big && k < native_adreno_import_big_count; ++k)
-        m += snprintf(tr + m, sizeof tr - (size_t)m, "%llx>%llx(%lluM) ", native_adreno_import_big[3 * k], native_adreno_import_big[3 * k + 1], native_adreno_import_big[3 * k + 2] >> 20);
-      m += snprintf(tr + m, sizeof tr - (size_t)m, "| ");
-      for (unsigned i = 0; i < 160 && m < (int)sizeof tr - 16; ++i) {
-        const uint32_t v = native_legacy_dtrace[(start + i) % 160];
-        m += snprintf(tr + m, sizeof tr - (size_t)m, "%c%u@%u ", "FLC?"[(v >> 2) & 3], v & 3, ((v >> 4) - first) & 0xfffffffu);
-      }
-      at = put(out, at, cap, tr, sizeof tr);
-    }
-    if (&native_legacy_dchg && native_legacy_dcount) {
-      char ch[420];
-      int k = snprintf(ch, sizeof ch, "[direct changes] first changes (us slot rows first-last busy-fences):");
-      for (unsigned i = 0; i < 8 && k < (int)sizeof ch - 60; ++i)
-        if (native_legacy_dchg[i][0]) k += snprintf(ch + k, sizeof ch - (size_t)k, " %u s%u r%u %u-%u b%d", native_legacy_dchg[i][0], native_legacy_dchg[i][1], native_legacy_dchg[i][2], native_legacy_dchg[i][3], native_legacy_dchg[i][4], (int)native_legacy_dchg[i][5]);
-      at = put(out, at, cap, ch, sizeof ch);
-    }
+  }
+  // The swap lifecycle's counters (NativeLegacyDisplay.cpp native_legacy_swapstat) and how many entries the kernel rings hold; the rings are in the
+  // export's kernel.rings.txt.
+  if (&native_legacy_swapstat && native_legacy_swapstat[0]) {
+    char row[420];
+    const volatile uint32_t *w = native_legacy_swapstat;
+    snprintf(row, sizeof row, "[swap stats] validated %u kicks %u refused(in flight %u not ready %u no head %u latch %u) fence waits %u copy %u blank %u flips %u latches %u retires %u slow %u longest %uus max depth %u | rings tl=%u stall=%u dcvs=%u | scanout waits deadline %u int %u other %u woken %u",
+             w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11], w[12], w[13], w[15],
+             &native_adreno_tl_count ? native_adreno_tl_count : 0, &native_adreno_stall_log_count ? native_adreno_stall_log_count : 0,
+             &native_gpu_dcvs_log_count ? native_gpu_dcvs_log_count : 0,
+             &native_gop_wait_reasons ? native_gop_wait_reasons[0] : 0, &native_gop_wait_reasons ? native_gop_wait_reasons[1] : 0,
+             &native_gop_wait_reasons ? native_gop_wait_reasons[2] : 0, &native_gop_wait_reasons ? native_gop_wait_reasons[3] : 0);
+    at = put(out, at, cap, row, sizeof row);
   }
   // The display streams in the apps SMMU as the boot loader left them (NativeUfs, sheng-dpu=2): per stream group|bank, SMR, S2CR, CBAR,
   // CBA2R, SCTLR, TTBR0, TCR, FSR.
@@ -1673,6 +1667,7 @@ static void writer(void *arg, wait_result_t result) {
   // restarts once, after that round's log is on the medium, but only when the probe found the cell writable.
   uint32_t autoreset = 0;
   int reset_ok = 0, reset_tried = 0;
+  uint32_t reset_held = 0, reset_tried_at = 0;
   if (&boot_reset_probe) {
     reset_ok = boot_reset_probe(boot_log_reset_probe_text, sizeof boot_log_reset_probe_text) == 0;
     PE_parse_boot_argn("sheng-autoreset", &autoreset, sizeof autoreset);
@@ -1699,6 +1694,7 @@ static void writer(void *arg, wait_result_t result) {
     h.export_generation = export_ready; h.export_bytes = export_ready_bytes; h.export_first = export_ready_first;
     h.diag_first = diag_first; h.diag_bytes = diag_bytes;
     IOLockUnlock(export_lock);
+    if (&boot_diag_shot_tick) boot_diag_shot_tick(now);
     if (diag_at && now >= diag_at && !boot_diag_status) {
       thread_t diag;
       boot_diag_status = 1;
@@ -1715,8 +1711,11 @@ static void writer(void *arg, wait_result_t result) {
     if (!ok) {boot_log_errors = ++errors;} else errors = 0;
     if (errors >= LogMaxErrors) {boot_log_state = 3; return;}
     if (h.gpt_last != h.gpt_open) {boot_log_state = 4; return;}
+    if (autoreset && now >= autoreset && !reset_tried && !ok) ++reset_held;
+    snprintf(boot_log_autoreset_text, sizeof boot_log_autoreset_text, "armed=%us probe_ok=%d tried=%d tried_at=%us held_by_write_errors=%u diag_export_at=%us now=%us",
+             autoreset, reset_ok, reset_tried, reset_tried_at, reset_held, diag_at, now);
     if (autoreset && now >= autoreset && !reset_tried && ok) {
-      reset_tried = 1;
+      reset_tried = 1; reset_tried_at = now;
       if (!reset_ok) strlcpy(boot_log_reset_result, "autoreset skipped: the probe found no writable cell", sizeof boot_log_reset_result);
       else {
         // The text is only readable if the reset is refused; on success the tablet restarts into fastboot.
