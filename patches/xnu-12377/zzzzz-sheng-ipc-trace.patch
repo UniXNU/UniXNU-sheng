@@ -1,30 +1,33 @@
 diff --git a/osfmk/ipc/ipc_kmsg.c b/osfmk/ipc/ipc_kmsg.c
-index 190e5d2..ffb8756 100644
+index 190e5d2..5c1b3f5 100644
 --- a/osfmk/ipc/ipc_kmsg.c
 +++ b/osfmk/ipc/ipc_kmsg.c
-@@ -5125,6 +5125,14 @@ ipc_kmsg_copyin_from_kernel(
+@@ -5125,6 +5125,15 @@ ipc_kmsg_copyin_from_kernel(
   *		MACH_SEND_INVALID_DEST	   Caller still has message.
   *      MACH_SEND_INVALID_OPTIONS  Caller still has message.
   */
 +/*
-+ * sheng: board diagnostics hook. Once the board code sets sheng_ipc_trace_task and the hook, every message whose destination port
-+ * belongs to that task's space is handed over with the destination port locked: the message id and the sending task (NULL when the
-+ * kernel sent it). Only a pointer comparison runs for the other messages. The hook must not block or take locks.
++ * sheng: board diagnostics hook. Once the board code sets the traced tasks and the hook, every message whose destination port
++ * belongs to one of those tasks' spaces is handed over with the destination port locked: the message id, the sending task (NULL when
++ * the kernel sent it) and which traced task receives it (1 or 2). Only pointer comparisons run for the other messages. The hook must
++ * not block or take locks.
 + */
-+void *sheng_ipc_trace_task;
-+void (*sheng_ipc_send_hook)(uint32_t msgh_id, void *sender_task);
++void *sheng_ipc_trace_task, *sheng_ipc_trace_task2;
++void (*sheng_ipc_send_hook)(uint32_t msgh_id, void *sender_task, uint32_t receiver);
 +
  mach_msg_return_t
  ipc_kmsg_send(
  	ipc_kmsg_t              kmsg,
-@@ -5168,6 +5176,13 @@ ipc_kmsg_send(
+@@ -5168,6 +5177,15 @@ ipc_kmsg_send(
  	assert(IP_VALID(port));
  	ip_mq_lock(port);
  
-+	if (__improbable(sheng_ipc_send_hook != NULL && sheng_ipc_trace_task != NULL)) {
++	if (__improbable(sheng_ipc_send_hook != NULL)) {
 +		ipc_space_t rspace = ip_get_receiver(port);
-+		if (rspace != NULL && (void *)rspace->is_task == sheng_ipc_trace_task) {
-+			sheng_ipc_send_hook(hdr->msgh_id, (options & MACH64_SEND_KERNEL) ? NULL : (void *)current_task());
++		void *rtask = rspace != NULL ? (void *)rspace->is_task : NULL;
++		const uint32_t which = rtask == NULL ? 0 : (rtask == sheng_ipc_trace_task ? 1 : (rtask == sheng_ipc_trace_task2 ? 2 : 0));
++		if (which) {
++			sheng_ipc_send_hook(hdr->msgh_id, (options & MACH64_SEND_KERNEL) ? NULL : (void *)current_task(), which);
 +		}
 +	}
 +

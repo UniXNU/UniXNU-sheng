@@ -164,22 +164,27 @@ static int worth(const void *a, const void *b) {
   return -strcmp(x->path, y->path);
 }
 
-// IPC trace: every message sent to a port of backboardd (the render server's process), the question being what wakes its render thread
-// before a slow frame. The kernel calls sheng_ipc_send_hook (the xnu patch) with the destination port locked for the messages to the
-// task in sheng_ipc_trace_task; this records the time, the message id and the sender's pid in a ring. kernel.ipc.bin is the ring in time
-// order (16-byte header "IPC1", u32 total, u32 kept, u32 0; then {u64 microseconds, u32 message id, i32 sender pid (0 kernel)}), and
-// kernel.rings.txt names the pids. The hook goes in only once the home screen draws (50 flips), so it cannot touch the boot's startup
-// (the first run with it, i7d94e5078, stopped at the logo with SpringBoard committing nothing; the cause is not known).
+// IPC trace: every message sent to a port of backboardd (the render server's process) or of SpringBoard (which gets the touch events
+// from backboardd), the question being what wakes the render thread and the client before a slow frame. The kernel calls
+// sheng_ipc_send_hook (the xnu patch) with the destination port locked for the messages to the two traced tasks; this records the time,
+// the message id, the sender's pid and the receiver in a ring. kernel.ipc.bin is the ring in time order (16-byte header "IPC2", u32 total,
+// u32 kept, u32 0; then {u64 microseconds, u32 message id, u32 receiver << 24 | sender pid (24 bits, 0 kernel, 0xffffff unknown)};
+// receiver 1 backboardd, 2 SpringBoard), and kernel.rings.txt names the pids. The hook goes in only once the home screen draws (50
+// flips), so it cannot touch the boot's startup (the first run with it, i7d94e5078, stopped at the logo; the cause is not known).
+// Touch reports: kernel.touch.bin, the time of every report the touch driver handed to the HID event driver (HidInputProbe.cpp).
 extern uint64_t mach_absolute_time(void);
 extern void absolutetime_to_nanoseconds(uint64_t, uint64_t *);
 extern void *sheng_ipc_trace_task __attribute__((weak_import));
-extern void (*sheng_ipc_send_hook)(uint32_t, void *) __attribute__((weak_import));
+extern void *sheng_ipc_trace_task2 __attribute__((weak_import));
+extern void (*sheng_ipc_send_hook)(uint32_t, void *, uint32_t) __attribute__((weak_import));
 extern struct task *proc_task(proc_t);
-enum {IpcRing = 131072};
+extern volatile uint64_t *native_touch_report_ring __attribute__((weak_import));
+extern volatile uint32_t native_touch_report_count __attribute__((weak_import));
+enum {IpcRing = 524288, TouchRing = 65536};
 // The client sampler (BootUiTraceProbe.c): kernel.client.bin is its ring in time order (16-byte header "CLI1", u32 total, u32 kept, u32 0;
 // then 128-byte records {u64 microseconds, i32 pid, u16 state, i16 priority, u32 context switches, i32 mach_msg peer pid, u64 CPU time
 // (mach units), u64 wait event, u64 frames[11] (pc, lr, nine callers)}); kernel.rings.txt has a C row per target (pid, shared cache
-// slide, main image address, name).
+// slide, main image address, name). A record lasts until the next one of the same pid (unchanged blocked threads are not repeated).
 struct cs_rec {uint64_t abs; int32_t pid; uint16_t state; int16_t pri; uint32_t cs; int32_t peer; uint64_t cpu, wait, frames[11];};
 struct cs_target {int pid; unsigned slide; uint64_t image; char name[32];};
 extern void boot_client_sampler_start(void) __attribute__((weak_import));
@@ -189,44 +194,52 @@ extern struct cs_target boot_client_targets[32] __attribute__((weak_import));
 extern volatile unsigned boot_client_target_count __attribute__((weak_import));
 enum {ClientRing = 131072};
 static uint32_t client_kept, client_keep;
-struct ipc_rec {uint64_t abs; uint32_t id; int32_t sender;};
+struct ipc_rec {uint64_t abs; uint32_t id; uint32_t from;};
 static struct ipc_rec *ipc_ring;
 static volatile uint32_t ipc_count;
-static uint32_t ipc_kept;   // the count the export measured, so the file it writes has the length it announced
-static int ipc_bb_pid;
+static uint32_t ipc_kept, touch_kept, touch_keep;   // the counts the export measured, so each file has the length it announced
+static int ipc_pid[2];
 static unsigned ipc_scans;
 
-static void ipc_hook(uint32_t id, void *sender_task) {
+static void ipc_hook(uint32_t id, void *sender_task, uint32_t receiver) {
   const uint32_t n = __atomic_fetch_add(&ipc_count, 1, __ATOMIC_RELAXED);
   struct ipc_rec *r = &ipc_ring[n & (IpcRing - 1)];
   proc_t proc = sender_task ? (proc_t)get_bsdtask_info((task_t)sender_task) : NULL;
-  r->abs = mach_absolute_time(); r->id = id; r->sender = sender_task ? (proc ? proc_pid(proc) : -1) : 0;
+  const uint32_t pid = sender_task ? (proc ? (uint32_t)proc_pid(proc) & 0xffffff : 0xffffff) : 0;
+  r->abs = mach_absolute_time(); r->id = id; r->from = receiver << 24 | pid;
+}
+
+static void *ipc_task_of(const char *want, int *pid_out) {
+  for (int pid = 1; pid < 512; ++pid) {
+    char name[32] = {0};
+    proc_name(pid, name, sizeof name);
+    if (strcmp(name, want)) continue;
+    proc_t proc = proc_find(pid);
+    if (!proc) return NULL;
+    void *task = proc_task(proc);
+    proc_rele(proc);
+    *pid_out = pid;
+    return task;   // only compared, never followed
+  }
+  return NULL;
 }
 
 static void ipc_trace_tick(void) {
   if (!&native_legacy_swapstat || native_legacy_swapstat[9] < 50) return;   // the home screen draws
   if (&boot_client_sampler_start) boot_client_sampler_start();
-  if (!&sheng_ipc_send_hook || !&sheng_ipc_trace_task) return;
+  if (!&sheng_ipc_send_hook || !&sheng_ipc_trace_task || !&sheng_ipc_trace_task2) return;
   if (!ipc_ring) {
     ipc_ring = IOMallocAligned(sizeof(struct ipc_rec) * IpcRing, PAGE_SIZE);
     if (!ipc_ring) return;
     memset(ipc_ring, 0, sizeof(struct ipc_rec) * IpcRing);
   }
-  if (ipc_bb_pid > 0 && (++ipc_scans % 8) != 0) return;   // a restarted backboardd has a new pid and task
-  int found = 0;
-  for (int pid = 1; pid < 512 && !found; ++pid) {
-    char name[32] = {0};
-    proc_name(pid, name, sizeof name);
-    if (!strcmp(name, "backboardd")) found = pid;
-  }
-  if (!found) return;
-  proc_t proc = proc_find(found);
-  if (!proc) return;
-  void *task = proc_task(proc);
-  proc_rele(proc);
-  ipc_bb_pid = found;
-  if (task && sheng_ipc_trace_task != task) sheng_ipc_trace_task = task;   // only compared, never followed
-  if (!sheng_ipc_send_hook) sheng_ipc_send_hook = ipc_hook;
+  if (ipc_pid[0] > 0 && ipc_pid[1] > 0 && (++ipc_scans % 8) != 0) return;   // a restarted process has a new pid and task
+  int pid = 0;
+  void *task = ipc_task_of("backboardd", &pid);
+  if (task) {ipc_pid[0] = pid; if (sheng_ipc_trace_task != task) sheng_ipc_trace_task = task;}
+  task = ipc_task_of("SpringBoard", &pid);
+  if (task) {ipc_pid[1] = pid; if (sheng_ipc_trace_task2 != task) sheng_ipc_trace_task2 = task;}
+  if (ipc_pid[0] > 0 && !sheng_ipc_send_hook) sheng_ipc_send_hook = ipc_hook;
 }
 
 // Called once per log round with the seconds of log time: takes the next scene screenshot when it is due.
@@ -312,10 +325,12 @@ static void rings_build(void) {
   }
   if (ipc_ring) {
     const uint32_t n = ipc_kept ? ipc_kept : ipc_count, kept = n > IpcRing ? IpcRing : n;
-    RT("# ipc to backboardd: pid %d total %u kept %u (kernel.ipc.bin); P <pid> <name> for every sender in it\n", (int)ipc_bb_pid, n, kept);
+    RT("# ipc to backboardd (receiver 1, pid %d) and SpringBoard (receiver 2, pid %d): total %u kept %u (kernel.ipc.bin); P <pid> <name> for every sender in it\n",
+       ipc_pid[0], ipc_pid[1], n, kept);
     int seen[64]; unsigned seen_n = 0;
     for (uint32_t i = 0; i < kept && seen_n < 64; ++i) {
-      const int pid = ipc_ring[(n - kept + i) & (IpcRing - 1)].sender;
+      const uint32_t raw = ipc_ring[(n - kept + i) & (IpcRing - 1)].from & 0xffffff;
+      const int pid = raw == 0xffffff ? -1 : (int)raw;
       unsigned k = 0;
       while (k < seen_n && seen[k] != pid) ++k;
       if (k < seen_n) continue;
@@ -367,6 +382,13 @@ uint64_t boot_diag_scan(uint64_t budget) {
   }
   ipc_keep = 0;
   client_keep = 0;
+  touch_keep = 0;
+  touch_kept = (&native_touch_report_count && &native_touch_report_ring && native_touch_report_ring) ? native_touch_report_count : 0;
+  if (touch_kept) {
+    const uint32_t kept = touch_kept > TouchRing ? TouchRing : touch_kept;
+    const uint64_t cost = 24 + strlen("kernel.touch.bin") + 16 + (uint64_t)kept * 8;
+    if (used + cost <= budget) {touch_keep = 1; used += cost;}
+  }
   if (client_kept) {
     const uint32_t kept = client_kept > ClientRing ? ClientRing : client_kept;
     const uint64_t cost = 24 + strlen("kernel.client.bin") + 16 + (uint64_t)kept * sizeof(struct cs_rec);
@@ -411,7 +433,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   if (!chunk) return -1;
   vfs_context_t ctx = vfs_context_kernel();
   int rc = emit("M2VCACH1", 8, arg);
-  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep;
+  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep + touch_keep;
   if (!rc) rc = emit(&root_len, 4, arg);
   if (!rc) rc = emit("/", 1, arg);
   if (!rc) rc = emit(&count, 4, arg);
@@ -440,7 +462,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   }
   if (!rc && ipc_keep) {
     const uint32_t ipc_total = ipc_kept, kept = ipc_total > IpcRing ? IpcRing : ipc_total;   // the measured count: newer records wait for the next export
-    const uint32_t head[4] = {'I' | 'P' << 8 | 'C' << 16 | (uint32_t)'1' << 24, ipc_total, kept, 0};
+    const uint32_t head[4] = {'I' | 'P' << 8 | 'C' << 16 | (uint32_t)'2' << 24, ipc_total, kept, 0};
     rc = put_head(emit, arg, "kernel.ipc.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct ipc_rec));
     if (!rc) rc = emit(head, sizeof head, arg);
     for (uint32_t at = 0; !rc && at < kept;) {   // oldest first, microseconds since boot
@@ -449,10 +471,27 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
         const struct ipc_rec *r = &ipc_ring[(ipc_total - kept + at + k) & (IpcRing - 1)];
         uint64_t ns = 0;
         absolutetime_to_nanoseconds(r->abs, &ns);
-        struct ipc_rec out = {ns / 1000, r->id, r->sender};
+        struct ipc_rec out = {ns / 1000, r->id, r->from};
         memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
       }
       rc = emit(chunk, n * sizeof(struct ipc_rec), arg);
+      at += n;
+    }
+  }
+  if (!rc && touch_keep) {
+    const uint32_t touch_total = touch_kept, kept = touch_total > TouchRing ? TouchRing : touch_total;
+    const uint32_t head[4] = {'T' | 'C' << 8 | 'H' << 16 | (uint32_t)'1' << 24, touch_total, kept, 0};
+    rc = put_head(emit, arg, "kernel.touch.bin", 0100644, 0, 0, 16 + (uint64_t)kept * 8);
+    if (!rc) rc = emit(head, sizeof head, arg);
+    for (uint32_t at = 0; !rc && at < kept;) {   // oldest first, microseconds since boot
+      const uint32_t n = kept - at < 8192 ? kept - at : 8192;
+      for (uint32_t k = 0; k < n; ++k) {
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(native_touch_report_ring[(touch_total - kept + at + k) & (TouchRing - 1)], &ns);
+        const uint64_t us = ns / 1000;
+        memcpy(chunk + (size_t)k * 8, &us, 8);
+      }
+      rc = emit(chunk, n * 8, arg);
       at += n;
     }
   }
