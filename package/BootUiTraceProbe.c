@@ -366,3 +366,130 @@ unsigned boot_cpu_kick(char *out,unsigned size) {
  ml_set_interrupts_enabled(irq);
  return sent;
 }
+
+// ---- client sampler: the main threads of the render server's clients, every 4 ms (boot_client_sampler_start) ----
+// The slow-frame question after the IPC trace (i981e7e78): the clients sent their next update tens of milliseconds after the previous
+// frame, so what do SpringBoard and the other committing processes do in between. A kernel thread takes, every 4 ms and for the first
+// thread of each target process: the thread state (TH_RUN 4, TH_WAIT 1; 0x8000 when it sits on a run queue, runnable but not on a CPU),
+// priority, context switches, CPU time, wait event, user pc and lr with nine caller frames, and for a thread in mach_msg2 the pid of the
+// process its message goes to (-1 otherwise). Records go into a ring that BootDiagExport.c writes as kernel.client.bin; the targets
+// with their shared cache slide and main image address go to kernel.rings.txt for symbolization. Targets are found by name once a second
+// and held by a task reference; no lock is held while user memory is read.
+struct proc;typedef struct proc *proc_t;   // proc_best_name comes from vm/vm_protos.h
+int proc_pid(proc_t);
+task_t proc_task(proc_t);
+void proc_iterate(unsigned,int (*)(proc_t,void *),void *,int (*)(proc_t,void *),void *);
+void *IOMallocAligned(vm_size_t,vm_offset_t);
+#define CS_TARGETS 6
+#define CS_RING 131072
+struct cs_rec {uint64_t abs;int32_t pid;uint16_t state;int16_t pri;uint32_t cs;int32_t peer;uint64_t cpu,wait,frames[11];};
+_Static_assert(sizeof(struct cs_rec)==128,"client sample");
+struct cs_target {int pid;unsigned slide;uint64_t image;char name[32];};
+struct cs_rec *boot_client_ring;
+volatile uint32_t boot_client_count;
+struct cs_target boot_client_targets[32];
+volatile unsigned boot_client_target_count;
+static const char *const cs_names[CS_TARGETS]={"SpringBoard","WidgetRenderer_","InputUI","Preferences","MobileSafari","PosterBoard"};
+static task_t cs_task[CS_TARGETS],cs_found_task[CS_TARGETS];
+static int cs_pid[CS_TARGETS],cs_found_pid[CS_TARGETS];
+static unsigned cs_started;
+
+static int cs_select(proc_t p,void *arg) {
+ (void)arg;const char *name=proc_best_name(p);
+ for(unsigned i=0;i<CS_TARGETS;++i)if(!strncmp(name,cs_names[i],strlen(cs_names[i])))return 1;
+ return 0;
+}
+static int cs_found(proc_t p,void *arg) {
+ (void)arg;const char *name=proc_best_name(p);
+ for(unsigned i=0;i<CS_TARGETS;++i) {
+  if(strncmp(name,cs_names[i],strlen(cs_names[i])) || cs_found_task[i])continue;
+  task_t task=proc_task(p);
+  if(task){task_reference(task);cs_found_task[i]=task;cs_found_pid[i]=proc_pid(p);}
+  break;
+ }
+ return 0;   // PROC_RETURNED
+}
+// A new target: its shared cache slide and main image address (dyld's all_image_info), for the host's symbolization.
+static void cs_note_target(task_t task,int pid,const char *name) {
+ const unsigned n=boot_client_target_count;
+ for(unsigned i=0;i<n && i<32;++i)if(boot_client_targets[i].pid==pid)return;
+ if(n>=32)return;
+ struct cs_target *t=&boot_client_targets[n];memset(t,0,sizeof(*t));
+ t->pid=pid;t->slide=(unsigned)task->task_shared_region_slide;strlcpy(t->name,name,sizeof(t->name));
+ vm_map_t map=NULL;
+ if(task_lock_try(task)){map=task->map;if(map)vm_map_reference(map);task_unlock(task);}
+ if(map) {
+  const uint64_t images=task_get_all_image_info_addr(task);
+  uint64_t info[2]={0},image[3]={0};
+  if(bt_user(images,sizeof(info)) && !read_user(map,images,info,sizeof(info)) && (unsigned)(info[0]>>32) && bt_user(info[1],sizeof(image)) &&
+     !read_user(map,info[1],image,sizeof(image)) && bt_user(image[0],32))t->image=image[0];
+  vm_map_deallocate(map);
+ }
+ boot_client_target_count=n+1;
+}
+static void cs_refresh(void) {
+ memset(cs_found_task,0,sizeof(cs_found_task));memset(cs_found_pid,0,sizeof(cs_found_pid));
+ proc_iterate((1U<<0)|(1U<<2),cs_found,NULL,cs_select,NULL);
+ for(unsigned i=0;i<CS_TARGETS;++i) {
+  if(cs_task[i])task_deallocate(cs_task[i]);
+  cs_task[i]=cs_found_task[i];cs_pid[i]=cs_found_pid[i];
+  if(cs_task[i])cs_note_target(cs_task[i],cs_pid[i],cs_names[i]);
+ }
+}
+static void cs_sample(unsigned slot) {
+ task_t task=cs_task[slot];
+ if(!task || !task_lock_try(task))return;
+ vm_map_t map=task->active?task->map:NULL;
+ if(!map){task_unlock(task);return;}
+ vm_map_reference(map);
+ ipc_space_t space=task->itk_space;if(space)is_reference(space);
+ struct cs_rec r;memset(&r,0,sizeof(r));
+ struct bt_entry e;memset(&e,0,sizeof(e));
+ bool got=false;
+ thread_t thread=(thread_t)queue_first(&task->threads);
+ if(!queue_end(&task->threads,(queue_entry_t)thread)) {
+  bool irq=ml_set_interrupts_enabled(false);
+  if(simple_lock_try(&thread->sched_lock,&thread_lck_grp)) {
+   r.state=(uint16_t)thread->state;if(thread_get_runq(thread)!=PROCESSOR_NULL)r.state|=0x8000;
+   r.pri=(int16_t)thread->sched_pri;r.cs=thread->c_switch;r.wait=(uint64_t)thread->wait_event;r.cpu=recount_thread_time_mach(thread);
+   arm_saved_state_t *state=thread->machine.upcb;
+   if(state && is_saved_state64(state)) {
+    e.pc=BT_STRIP_USER_PC((uint64_t)get_saved_state_pc(state));e.lr=BT_STRIP_USER_PC((uint64_t)get_saved_state_lr(state));
+    e.fp=(uint64_t)get_saved_state_fp(state);e.trap=(uint64_t)get_saved_state_reg(state,16);
+    for(unsigned reg=0;reg<8;++reg)e.regs[reg]=(uint64_t)get_saved_state_reg(state,reg);
+    got=true;
+   }
+   thread_unlock(thread);
+  }
+  ml_set_interrupts_enabled(irq);
+ }
+ task_unlock(task);
+ r.abs=mach_absolute_time();r.pid=cs_pid[slot];r.peer=-1;
+ if(got) {
+  r.frames[0]=e.pc;r.frames[1]=e.lr;
+  if(bt_user(e.pc,4) && (!e.lr || bt_user(e.lr,4)))bt_walk_n(&e,read_user,map,&r.frames[2],9);
+  if(e.trap==UINT64_MAX-46){lookup_peer(&e,space);r.peer=e.peer;}
+ }
+ if(space)is_release(space);
+ vm_map_deallocate(map);
+ const uint32_t n=boot_client_count;
+ boot_client_ring[n&(CS_RING-1)]=r;
+ boot_client_count=n+1;
+}
+static void cs_thread(void *arg,wait_result_t result) {
+ (void)arg;(void)result;
+ for(unsigned tick=0;;++tick) {
+  if(tick%250==0)cs_refresh();
+  for(unsigned i=0;i<CS_TARGETS;++i)cs_sample(i);
+  delay_for_interval(4,NSEC_PER_MSEC);
+ }
+}
+void boot_client_sampler_start(void) {
+ if(__atomic_exchange_n(&cs_started,1,__ATOMIC_ACQUIRE))return;
+ struct cs_rec *ring=(struct cs_rec *)IOMallocAligned(sizeof(struct cs_rec)*CS_RING,4096);
+ if(!ring)return;
+ memset(ring,0,sizeof(struct cs_rec)*CS_RING);
+ boot_client_ring=ring;
+ thread_t thread=THREAD_NULL;
+ if(kernel_thread_start_priority(cs_thread,NULL,BASEPRI_KERNEL,&thread)==KERN_SUCCESS)thread_deallocate(thread);
+}
