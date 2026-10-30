@@ -1709,7 +1709,7 @@ void gpuStart() {
 // GX_BW_PERF_VOTE as the boot vote, with that level's bandwidth. OPP MHz in sheng-gmu's table order.
 // Two boosts, as the msm devfreq driver has them: work after the idle drop starts at the lowest level at or above max(2 x now, 578 MHz)
 // for 50 ms (msm_devfreq_active boosts by 2 for the polling period), and a flip that found the GPU still writing its frame (the display
-// driver's fence wait, native_legacy_direct[9]) asks for 2 x the current frequency for 50 ms, the case msm's dma-fence deadline hint
+// driver's fence wait, native_legacy_direct[13]: 8 ms or more) asks for 2 x the current frequency for 50 ms, the case msm's dma-fence deadline hint
 // boosts for. [13] counts the late-frame boosts started, [14] the wake boosts. No input event raises the GPU.
 constexpr uint32_t kGpuMHz[9] = {0, 220, 295, 348, 401, 475, 550, 615, 680};
 constexpr unsigned kGpuTop = 8;
@@ -1722,7 +1722,7 @@ volatile uint32_t native_gpu_dcvs[15];
 // 5 late-frame boost, 6 wake boost, 7 raised to the floor, 8 the vote failed.
 volatile uint64_t native_gpu_dcvs_log[256][2];
 volatile uint32_t native_gpu_dcvs_log_count;
-extern volatile uint32_t native_legacy_direct[13] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_direct[14] __attribute__((weak_import));
 }
 uint64_t gpuBusyTicks() {
     ShengGmuIo &io = gColdDevice.io;
@@ -1766,7 +1766,7 @@ void gpuDcvsThread(void *, wait_result_t) {
     unsigned down = 0, hold = 0;
     uint64_t lateEnd = 0, wakeEnd = 0, wakeAbs = 0;
     nanoseconds_to_absolutetime(50000000ull, &wakeAbs);
-    uint32_t held = &native_legacy_direct ? native_legacy_direct[9] : 0;
+    uint32_t held = &native_legacy_direct ? native_legacy_direct[13] : 0;
     bool idle = false;
     for (;;) {
         IOSleep(16);
@@ -1802,10 +1802,11 @@ void gpuDcvsThread(void *, wait_result_t) {
         if (active && idle) {
             idle = false; wakeEnd = t + wakeAbs; native_gpu_dcvs[14] = native_gpu_dcvs[14] + 1;
         }
-        // A flip that found the GPU still writing its frame is a deadline about to be missed (the display driver's fence wait, the case a
-        // dma-fence deadline hint boosts for): twice the current frequency for 50 ms.
-        if (&native_legacy_direct && native_legacy_direct[9] != held) {
-            held = native_legacy_direct[9];
+        // A frame whose GPU work ended 8 ms or more after the display wanted it (a whole refresh at 120 Hz; the display driver's fence wait,
+        // the case a dma-fence deadline hint boosts for) missed its flip: twice the current frequency for 50 ms. The first run held the
+        // boost on every wait (1503 boosts, the GPU at 680 MHz 82 % of the time): most frames wait for the GPU a few milliseconds.
+        if (&native_legacy_direct && native_legacy_direct[13] != held) {
+            held = native_legacy_direct[13];
             if (t >= lateEnd) native_gpu_dcvs[13] = native_gpu_dcvs[13] + 1;
             lateEnd = t + wakeAbs;
         }
