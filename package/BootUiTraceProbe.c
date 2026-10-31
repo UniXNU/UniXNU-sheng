@@ -403,9 +403,21 @@ struct cs_ptime *boot_ptime_ring;
 volatile uint32_t boot_ptime_count;
 #include <kern/recount.h>
 extern void absolutetime_to_nanoseconds(uint64_t,uint64_t *);
-struct cs_prev {int32_t pid;uint64_t user,system;};
+struct cs_prev {int32_t pid;uint64_t user,system;char name[20];};   // pid + 1, 0 free; the name as the pass first saw it
 #define CS_PREV 2048
 static struct cs_prev *cs_prev;   // allocated with the ring: the kernel's __DATA has no room for it
+#define CS_HOT 3
+static struct {task_t task;int pid;uint64_t used;char name[20];} cs_hot[CS_HOT];
+// The name the CPU time pass first saw for pid (a process that exited before the export has none there).
+const char *boot_ptime_name(int pid) {
+ if(!cs_prev)return NULL;
+ for(unsigned k=0;k<CS_PREV;++k) {
+  const struct cs_prev *at=&cs_prev[((unsigned)pid+k)%CS_PREV];
+  if(at->pid==pid+1)return at->name[0]?at->name:NULL;
+  if(!at->pid)return NULL;
+ }
+ return NULL;
+}
 static uint64_t cs_ptime_now;
 static uint32_t cs_us(uint64_t mach) {uint64_t ns=0;absolutetime_to_nanoseconds(mach,&ns);return (uint32_t)(ns/1000>UINT32_MAX?UINT32_MAX:ns/1000);}
 static int cs_ptime_one(proc_t p,void *arg) {
@@ -426,7 +438,17 @@ static int cs_ptime_one(proc_t p,void *arg) {
  // A pid used again starts from zero.
  const uint64_t du=user>=slot->user?user-slot->user:user,ds=system>=slot->system?system-slot->system:system;
  slot->pid=pid+1;slot->user=user;slot->system=system;
+ if(!known)strlcpy(slot->name,proc_best_name(p),sizeof(slot->name));
  if(!known || (!du && !ds) || !boot_ptime_ring)return 0;
+ // The pass's three busiest processes, for their busiest thread's stack (cs_hot_samples).
+ const uint64_t used=du+ds;
+ for(unsigned k=0;k<CS_HOT;++k) {
+  if(cs_hot[k].task && cs_hot[k].used>=used)continue;
+  if(cs_hot[CS_HOT-1].task)task_deallocate(cs_hot[CS_HOT-1].task);
+  for(unsigned m=CS_HOT-1;m>k;--m)cs_hot[m]=cs_hot[m-1];
+  task_reference(task);cs_hot[k].task=task;cs_hot[k].pid=pid;cs_hot[k].used=used;strlcpy(cs_hot[k].name,slot->name,sizeof(cs_hot[k].name));
+  break;
+ }
  struct cs_ptime r;memset(&r,0,sizeof(r));
  r.abs=cs_ptime_now;r.pid=pid;r.user_us=cs_us(du);r.system_us=cs_us(ds);r.priority=(int16_t)task->priority;
  const uint32_t n=boot_ptime_count;boot_ptime_ring[n&(CS_PTIME_RING-1)]=r;boot_ptime_count=n+1;
@@ -533,10 +555,88 @@ static void cs_sample(unsigned slot) {
  boot_client_ring[n&(CS_RING-1)]=r;
  boot_client_count=n+1;
 }
+// The busiest thread of each of the pass's three busiest processes (CPU time since the thread's last pass), its stack into the client
+// ring: state 0x4000 (0x6000 for a kernel stack, pid 0's threads), cpu the thread's CPU time since its last pass (mach units), wait its
+// thread id. The process goes into the C rows (cs_note_target) so its frames symbolize.
+struct cs_tprev {uint64_t tid,cpu;};
+#define CS_TPREV 8192
+static struct cs_tprev *cs_tprev;
+static uint64_t cs_thread_delta(thread_t thread) {
+ const uint64_t tid=thread->thread_id,cpu=recount_thread_time_mach(thread);
+ if(!cs_tprev)return 0;
+ for(unsigned k=0;k<64;++k) {
+  struct cs_tprev *at=&cs_tprev[(unsigned)(tid+k)%CS_TPREV];
+  if(at->tid==tid){const uint64_t d=cpu>=at->cpu?cpu-at->cpu:0;at->cpu=cpu;return d;}
+  if(!at->tid){at->tid=tid;at->cpu=cpu;return 0;}
+ }
+ return 0;
+}
+static void cs_hot_samples(void) {
+ for(unsigned h=0;h<CS_HOT;++h) {
+  task_t task=cs_hot[h].task;
+  if(!task)continue;
+  cs_hot[h].task=NULL;
+  const int pid=cs_hot[h].pid;
+  if(pid>0)cs_note_target(task,pid,cs_hot[h].name);
+  struct cs_rec r;memset(&r,0,sizeof(r));
+  bool got=false;
+  vm_map_t map=NULL;
+  struct bt_entry e;memset(&e,0,sizeof(e));
+  if(task_lock_try(task)) {
+   thread_t best=THREAD_NULL;uint64_t most=0;
+   thread_t thread;
+   queue_iterate(&task->threads,thread,thread_t,task_threads) {
+    const uint64_t d=cs_thread_delta(thread);
+    if(d>most){most=d;best=thread;}
+   }
+   if(best!=THREAD_NULL) {
+    r.cpu=most;r.wait=best->thread_id;
+    if(pid==0) {
+     uint64_t k[BT_KFRAMES];
+     bool irq=ml_set_interrupts_enabled(false);
+     if(best!=current_thread() && simple_lock_try(&best->sched_lock,&thread_lck_grp)) {
+      r.state=(uint16_t)(best->state|0x6000);r.pri=(int16_t)best->sched_pri;r.cs=best->c_switch;
+      if(!(best->state&TH_RUN))bt_kernel_stack(best,k);else memset(k,0,sizeof(k));
+      for(unsigned i=0;i<10 && i<BT_KFRAMES;++i)r.frames[i]=k[i];
+      r.frames[10]=(uint64_t)ptrauth_strip((void *)(uintptr_t)best->continuation,ptrauth_key_function_pointer);   // a kernel thread's work loop
+      thread_unlock(best);got=true;
+     }
+     ml_set_interrupts_enabled(irq);
+    } else {
+     map=task->active?task->map:NULL;
+     if(map)vm_map_reference(map);
+     bool irq=ml_set_interrupts_enabled(false);
+     if(simple_lock_try(&best->sched_lock,&thread_lck_grp)) {
+      r.state=(uint16_t)(best->state|0x4000);r.pri=(int16_t)best->sched_pri;r.cs=best->c_switch;
+      arm_saved_state_t *state=best->machine.upcb;
+      if(state && is_saved_state64(state)) {
+       e.pc=BT_STRIP_USER_PC((uint64_t)get_saved_state_pc(state));e.lr=BT_STRIP_USER_PC((uint64_t)get_saved_state_lr(state));
+       e.fp=(uint64_t)get_saved_state_fp(state);got=true;
+      }
+      thread_unlock(best);
+     }
+     ml_set_interrupts_enabled(irq);
+    }
+   }
+   task_unlock(task);
+  }
+  if(got && pid>0 && map) {
+   r.frames[0]=e.pc;r.frames[1]=e.lr;
+   if(bt_user(e.pc,4) && (!e.lr || bt_user(e.lr,4)))bt_walk_n(&e,read_user,map,&r.frames[2],9);
+  }
+  if(map)vm_map_deallocate(map);
+  task_deallocate(task);
+  if(!got || !boot_client_ring)continue;
+  r.abs=mach_absolute_time();r.pid=pid;r.peer=-1;
+  const uint32_t n=boot_client_count;
+  boot_client_ring[n&(CS_RING-1)]=r;
+  boot_client_count=n+1;
+ }
+}
 static void cs_thread(void *arg,wait_result_t result) {
  (void)arg;(void)result;
  for(unsigned tick=0;;++tick) {
-  if(tick%25==0){cs_refresh();cs_ptime_pass();}   // every 100 ms: an app's launch shows within that
+  if(tick%25==0){cs_refresh();cs_ptime_pass();cs_hot_samples();}   // every 100 ms: an app's launch shows within that
   cs_tick=tick;
   for(unsigned i=0;i<CS_TARGETS;++i)cs_sample(i);
   if(boot_cpu_ring) {
@@ -562,6 +662,8 @@ void boot_client_sampler_start(void) {
  if(cpus){memset(cpus,0,sizeof(struct cs_cpu)*CS_CPU_RING);boot_cpu_ring=cpus;}
  struct cs_ptime *times=(struct cs_ptime *)IOMallocAligned(sizeof(struct cs_ptime)*CS_PTIME_RING,4096);
  struct cs_prev *prev=(struct cs_prev *)IOMallocAligned(sizeof(struct cs_prev)*CS_PREV,4096);
+ struct cs_tprev *tprev=(struct cs_tprev *)IOMallocAligned(sizeof(struct cs_tprev)*CS_TPREV,4096);
+ if(tprev){memset(tprev,0,sizeof(struct cs_tprev)*CS_TPREV);cs_tprev=tprev;}
  if(times && prev){memset(prev,0,sizeof(struct cs_prev)*CS_PREV);cs_prev=prev;memset(times,0,sizeof(struct cs_ptime)*CS_PTIME_RING);boot_ptime_ring=times;}
  thread_t thread=THREAD_NULL;
  if(kernel_thread_start_priority(cs_thread,NULL,BASEPRI_KERNEL,&thread)==KERN_SUCCESS)thread_deallocate(thread);
