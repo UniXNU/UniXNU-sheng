@@ -1,0 +1,28 @@
+{
+  "status": "implementation_added_not_built_or_runtime_qualified",
+  "runtime_qualified": false,
+  "root_mount_observed": false,
+  "new_device_boot": false,
+  "verification_constraint": "User explicitly prohibited further testing before these runtime edits.",
+  "implementation": [
+    "package/SourceStorage.cpp",
+    "package/SourceRootPolicies.cpp",
+    "patches/xnu-12377/source-storage-runtime.patch",
+    "../UniXNU/scripts/build-sheng-source-storage.py",
+    "../UniXNU/drivers/DarwinBoot/DarwinBootPkg/Driver/DarwinBoot.c"
+  ],
+  "root_uuid": "546DFF4A-4172-4026-9F1B-7FDAD45F3D2E",
+  "systemos_uuid": "7A23BAC7-E86D-4DF4-B181-E6D80F212AE5",
+  "policies_verified_before_testing_stop": {
+    "OS_blocks": 2137088,
+    "SystemOS_blocks": 1275392,
+    "directory": "../UniXNU/out/sheng/ipados-26.5.2-23F84/sheng_ipados26/tree/build/verified-root-23F84"
+  },
+  "remaining": [
+    "Build and link the new runtime implementation when permitted.",
+    "Qualify the source base class virtual interface against retained IOStorageFamily.",
+    "Resolve remaining kernel-collection bindings for the APFS closure.",
+    "Complete HID runtime binding; source compilation alone is not an input migration.",
+    "Display/Metal remain on the previous unsupported iOS 26 ABI boundary."
+  ]
+}
