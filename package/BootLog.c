@@ -183,6 +183,7 @@ extern char native_adreno_fault_owner[20] __attribute__((weak_import));
 extern uint32_t native_gpu_restart[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_stats_uncached[2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_bo_memory[8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_freed_outside __attribute__((weak_import));
 extern volatile uint32_t native_adreno_bo_contig[2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wc_audit[6] __attribute__((weak_import));
@@ -719,10 +720,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // [bo memory]: user BOs from the system (count, spans, refused, last refusal status, MiB live and peak), kernel-mapped BOs, import spans.
   if (&native_adreno_bo_memory) {
     char row[240];
-    snprintf(row, sizeof row, "[bo memory] system %u BOs %u spans, refused %u (last %x), live %u MiB (peak %u) | kernel %u BOs | import spans %u | contiguous %u refused %u",
+    snprintf(row, sizeof row, "[bo memory] system %u BOs %u spans, refused %u (last %x), live %u MiB (peak %u) | kernel %u BOs | import spans %u | contiguous %u refused %u | freed after the lock %u",
              native_adreno_bo_memory[0], native_adreno_bo_memory[1], native_adreno_bo_memory[2], native_adreno_bo_memory[3],
              native_adreno_bo_memory[4], native_adreno_bo_memory[5], native_adreno_bo_memory[6], native_adreno_bo_memory[7],
-             &native_adreno_bo_contig ? native_adreno_bo_contig[0] : 0, &native_adreno_bo_contig ? native_adreno_bo_contig[1] : 0);
+             &native_adreno_bo_contig ? native_adreno_bo_contig[0] : 0, &native_adreno_bo_contig ? native_adreno_bo_contig[1] : 0,
+             &native_adreno_freed_outside ? native_adreno_freed_outside : 0);
     at = put(out, at, cap, row, sizeof row);
   }
   // GPU clients: name opens/refused/closes, live slot (- none), highest GPU address its mappings reached (MiB), last refusal.
