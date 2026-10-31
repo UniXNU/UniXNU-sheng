@@ -698,9 +698,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     for (unsigned k = 0; k < 2; ++k) {
       const volatile uint64_t *p = native_adreno_vm_phase_us[k];
       if (!p[0]) continue;
-      snprintf(row, sizeof row, "[vm %s] n=%llu us: observe1=%llu %s=%llu batch=%llu observe2=%llu %s=%llu max=%llu MiB=%llu", k ? "unmap" : "map",
+      // NativeAdrenoVm.cpp's phase slots: 1 route check, 2 cache maintenance, 3 table transaction, 4 the mapping order, 5 the map's
+      // checks before it (its preflight) or the unmap's retirement.
+      snprintf(row, sizeof row, "[vm %s] n=%llu us: observe=%llu %s=%llu batch=%llu %s=%llu %s=%llu max=%llu MiB=%llu", k ? "unmap" : "map",
                (unsigned long long)p[0], (unsigned long long)p[1], k ? "acquire" : "publish", (unsigned long long)p[2], (unsigned long long)p[3],
-               (unsigned long long)p[4], k ? "retire" : "-", (unsigned long long)p[5], (unsigned long long)p[6], (unsigned long long)(p[7] >> 20));
+               k ? "erase" : "insert", (unsigned long long)p[4], k ? "retire" : "preflight", (unsigned long long)p[5], (unsigned long long)p[6],
+               (unsigned long long)(p[7] >> 20));
       at = put(out, at, cap, row, sizeof row);
     }
   }
