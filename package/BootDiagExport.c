@@ -198,6 +198,7 @@ static uint32_t cpu_kept, cpu_keep;
 // pass, i32 pid, u32 user microseconds, u32 system microseconds since the pid's last pass (100 ms apart), i16 base priority, u16 0}.
 struct cs_ptime {uint64_t abs; int32_t pid; uint32_t user_us, system_us; int16_t priority; uint16_t reserved;};
 extern struct cs_ptime *boot_ptime_ring __attribute__((weak_import));
+extern const char *boot_ptime_name(int) __attribute__((weak_import));   // the name the CPU time pass saw: a process gone by the export has none
 extern volatile uint32_t boot_ptime_count __attribute__((weak_import));
 enum {PtimeRing = 131072};
 static uint32_t ptime_kept, ptime_keep;
@@ -388,11 +389,12 @@ static void rings_build(void) {
   }
   if (&native_adreno_tl_count && &native_adreno_tl_cap && native_adreno_tl_cap) {
     const uint32_t n = native_adreno_tl_count;
-    RT("# gpu timeline: T <fence> <buffers> <submit us> <cp start ticks> <cp end ticks> (19.2 MHz) <level at submit> <ring status 1 attached 2 stamps 4 page 8 acquired 16 read> (total %u; raw words, zero when the CP wrote nothing)\n", n);
+    RT("# gpu timeline: T <fence> <buffers> <submit us> <cp start ticks> <cp end ticks> (19.2 MHz) <level at submit> <ring status 1 attached 2 stamps 4 page 8 acquired 16 read> <pid> <seen retired us> (total %u; raw words, zero when the CP wrote nothing)\n", n);
     const uint32_t cap = native_adreno_tl_cap;
     for (uint32_t i = n > cap ? n - cap : 0; i < n; ++i) {
       const volatile uint64_t *r = native_adreno_tl[i & (cap - 1)];
-      RT("T %u %u %llu %llu %llu %u %u\n", (unsigned)(r[0] & 0xffffffffu), (unsigned)((r[0] >> 32) & 0x03ffffffu), r[1], r[2], r[3], (unsigned)r[4], (unsigned)(r[0] >> 58));
+      RT("T %u %u %llu %llu %llu %u %u %d %llu\n", (unsigned)(r[0] & 0xffffffffu), (unsigned)((r[0] >> 32) & 0x03ffffffu), r[1], r[2], r[3], (unsigned)(r[4] & 0xffffffffu),
+         (unsigned)(r[0] >> 58), (int)(r[4] >> 32), r[5]);
     }
   }
   if (&native_adreno_stall_log_count) {
@@ -436,7 +438,8 @@ static void rings_build(void) {
     // Names of every pid in the user client, GPU call and contiguous allocation rings: N <pid> <name>.
     int seen[512]; unsigned seen_n = 0;   // every process that ran: the CPU time ring names them all
     #define NOTE_PID(p_) do {const int p__ = (p_); unsigned k_ = 0; while (k_ < seen_n && seen[k_] != p__) ++k_; \
-      if (k_ == seen_n && seen_n < 512 && p__ > 0) {seen[seen_n++] = p__; char nm_[32] = {0}; proc_name(p__, nm_, sizeof nm_); RT("N %d %s\n", p__, nm_);}} while (0)
+      if (k_ == seen_n && seen_n < 512 && p__ > 0) {seen[seen_n++] = p__; char nm_[32] = {0}; proc_name(p__, nm_, sizeof nm_); \
+        if (!nm_[0] && &boot_ptime_name && boot_ptime_name(p__)) strlcpy(nm_, boot_ptime_name(p__), sizeof nm_); RT("N %d %s\n", p__, nm_);}} while (0)
     RT("# pid names (user client, GPU call and contiguous allocation rings): N <pid> <name>; kernel reference boot_diag_shot_tick=%llx\n",
        (unsigned long long)(uintptr_t)&boot_diag_shot_tick);
     if (ioc_kept) {const uint32_t kept = ioc_kept > IocRing ? IocRing : ioc_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(native_ioc_ring[(ioc_kept - kept + i) & (IocRing - 1)].pid);}
