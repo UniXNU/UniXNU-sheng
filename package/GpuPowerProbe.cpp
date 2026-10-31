@@ -88,9 +88,10 @@ extern "C" ShengGmuStatus ShengGmuBindMmio(ShengGmuMmio *, ShengGmuIo *) __attri
 extern "C" IOReturn NativeAdrenoGmuContextPayloads(NativeAdrenoGmuPayload out[5]) __attribute__((weak));
 extern "C" IOReturn NativeAdrenoGpuContextBringup(volatile uint8_t *, size_t, unsigned, unsigned, unsigned, unsigned, unsigned,
     unsigned, void (*)(uint32_t), NativeAdrenoGmuContextReport *) __attribute__((weak));
-extern "C" IOReturn NativeAdrenoGpuContextBuffers(NativeAdrenoGpuBuffer out[5]) __attribute__((weak));
+extern "C" IOReturn NativeAdrenoGpuContextBuffers(NativeAdrenoGpuBuffer out[GpuBufferCount]) __attribute__((weak));
 extern "C" NativeAdrenoVm *NativeAdrenoGpuContextVm() __attribute__((weak));
 extern "C" unsigned NativeAdrenoGpuContextInputBits() __attribute__((weak));
+extern "C" volatile uint32_t native_adreno_diag;   // NativeAdrenoSubmit.cpp
 extern "C" IOReturn native_adreno_publish(NativeAdrenoVm *, NativeAdrenoSubmit *, NativeAdrenoRing *, const NativeAdrenoRingClock *,
     const NativeAdrenoTimer *, const NativeAdrenoAbiDeviceInfo *, uint32_t, uint32_t) __attribute__((weak));
 extern "C" uint32_t native_adreno_publish_stats(uint32_t *) __attribute__((weak));
@@ -350,6 +351,14 @@ int ringRead(void *, uint32_t reg, uint32_t *value) {
     return gColdDevice.io.read32(gColdDevice.io.cookie, ShengGmuGpu, size_t(reg) * 4, value);
 }
 int ringBarrier(void *) {__asm__ volatile("dsb sy" ::: "memory"); return 0;}
+// The GMU's window for the preemption keepalive vote: the same window gmuWr writes, addressed by byte offset.
+int gmuWrAt(void *, uint32_t byteOffset, uint32_t value) {
+    return gColdDevice.io.write32(gColdDevice.io.cookie, ShengGmuCore, size_t(kGmuReg(byteOffset / 4)), value);
+}
+// The CP's preemption, as the board sees it: [0] set up (0 yes), [1] triggers, [2] completions, [3] faults, [4] switches skipped for
+// overlapping buffers, [5] write pointers given again, [6] the last switch's length in us, [7] the ring the CP runs.
+extern "C" {volatile uint32_t native_gpu_preempt[8];}
+extern "C" bool native_adreno_preempt_irq() __attribute__((weak));   // NativeAdrenoPublish.cpp
 // The ring, memptrs and lists are Normal non-cacheable on both sides (GPU PTE MAIR 0, CPU write-combine): no cache
 // maintenance, only ordering.
 int ringPublish(void *, const volatile uint32_t *, size_t) {__asm__ volatile("dsb sy" ::: "memory"); return 0;}
@@ -376,10 +385,12 @@ int ringIdle(void *) {
     }
     return 0;
 }
-OSSharedPtr<IOMemoryMap> gGpuMaps[5];
-volatile uint8_t *gGpuCpu[5];
-NativeAdrenoGpuBuffer gGpuBuffers[5];
+OSSharedPtr<IOMemoryMap> gGpuMaps[GpuBufferCount];
+volatile uint8_t *gGpuCpu[GpuBufferCount];
+NativeAdrenoGpuBuffer gGpuBuffers[GpuBufferCount];
 NativeAdrenoRing gRing;
+NativeAdrenoRing gRing1;   // the second ring of the CP's preemption (sheng-gpu-preempt=1)
+bool gPreemptWanted;
 NativeAdrenoCpInit gCpInit;
 extern "C" {
 NativeAdrenoGmuContextReport native_gpu_context;
@@ -678,6 +689,9 @@ void gpuIrq(void *) {
     gIrqCount = gIrqCount + 1;
     gIrqEmpty = status ? 0 : gIrqEmpty + 1;
     if (gIrqEmpty > 100000) gpuWr(A740_RBBM_INT_0_MASK, 0);
+    // The CP finished a context switch (RBBM_INT_0_MASK bit 8, CP_SW, as a6xx_irq's a6xx_preempt_irq): the driver gives the ring the
+    // CP moved to its write pointer. Every other source keeps the fence waiters' own polling.
+    if ((status & (1u << 8)) && &native_adreno_preempt_irq) (void)native_adreno_preempt_irq();
     thread_wakeup(event_t(&gIrqCount));
 }
 bool cpFence(const uint32_t *words, size_t count) {
@@ -1257,6 +1271,20 @@ void publishAndWrapperTest(bool rounds) {
     const NativeAdrenoRingClock clock{nullptr, ringNow, ringIdle};
     // userClientTest attaches the submit object; with the self-tests skipped it still has to be attached before a client opens.
     if (vm) gSubmit.attach(vm, &gRing);
+    // The CP's switch between the two rings, when the board asked for it: the trigger registers through the GPU's window and the GMU's
+    // keepalive vote, each ring's record and SMMU info page (their GPU addresses and CPU mappings), and the clock the switches are
+    // timed with.
+    if (vm && gPreemptWanted) {
+        NativeAdrenoSubmit::PreemptSetup setup{};
+        setup.io = NativeAdrenoPreemptIo{nullptr, ringWrite, ringRead, ringBarrier, nullptr, gmuWrAt};
+        setup.pages.record[0] = gGpuBuffers[5].iova; setup.pages.record[1] = gGpuBuffers[6].iova;
+        setup.pages.smmu_info[0] = gGpuBuffers[7].iova; setup.pages.smmu_info[1] = gGpuBuffers[8].iova;
+        setup.pages.record_cpu[0] = const_cast<uint8_t *>(gGpuCpu[5]); setup.pages.record_cpu[1] = const_cast<uint8_t *>(gGpuCpu[6]);
+        setup.pages.smmu_cpu[0] = const_cast<uint8_t *>(gGpuCpu[7]); setup.pages.smmu_cpu[1] = const_cast<uint8_t *>(gGpuCpu[8]);
+        setup.now = ringNow; setup.clock = nullptr;
+        const IOReturn on = gSubmit.setPreemption(&gRing, &gRing1, setup, true);
+        native_gpu_preempt[0] = uint32_t(on);
+    }
     native_adreno_dram_read32 = dramRead32;
     native_adreno_cached_read32 = cachedRead32;
     native_adreno_line_audit = lineAudit;
@@ -1619,7 +1647,7 @@ void gpuStart() {
     gpuSetActlr();
     c[0] = 1;
     if (NativeAdrenoGpuContextBuffers(gGpuBuffers)) {setRow(7, "C1 buffers refused"); return;}
-    for (unsigned i = 0; i < 5; ++i) {
+    for (unsigned i = 0; i < GpuBufferCount; ++i) {
         IODeviceMemory *m = IODeviceMemory::withRange(gGpuBuffers[i].physical, gGpuBuffers[i].bytes);
         if (m) {
             gGpuMaps[i] = OSSharedPtr<IOMemoryMap>(m->map(kIOMapAnywhere | kIOMapWriteCombineCache), OSNoRetain);
@@ -1647,9 +1675,25 @@ void gpuStart() {
     const IOReturn attached = gRing.attach(&rio, &cache, const_cast<uint8_t *>(gGpuCpu[1]), gGpuBuffers[1].bytes,
         gGpuBuffers[1].iova, const_cast<uint8_t *>(gGpuCpu[2]), gGpuBuffers[2].bytes, gGpuBuffers[2].iova);
     if (attached) {snprintf(row, sizeof row, "C4 ring attach %x", unsigned(attached)); setRow(7, row); return;}
-    // sheng-gpu-timeline=0 turns off the CP counter stamps around each job's buffers (the board's ring is this one, not the service's).
-    {unsigned timeline = 0; const bool given = PE_parse_boot_argn("sheng-gpu-timeline", &timeline, sizeof timeline); gRing.setTimeline(!given || timeline != 0);}
+    // The CP counter stamps around each job's buffers and the jobs' timeline are diagnostics (sheng-diag=1; the board's ring is this one,
+    // not the service's); sheng-gpu-timeline=0 or 1 overrides the stamps.
+    {unsigned timeline = 0, diag = 0; PE_parse_boot_argn("sheng-diag", &diag, sizeof diag); native_adreno_diag = diag == 1;
+     if (!PE_parse_boot_argn("sheng-gpu-timeline", &timeline, sizeof timeline)) timeline = diag == 1;
+     gRing.setTimeline(timeline != 0);}
     gpuWr64(A740_CP_BV_RB_RPTR_ADDR, gGpuBuffers[2].iova + 8);   // rbmemptr(bv_rptr)
+    // The second ring and the CP's switch between them (NativeAdrenoPreempt): sheng-gpu-preempt=1 turns it on (off: one ring, as
+    // before). The second ring writes no CP_RB_* register; its base, read-pointer shadow and control word reach the CP through its
+    // preemption record on each switch, and its bus read pointer is the one register it needs.
+    {unsigned preempt = 0; PE_parse_boot_argn("sheng-gpu-preempt", &preempt, sizeof preempt); gPreemptWanted = preempt == 1;}
+    if (gPreemptWanted) {
+        const IOReturn second = gRing1.attachSecondary(const_cast<uint8_t *>(gGpuCpu[9]), gGpuBuffers[9].bytes,
+            gGpuBuffers[9].iova, const_cast<uint8_t *>(gGpuCpu[10]), gGpuBuffers[10].bytes, gGpuBuffers[10].iova);
+        if (second) {snprintf(row, sizeof row, "C4 ring1 attach %x", unsigned(second)); setRow(7, row); return;}
+        const IOReturn p0 = gRing.setPreempt(gGpuBuffers[5].iova, gGpuBuffers[7].iova, gGpuBuffers[2].iova + 8);
+        const IOReturn p1 = gRing1.setPreempt(gGpuBuffers[6].iova, gGpuBuffers[8].iova, gGpuBuffers[10].iova + 8);
+        if (p0 || p1) {snprintf(row, sizeof row, "C4 preempt %x/%x", unsigned(p0), unsigned(p1)); setRow(7, row); return;}
+        gpuWr64(A740_CP_BV_RB_RPTR_ADDR, gGpuBuffers[2].iova + 8);
+    }
     gpuWr(A740_CP_SQE_CNTL, 1);
     // 5. a7xx_patch_pwrup_reglist (preemption list only; IFPC is off) and a7xx_cp_init through the ring.
     c[0] = 5;
