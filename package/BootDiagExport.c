@@ -227,6 +227,30 @@ static void contig_hook(unsigned int pages, int found, uint64_t began, uint64_t 
   r->count = count;
   for (unsigned i = 0; i < 6; ++i) r->frames[i] = i < count ? (uint64_t)frames[i] : 0;
 }
+// Large GPU allocations (the driver's BoAlloc hook, NativeAdrenoPublish.cpp), kernel.boalloc.bin: header "BOA1", total, kept, 0; then
+// 256-byte records {the driver's 56-byte phase record (u64 microseconds entered; u32 KiB, flags, then microseconds: limit lock, create,
+// wire, clean, lock, dispatch, discard; u32 spans, i32 status, u32 0), i32 pid, u32 0, then the caller's user stack: u64 shared cache
+// slide, u64 frames[16], two images {u64 Mach-O header address, u8 uuid[16]}, u32 frame count, u32 walk error}.
+struct bo_trace {uint64_t entered; uint32_t kib, flags, limit_us, create_us, wire_us, clean_us, lock_us, dispatch_us, discard_us, spans;
+  int32_t status; uint32_t reserved;};
+struct boot_user_image {uint64_t base; uint8_t uuid[16];};
+struct boot_user_stack {uint64_t slide, frames[16]; struct boot_user_image images[2]; uint32_t count, error;};
+struct boalloc_rec {struct bo_trace trace; int32_t pid; uint32_t reserved; struct boot_user_stack stack;};
+_Static_assert(sizeof(struct boalloc_rec) == 256, "boalloc record");
+extern void (*native_adreno_bo_hook)(const struct bo_trace *) __attribute__((weak_import));
+extern void boot_user_stack_here(struct boot_user_stack *) __attribute__((weak_import));
+enum {BoAllocRing = 8192};
+static struct boalloc_rec *boalloc_ring;
+static volatile uint32_t boalloc_count;
+static uint32_t boalloc_kept, boalloc_keep;
+static void boalloc_hook(const struct bo_trace *trace) {
+  struct boalloc_rec r;
+  memset(&r, 0, sizeof r);
+  r.trace = *trace; r.pid = proc_selfpid();
+  if (&boot_user_stack_here) boot_user_stack_here(&r.stack);
+  const uint32_t n = __atomic_fetch_add(&boalloc_count, 1, __ATOMIC_RELAXED);
+  boalloc_ring[n & (BoAllocRing - 1)] = r;
+}
 extern void boot_client_sampler_start(void) __attribute__((weak_import));
 extern struct cs_rec *boot_client_ring __attribute__((weak_import));
 extern volatile uint32_t boot_client_count __attribute__((weak_import));
@@ -271,6 +295,10 @@ static void ipc_trace_tick(void) {
   if (&sheng_contig_hook && !contig_ring) {
     contig_ring = IOMallocAligned(sizeof(struct contig_rec) * ContigRing, PAGE_SIZE);
     if (contig_ring) {memset(contig_ring, 0, sizeof(struct contig_rec) * ContigRing); sheng_contig_hook = contig_hook;}
+  }
+  if (&native_adreno_bo_hook && !boalloc_ring) {
+    boalloc_ring = IOMallocAligned(sizeof(struct boalloc_rec) * BoAllocRing, PAGE_SIZE);
+    if (boalloc_ring) {memset(boalloc_ring, 0, sizeof(struct boalloc_rec) * BoAllocRing); native_adreno_bo_hook = boalloc_hook;}
   }
   if (&native_adreno_call_ring && !native_adreno_call_ring) {
     struct gpu_call_rec *calls = IOMallocAligned(sizeof(struct gpu_call_rec) * GpuCallRing, PAGE_SIZE);
@@ -407,6 +435,7 @@ static void rings_build(void) {
     if (ioc_kept) {const uint32_t kept = ioc_kept > IocRing ? IocRing : ioc_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(native_ioc_ring[(ioc_kept - kept + i) & (IocRing - 1)].pid);}
     if (gpucall_kept) {const uint32_t kept = gpucall_kept > GpuCallRing ? GpuCallRing : gpucall_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(native_adreno_call_ring[(gpucall_kept - kept + i) & (GpuCallRing - 1)].pid);}
     if (contig_kept) {const uint32_t kept = contig_kept > ContigRing ? ContigRing : contig_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(contig_ring[(contig_kept - kept + i) & (ContigRing - 1)].pid);}
+    if (boalloc_kept) {const uint32_t kept = boalloc_kept > BoAllocRing ? BoAllocRing : boalloc_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(boalloc_ring[(boalloc_kept - kept + i) & (BoAllocRing - 1)].pid);}
     #undef NOTE_PID
   }
   if (ipc_ring) {
@@ -465,6 +494,7 @@ uint64_t boot_diag_scan(uint64_t budget) {
   ioc_kept = (&native_ioc_count && &native_ioc_ring && native_ioc_ring) ? native_ioc_count : 0;
   gpucall_kept = (&native_adreno_call_count && &native_adreno_call_ring && native_adreno_call_ring) ? native_adreno_call_count : 0;
   contig_kept = contig_ring ? contig_count : 0;
+  boalloc_kept = boalloc_ring ? boalloc_count : 0;
   rings_build();
   if (rings_text && rings_len) {
     const uint64_t cost = 24 + strlen("kernel.rings.txt") + rings_len;
@@ -484,6 +514,12 @@ uint64_t boot_diag_scan(uint64_t budget) {
     const uint32_t kept = gpucall_kept > GpuCallRing ? GpuCallRing : gpucall_kept;
     const uint64_t cost = 24 + strlen("kernel.gpucalls.bin") + 16 + (uint64_t)kept * sizeof(struct gpu_call_rec);
     if (used + cost <= budget) {gpucall_keep = 1; used += cost;}
+  }
+  boalloc_keep = 0;
+  if (boalloc_kept) {
+    const uint32_t kept = boalloc_kept > BoAllocRing ? BoAllocRing : boalloc_kept;
+    const uint64_t cost = 24 + strlen("kernel.boalloc.bin") + 16 + (uint64_t)kept * sizeof(struct boalloc_rec);
+    if (used + cost <= budget) {boalloc_keep = 1; used += cost;}
   }
   contig_keep = 0;
   if (contig_kept) {
@@ -547,7 +583,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   if (!chunk) return -1;
   vfs_context_t ctx = vfs_context_kernel();
   int rc = emit("M2VCACH1", 8, arg);
-  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep + touch_keep + cpu_keep + ioc_keep + gpucall_keep + contig_keep;
+  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep + touch_keep + cpu_keep + ioc_keep + gpucall_keep + contig_keep + boalloc_keep;
   if (!rc) rc = emit(&root_len, 4, arg);
   if (!rc) rc = emit("/", 1, arg);
   if (!rc) rc = emit(&count, 4, arg);
@@ -607,6 +643,24 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
         memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
       }
       rc = emit(chunk, n * sizeof(struct gpu_call_rec), arg);
+      at += n;
+    }
+  }
+  if (!rc && boalloc_keep) {
+    const uint32_t total = boalloc_kept, kept = total > BoAllocRing ? BoAllocRing : total;
+    const uint32_t head[4] = {'B' | 'O' << 8 | 'A' << 16 | (uint32_t)'1' << 24, total, kept, 0};
+    rc = put_head(emit, arg, "kernel.boalloc.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct boalloc_rec));
+    if (!rc) rc = emit(head, sizeof head, arg);
+    for (uint32_t at = 0; !rc && at < kept;) {
+      const uint32_t n = kept - at < 512 ? kept - at : 512;
+      for (uint32_t k = 0; k < n; ++k) {
+        struct boalloc_rec out = boalloc_ring[(total - kept + at + k) & (BoAllocRing - 1)];
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(out.trace.entered, &ns);
+        out.trace.entered = ns / 1000;
+        memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
+      }
+      rc = emit(chunk, n * sizeof(struct boalloc_rec), arg);
       at += n;
     }
   }
