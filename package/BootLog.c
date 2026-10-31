@@ -106,7 +106,7 @@ extern volatile uint32_t native_adreno_stall_mem[59] __attribute__((weak_import)
 extern volatile uint32_t native_adreno_unstick[15] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_fence_pending[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wptr_fence[4] __attribute__((weak_import));
-extern volatile uint64_t native_adreno_wait_outer[4] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_wait_outer[5] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_export_stats[4] __attribute__((weak_import));
 extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import));
 extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
@@ -1468,11 +1468,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_adreno_fence_wait[0], native_adreno_fence_wait[1], native_adreno_fence_wait[2], native_adreno_fence_wait[3],
              native_adreno_fence_wait[4], native_adreno_fence_wait[5], native_adreno_fence_wait[6], native_adreno_fence_wait[7]);
     at = put(out, at, cap, row, sizeof row);
-    // The callers' waits (int-147): the polls above run under the connection lock, the pauses between them outside it.
+    // The callers' waits: the pauses run outside the connection lock, and so do the polls before the fence has passed.
     if (&native_adreno_wait_outer && native_adreno_wait_outer[0]) {
-      snprintf(row, sizeof row, "[fence wait] outer waits=%llu us=%llu pauses outside the lock=%llu longest=%lluus",
+      snprintf(row, sizeof row, "[fence wait] outer waits=%llu us=%llu pauses outside the lock=%llu longest=%lluus unlocked polls=%llu",
                (unsigned long long)native_adreno_wait_outer[0], (unsigned long long)native_adreno_wait_outer[1],
-               (unsigned long long)native_adreno_wait_outer[2], (unsigned long long)native_adreno_wait_outer[3]);
+               (unsigned long long)native_adreno_wait_outer[2], (unsigned long long)native_adreno_wait_outer[3],
+               (unsigned long long)native_adreno_wait_outer[4]);
       at = put(out, at, cap, row, sizeof row);
     }
   }
