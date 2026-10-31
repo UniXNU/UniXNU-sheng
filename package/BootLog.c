@@ -206,6 +206,9 @@ extern struct sheng_exc_record sheng_exc_ring[4] __attribute__((weak_import));
 extern volatile uint32_t sheng_exc_count __attribute__((weak_import));
 extern volatile uint32_t native_adreno_cp_aperture[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_cp_image[22] __attribute__((weak_import));
+extern bool native_adreno_preempt_stats(uint32_t *out) __attribute__((weak_import));
+extern volatile uint32_t native_gpu_preempt[8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_switch_count __attribute__((weak_import));
 extern volatile uint32_t native_adreno_window_overflow[4][3] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_client_stats[5][6] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_client_bytes[5][2] __attribute__((weak_import));
@@ -1484,6 +1487,18 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // The CP's registers once a fence stopped advancing: RBBM status 0-3, interrupt, CP fault, status 1, protect, ring rptr/wptr,
   // IB1 base/rem, IB2 base/rem, BV rptr, BV IB1 base/rem, BV IB2 rem, BV IB2 base.
+  // The CP switch between the two rings (NativeAdrenoPreempt): counters, the ring the CP runs, a switch in flight, the control register as read now
+  // (STOP, bit 0, still set: the hardware never finished it) and checkCpSwitch's steps (createVm, probeBuffer, submit, waitAll, readTtbr0, fence).
+  if (&native_adreno_preempt_stats) {
+    uint32_t v[26] = {0};
+    char row[380];
+    const bool on = native_adreno_preempt_stats(v);
+    snprintf(row, sizeof row, "[gpu preempt] %s trig %u done %u skip %u fault %u disjoint %u wptr %u last %uus | loaded %u flight %u cntl %x | check %x %x %x %x %x f%u | dead %u rescues %u | rec0 rptr %x wptr %x err %x info %x | rec1 rptr %x wptr %x err %x info %x | cpsw irq %u last %x | switches logged %u",
+             on ? "on" : "off/busy", v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15], v[16], v[17], v[18], v[19], v[20], v[21], v[22], v[23], v[24], v[25],
+             &native_gpu_preempt ? native_gpu_preempt[1] : 0, &native_gpu_preempt ? native_gpu_preempt[2] : 0,
+             &native_adreno_switch_count ? native_adreno_switch_count : 0);
+    at = put(out, at, cap, row, sizeof row);
+  }
   // Fenced WPTR writes (NativeAdrenoRing.cpp writeWptr): writes, writes dropped at least once, repeated writes, writes still dropped.
   if (&native_adreno_wptr_fence && native_adreno_wptr_fence[0]) {
     char row[120];

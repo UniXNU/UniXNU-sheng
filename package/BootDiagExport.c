@@ -75,7 +75,17 @@ extern volatile uint32_t native_legacy_ring_count __attribute__((weak_import));
 extern volatile uint64_t native_legacy_snap[64][2] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_snap_count __attribute__((weak_import));
 extern volatile uint32_t native_legacy_swapstat[16] __attribute__((weak_import));
-extern volatile uint64_t (*native_adreno_tl)[6] __attribute__((weak_import));
+extern volatile uint64_t (*native_adreno_tl)[8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_switch_log[16][34] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_switch_count __attribute__((weak_import));
+extern volatile uint32_t native_adreno_recover_log[8][12] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_recover_log_count __attribute__((weak_import));
+extern volatile uint32_t native_adreno_prio_log[32][6] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_prio_count __attribute__((weak_import));
+extern volatile uint32_t *native_adreno_pass_log __attribute__((weak_import));
+extern volatile uint32_t native_adreno_pass_count __attribute__((weak_import));
+extern volatile uint32_t *native_adreno_pipe_log __attribute__((weak_import));
+extern volatile uint32_t native_adreno_pipe_count __attribute__((weak_import));
 extern volatile uint32_t native_adreno_tl_cap __attribute__((weak_import));
 extern volatile uint32_t native_adreno_tl_count __attribute__((weak_import));
 extern volatile uint64_t native_adreno_stall_log[32][8] __attribute__((weak_import));
@@ -389,12 +399,69 @@ static void rings_build(void) {
   }
   if (&native_adreno_tl_count && &native_adreno_tl_cap && native_adreno_tl_cap) {
     const uint32_t n = native_adreno_tl_count;
-    RT("# gpu timeline: T <fence> <buffers> <submit us> <cp start ticks> <cp end ticks> (19.2 MHz) <level at submit> <ring status 1 attached 2 stamps 4 page 8 acquired 16 read> <pid> <seen retired us> (total %u; raw words, zero when the CP wrote nothing)\n", n);
+    RT("# gpu timeline: T <fence> <buffers> <submit us> <cp start ticks> <cp end ticks> (19.2 MHz) <level at submit> <ring status 1 attached 2 stamps 4 page 8 acquired 16 read> <pid> <seen retired us> <ring> <priority+1> <gpu role> <ring the CP ran> <switch in flight> <restarts that replayed it> <replay us> (total %u; raw words, zero when the CP wrote nothing)\n", n);
     const uint32_t cap = native_adreno_tl_cap;
     for (uint32_t i = n > cap ? n - cap : 0; i < n; ++i) {
       const volatile uint64_t *r = native_adreno_tl[i & (cap - 1)];
-      RT("T %u %u %llu %llu %llu %u %u %d %llu\n", (unsigned)(r[0] & 0xffffffffu), (unsigned)((r[0] >> 32) & 0x03ffffffu), r[1], r[2], r[3], (unsigned)(r[4] & 0xffffffffu),
-         (unsigned)(r[0] >> 58), (int)(r[4] >> 32), r[5]);
+      RT("T %u %u %llu %llu %llu %u %u %d %llu %u %u %u %u %u %u %llu\n", (unsigned)(r[0] & 0xffffffffu), (unsigned)((r[0] >> 32) & 0x03ffffffu), r[1], r[2], r[3], (unsigned)(r[4] & 0xffffffffu),
+         (unsigned)(r[0] >> 58), (int)(r[4] >> 32), r[5], (unsigned)(r[6] & 15), (unsigned)((r[6] >> 4) & 15), (unsigned)((r[6] >> 8) & 255),
+         (unsigned)((r[6] >> 16) & 15), (unsigned)((r[6] >> 20) & 15), (unsigned)((r[6] >> 24) & 255), r[7]);
+    }
+  }
+  // The processes' queue priorities and GPU roles as they told the driver (the newest 32), the CP's switches between the two rings (the newest 16)
+  // and the GPU restarts (the newest 8): rows Q, R and V, joined with the T rows by time and pid.
+  if (&native_adreno_prio_count) {
+    const uint32_t n = native_adreno_prio_count;
+    RT("# queue priorities: Q <pid> <foreground> <background> <gpu role then> <ms> <calls before from this connection> (total %u)\n", n);
+    for (uint32_t i = n > 32 ? n - 32 : 0; i < n; ++i) {
+      const volatile uint32_t *r = native_adreno_prio_log[i & 31];
+      RT("Q %u %u %u %u %u %u\n", r[0], r[1], r[2], r[3], r[4], r[5]);
+    }
+  }
+  if (&native_adreno_switch_count) {
+    const uint32_t n = native_adreno_switch_count;
+    RT("# ring switches: R <seq> <trigger us> <end us> <from> <to> <outcome 0 pending 1 done 2 timed out 3 refused> <cntl after trigger> <cntl at end> <rbbm status> <rbbm int status> <cp hw fault> <rb rptr> <rb wptr> | records (rptr wptr errno info) ring0 ring1 before | ring0 ring1 after | cp ib1 base lo hi, ib2 base lo hi, ib1 rem, ib2 rem at a timeout (total %u)\n", n);
+    for (uint32_t i = n > 16 ? n - 16 : 0; i < n; ++i) {
+      const volatile uint32_t *r = native_adreno_switch_log[i & 15];
+      RT("R %u %llu %llu %u %u %u %x %x %x %x %x %x %x | %x %x %x %x %x %x %x %x | %x %x %x %x %x %x %x %x | %x %x %x %x %x %x\n", r[0],
+         (unsigned long long)r[1] | (unsigned long long)r[2] << 32, (unsigned long long)r[3] | (unsigned long long)r[4] << 32, r[5] & 255, (r[5] >> 8) & 255, r[5] >> 16,
+         r[6], r[7], r[8], r[9], r[10], r[11] & 0xffff, r[11] >> 16, r[12], r[13], r[14], r[15], r[16], r[17], r[18], r[19], r[20], r[21], r[22], r[23], r[24], r[25], r[26], r[27],
+         r[28], r[29], r[30], r[31], r[32], r[33]);
+    }
+  }
+  if (&native_adreno_recover_log_count) {
+    const uint32_t n = native_adreno_recover_log_count;
+    RT("# GPU restarts: V <seq> <us> <hung fence> <status> <jobs replayed> <stranded 1 guilty 2> <why the second ring was given up> <ring of the hung job, 9 none> <ring 0 newest fence> <ring 1 newest fence> <ring the CP ran> (total %u)\n", n);
+    for (uint32_t i = n > 8 ? n - 8 : 0; i < n; ++i) {
+      const volatile uint32_t *r = native_adreno_recover_log[i & 7];
+      RT("V %u %llu %u %x %u %u %u %u %u %u %u\n", r[0], (unsigned long long)r[1] | (unsigned long long)r[2] << 32, r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11]);
+    }
+  }
+  // What processes noted in the driver (NativeAdrenoMethodNote), the newest 512 of each: G rows are render passes of 3 ms or more on the GPU
+  // from processes with no trace file of their own (the poster extension), L rows the pipelines they made or were refused. The fragment
+  // shader hash (tu_hash32) joins a G row to the L row that made it; times are microseconds on the stack's clock (the kernel's uptime).
+  if (&native_adreno_pass_count && native_adreno_pass_log) {
+    const uint32_t n = native_adreno_pass_count;
+    RT("# process passes: G <pid> <seq> <recorded us> <gpu start us> <gpu us> <w> <h> <mode 0 gmem 1 sysmem 2 sysmem other> <colors> <flags 1 mutable 2 linear 4 unpadded 8 loaded 16 stored 32 fdm> <swap> <draws> <vkformat> <kpx> <fs instrs> <fs tex> <sy> <ss> <waves> <gpr> <samples> <ds> <bandwidth> <verts> <fs hash> (total %u)\n", n);
+    for (uint32_t i = n > 512 ? n - 512 : 0; i < n; ++i) {
+      const volatile uint32_t *r = native_adreno_pass_log + (i & 511) * 32;
+      if (r[0] < 16) continue;
+      RT("G %u %u %llu %llu %u %u %u %u %u %u %u %u %u %u %u %u %u %u %d %d %u %u %u %u %x\n", r[1], r[2], (unsigned long long)r[3] | (unsigned long long)r[4] << 32,
+         (unsigned long long)r[5] | (unsigned long long)r[6] << 32, r[7], r[8] & 0xffff, r[8] >> 16, r[9] & 255, (r[9] >> 8) & 255, (r[9] >> 16) & 255, r[9] >> 24,
+         r[10] & 0xffff, r[10] >> 16, r[11], r[12] & 0xffff, r[12] >> 16, r[13] & 0xffff, r[13] >> 16, (int)(int8_t)(r[14] & 255), (int)(int8_t)((r[14] >> 8) & 255),
+         (r[14] >> 16) & 255, r[14] >> 24, r[15], r[16], r[17]);
+    }
+  }
+  if (&native_adreno_pipe_count && native_adreno_pipe_log) {
+    const uint32_t n = native_adreno_pipe_count;
+    RT("# process pipelines: L <pid> <made 1 | compute 2> <us it took> <when us (low 32 bits)> <vertex hash> <fragment hash> <colour pixel format> <fragment|vertex|why refused> (total %u)\n", n);
+    for (uint32_t i = n > 512 ? n - 512 : 0; i < n; ++i) {
+      const volatile uint32_t *r = native_adreno_pipe_log + (i & 511) * 32;
+      if (r[0] < 30) continue;
+      char text[97];
+      for (unsigned k = 0; k < 96; ++k) {const char c = (char)(r[8 + k / 4] >> (8 * (k & 3))); text[k] = c >= 32 && c < 127 ? c : (c ? '?' : 0);}
+      text[96] = 0;
+      RT("L %u %u %u %u %x %x %u %s\n", r[1], r[2] & 3, r[3], r[4], r[5], r[6], r[7], text);
     }
   }
   if (&native_adreno_stall_log_count) {
@@ -447,6 +514,8 @@ static void rings_build(void) {
     if (contig_kept) {const uint32_t kept = contig_kept > ContigRing ? ContigRing : contig_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(contig_ring[(contig_kept - kept + i) & (ContigRing - 1)].pid);}
     if (boalloc_kept) {const uint32_t kept = boalloc_kept > BoAllocRing ? BoAllocRing : boalloc_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(boalloc_ring[(boalloc_kept - kept + i) & (BoAllocRing - 1)].pid);}
     if (ptime_kept) {const uint32_t kept = ptime_kept > PtimeRing ? PtimeRing : ptime_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(boot_ptime_ring[(ptime_kept - kept + i) & (PtimeRing - 1)].pid);}
+    if (&native_adreno_pass_count && native_adreno_pass_log) {const uint32_t n = native_adreno_pass_count; for (uint32_t i = n > 512 ? n - 512 : 0; i < n; ++i) NOTE_PID((int)native_adreno_pass_log[(i & 511) * 32 + 1]);}
+    if (&native_adreno_pipe_count && native_adreno_pipe_log) {const uint32_t n = native_adreno_pipe_count; for (uint32_t i = n > 512 ? n - 512 : 0; i < n; ++i) NOTE_PID((int)native_adreno_pipe_log[(i & 511) * 32 + 1]);}
     #undef NOTE_PID
   }
   if (ipc_ring) {
