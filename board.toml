@@ -122,3 +122,50 @@
 
 ["adt"."buttons"."u32"]
 "home-button-type" = 2
+
+
+["package"]
+"unixnu" = "../UniXNU"
+
+["package"."defconfig"]
+"ipados-27.0.1-24A446" = "sheng_ipados27_defconfig"
+"ipados-26.5.2-23F84" = "sheng_ipados26_defconfig"
+"ipados-17.7.11-21H461" = "sheng_defconfig"
+
+["os_overrides"."ipados-17.7.11-21H461"."components"]
+"include" = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "ShengUfs", "VirtioMmioBlock", "RamBlock", "Adreno740", "AdrenoMetal", "GopFramebuffer", "ShengHidInput", "ShengNovatekTouch", "QcomGeniSpi", "AppleKeyStoreState", "XnuPrelink", "DarwinBoot", "VerifiedRoot", "ShengPreflight", "AirNir", "Ath12kWifi"]
+
+["os_overrides"."ipados-17.7.11-21H461"."kernel"]
+"archives" = ["build-corecrypto-14.py", "build-corecrypto-14.py --namespace", "component:ArmDTPlatform", "component:ArmCpu", "component:SoftwareAES", "build-software-aes-bindings.py", "component:ShengUfs", "component:VirtioMmioBlock", "component:RamBlock", "build-virtio-mmio-bindings.py --component RamBlock --directory build/ram-block", "build-virtio-mmio-bindings.py --component VirtioMmioBlock", "build-mockfs-fixture.py", "build-sheng-platform-power.py", "build-boot-progress.py", "build-libpthread-kernel.py", "component:Adreno740", "build-adreno740-kits.py", "build-adreno740-accelerator.py", "component:ShengHidInput", "component:AppleKeyStoreState", "build-gop-legacy-display.py"]
+"config_fragments" = ["arch:configs/common.config", "soc:configs/sm8550.config", "os:configs/ipados.config"]
+"defconfig" = "sheng_defconfig"
+"patch_series" = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu/series"]
+
+["os_overrides"."ipados-17.7.11-21H461"."payload"]
+"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-hid-home=1", "offline-hid-input=1", "offline-legacy-phase=4", "offline-mobile-graphics-client=1", "offline-mobile-graphics-load=1", "offline-apfs-load=1", "boot-progress=2", "-apfs_shared_datavolume", "offline-key-events=1", "native-ufs-root=1", "sheng-pmgr=2", "sheng-disable-watchdogd=1", "sheng-lite=1", "boot-ui-focus4=SpringBoard", "sheng-smp=1", "sheng-cpufreq=4", "sheng-touch=4", "sheng-aks=1", "sheng-gpu-power=9", "sheng-gpu-metal=1", "sheng-fb-gpu=1", "sheng-banner=0", "sheng-gpu-dcvs=1", "sheng-gpu-addon=1", "armcpu-spi-ipi=1", "-no_slto_panic", "ml-timeout-lock-panic-scale=40", "sheng-touch-hid=1", "sheng-data-persist=2", "sheng-staged-apps=1", "sheng-buttons=1", "sheng-backlight=1", "sheng-wifi=5", "sheng-vsync=120"]
+"size_mib" = 208
+
+["os_overrides"."ipados-17.7.11-21H461"."payload"."adt"]
+"root_match_volume_uuid" = "04769D26-2CA0-4825-B443-E2E5F88300F2"
+
+
+["os_overrides"."ipados-17.7.11-21H461"]
+"remove" = ["payload.root_policies"]
+
+["os_overrides"."ipados-26.5.2-23F84"."components"]
+"include" = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "ShengUfs", "VirtioMmioBlock", "RamBlock", "Adreno740", "AdrenoMetal", "GopFramebuffer", "ShengHidInput", "ShengNovatekTouch", "QcomGeniSpi", "AppleKeyStoreState", "XnuPrelink", "DarwinBoot", "VerifiedRoot", "ShengPreflight", "AirNir", "Ath12kWifi"]
+
+["os_overrides"."ipados-26.5.2-23F84"."kernel"]
+"archives" = ["build-corecrypto-14.py", "build-corecrypto-14.py --namespace", "component:ArmDTPlatform", "component:ArmCpu", "component:SoftwareAES", "build-software-aes-bindings.py", "component:ShengUfs", "component:VirtioMmioBlock", "component:RamBlock", "build-virtio-mmio-bindings.py --component RamBlock --directory build/ram-block", "build-virtio-mmio-bindings.py --component VirtioMmioBlock", "build-mockfs-fixture.py", "build-sheng-platform-power.py", "build-boot-progress.py", "build-libpthread-kernel.py", "component:Adreno740", "build-adreno740-kits.py", "build-adreno740-accelerator.py", "component:ShengHidInput", "component:AppleKeyStoreState", "build-gop-legacy-display.py"]
+"config_fragments" = ["arch:configs/common.config", "soc:configs/sm8550.config", "os:configs/ipados.config"]
+"defconfig" = "sheng_ipados26_defconfig"
+
+["os_overrides"."ipados-26.5.2-23F84"."payload"]
+"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic"]
+"size_mib" = 208
+
+["os_overrides"."ipados-26.5.2-23F84"."payload"."adt"]
+"root_match_volume_uuid" = "04769D26-2CA0-4825-B443-E2E5F88300F2"
+
+["os_overrides"."ipados-26.5.2-23F84"]
+"remove" = ["payload.install", "payload.root_policies"]
