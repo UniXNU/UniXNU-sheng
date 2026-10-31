@@ -2,12 +2,14 @@
 """Check candidate platform intervals against the compiled sheng device tree."""
 import json
 import csv
+import os
 from pathlib import Path
 import re
 import subprocess
 import tomllib
 
-PLATFORM = Path('uefi-sheng/Platforms/Xiaomi/shengPkg')
+UEFI = Path(os.environ.get('UNIXNU_UEFI') or 'uefi-sheng')
+PLATFORM = UEFI / 'Platforms/Xiaomi/shengPkg'
 DTB = Path('build/sheng/sheng.dtb')
 
 
@@ -44,7 +46,7 @@ if __name__ == '__main__':
         for other, other_base, other_size, _ in rows[index + 1:]:
             if max(base, other_base) < min(base + size, other_base + other_size):
                 errors.append(f'Overlapping intervals: {name}, {other}')
-    config = tomllib.loads(Path('uefi-sheng/Resources/Configs/sheng.toml').read_text())
+    config = tomllib.loads((UEFI / 'Resources/Configs/sheng.toml').read_text())
     fd = config['uefi_fd']
     if not any(n == 'UEFI FD' and a == fd['base'] and s == fd['size'] for n, a, s, _ in rows):
         errors.append('FD configuration does not match memory descriptor')
@@ -55,7 +57,7 @@ if __name__ == '__main__':
     dependencies = set()
     for inc in (PLATFORM / 'Include').glob('*.inc'):
         dependencies.update(re.findall(r'Binaries/sheng/[^\s}]+', inc.read_text()))
-    missing = sorted(p for p in dependencies if not (Path('uefi-sheng') / p).is_file())
+    missing = sorted(p for p in dependencies if not (UEFI / p).is_file())
     firmware = Path('.cache/firmware/sheng/uefiplat.cfg')
     stock_count = 0
     if firmware.exists():

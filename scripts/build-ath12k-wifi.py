@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Compile the WiFi module (Ath12kWifi) to kernel objects for the board build. Usage: build-ath12k-wifi.py <module dir> <output dir>
-Prints one line "OBJ <path>" per object. The module lays out its generated include trees with tools/prepare.sh first."""
+Prints one line "OBJ <path>" per object. The module fetches its pinned public sources with tools/fetch-sources.sh and lays out its generated include trees with tools/prepare.sh first."""
 import subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -10,6 +10,7 @@ from kernel_target import TRIPLE
 module = Path(sys.argv[1]).resolve()
 out = Path(sys.argv[2]).resolve()
 out.mkdir(parents=True, exist_ok=True)
+subprocess.run(['bash', str(module / 'tools/fetch-sources.sh')], check=True, stdout=subprocess.DEVNULL)
 subprocess.run(['bash', str(module / 'tools/prepare.sh')], check=True, stdout=subprocess.DEVNULL)
 clang = subprocess.run(['xcrun', '-f', 'clang'], check=True, capture_output=True, text=True).stdout.strip()
 resource = subprocess.run([clang, '-print-resource-dir'], check=True, capture_output=True, text=True).stdout.strip() + '/include'

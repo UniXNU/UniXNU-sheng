@@ -26,7 +26,7 @@
 "config" = "sheng"
 "dsc" = "Platforms/Xiaomi/shengPkg/sheng.dsc"
 "fd" = "Build/shengPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
-"preflight" = ["scripts/check-sheng.py"]
+"preflight" = ["scripts/fetch-sheng-dts.py", "scripts/check-sheng.py"]
 "submodules" = ["Common/Mu", "Common/Mu_OEM_Sample", "Silicium-ACPI", "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl"]
 "patches" = ["Resources/MuPatches/Gic-Spurious.patch"]
 "packages" = ["{uefi}", "{uefi}/Platforms/Xiaomi", "{tree}/package", "{tree}/drivers/DarwinBoot", "{edk2}", "{uefi}/Common/Mu", "{uefi}/Common/Mu_OEM_Sample", "{uefi}/Silicon/Qualcomm", "{uefi}/Silicon/Silicium", "{uefi}/Silicium-ACPI", "{uefi}/Silicium-ACPI/Platforms/Xiaomi", "{uefi}/Silicium-ACPI/Silicon/Qualcomm"]
@@ -67,6 +67,7 @@
 
 
 ["bootimg"]
+"dtb" = "build/sheng/sheng.dtb"
 "dtb_node" = [{ "path" = "/reserved-memory/splash_region", "props" = [{ "name" = "label", "type" = "s", "value" = "cont_splash_region" }, { "name" = "reg", "type" = "x", "value" = ["0x0", "0xb8000000", "0x0", "0x2b00000"] }] }]
 
 
