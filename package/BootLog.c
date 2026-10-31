@@ -1656,6 +1656,48 @@ static uint32_t copy_msgbuf(uint8_t *out) {
   return n;
 }
 
+// Log groups (boot arguments log-gpu, log-display, log-wifi, log-audio, log-input, log-power, log-sys; each =1 turns its rows on, all are off
+// without them). A slot's text is a list of sections: a line that starts with "[tag]" opens one and the lines after it (until the next
+// "[") belong to it. The slot's own head line and the panic text are always kept; sheng-diag has its own switch and writes other files.
+enum {LogGpu, LogDisplay, LogWifi, LogAudio, LogInput, LogPower, LogSys, LogGroups};
+static const char *const log_group_arg[LogGroups] = {"log-gpu", "log-display", "log-wifi", "log-audio", "log-input", "log-power", "log-sys"};
+static uint32_t log_group_on;
+// Tag prefixes by group, the first match wins ("gpu dcvs" before "gpu"); a tag in no list is a system row.
+static const struct {const char *prefix; uint8_t group;} log_tags[] = {
+  {"gpu dcvs", LogPower}, {"gpu", LogGpu}, {"ring", LogGpu}, {"ib]", LogGpu}, {"fence", LogGpu}, {"metal", LogGpu}, {"mfb", LogGpu},
+  {"bo ", LogGpu}, {"vm ", LogGpu}, {"import", LogGpu}, {"walk", LogGpu}, {"coherence", LogGpu},
+  {"display", LogDisplay}, {"direct scanout", LogDisplay}, {"scanout", LogDisplay}, {"dpu", LogDisplay}, {"swap", LogDisplay},
+  {"wifi", LogWifi}, {"qrtr", LogWifi},
+  {"audio", LogAudio}, {"mic", LogAudio}, {"amps", LogAudio}, {"adsp", LogAudio},
+  {"touch", LogInput}, {"hid", LogInput},
+  {"battery", LogPower}, {"charger", LogPower}, {"clocks", LogPower}, {"cpu", LogPower},
+};
+static unsigned log_tag_group(const char *tag) {
+  for (unsigned i = 0; i < sizeof log_tags / sizeof log_tags[0]; ++i)
+    if (!strncmp(tag, log_tags[i].prefix, strlen(log_tags[i].prefix))) return log_tags[i].group;
+  return LogSys;
+}
+static void log_groups_read(void) {
+  log_group_on = 0;
+  for (unsigned g = 0; g < LogGroups; ++g) {uint32_t v = 0; if (PE_parse_boot_argn(log_group_arg[g], &v, sizeof v) && v == 1) log_group_on |= 1u << g;}
+}
+// Drops, in place, the sections of the groups that are off; returns the new length.
+static size_t log_groups_filter(char *text, size_t length) {
+  size_t in = 0, out = 0;
+  int keep = 1;
+  while (in < length) {
+    size_t end = in; while (end < length && text[end] != '\n') ++end;
+    const size_t line = end - in + (end < length ? 1 : 0);
+    if (text[in] == '[') {
+      keep = !strncmp(text + in, "[panic]", 7) || (log_group_on >> log_tag_group(text + in + 1)) & 1;
+    } else if (text[in] == '#') keep = 1;
+    if (keep) {if (out != in) memmove(text + out, text + in, line); out += line;}
+    in += line;
+  }
+  if (out < length) memset(text + out, 0, length - out);
+  return out;
+}
+
 static void writer(void *arg, wait_result_t result) {
   (void)arg; (void)result;
   thread_set_thread_name(current_thread(), "boot_log");
@@ -1709,7 +1751,7 @@ static void writer(void *arg, wait_result_t result) {
     int ok = 1;
     // Text slot, then the message buffer, then the header that makes both visible.
     memset(boot_log_buffer, 0, LogSlotBlocks * LogBlock);
-    compose((char *)boot_log_buffer, LogSlotBlocks * LogBlock, h.slots_written, now);
+    log_groups_filter((char *)boot_log_buffer, compose((char *)boot_log_buffer, LogSlotBlocks * LogBlock, h.slots_written, now));
     ok &= native_ufs_log_write(LogSlotFirst + (uint64_t)(h.slots_written % slot_count) * LogSlotBlocks, LogSlotBlocks, boot_log_buffer);
     h.msg_bytes = copy_msgbuf(boot_log_buffer);
     ok &= native_ufs_log_write(LogMsgFirst, LogMsgBlocks, boot_log_buffer);
@@ -1798,6 +1840,7 @@ void boot_log_tick(unsigned now) {
   }
   uint32_t mode = 0;
   if (!PE_parse_boot_argn("sheng-log", &mode, sizeof mode) || mode != 1) return;
+  log_groups_read();
   if (!&native_ufs_log_open || !&native_ufs_log_write || !&native_ufs_log_sync) return;
   boot_log_buffer = (uint8_t *)IOMallocAligned(LogMsgBlocks * LogBlock, LogBlock);
   if (!boot_log_buffer) return;
