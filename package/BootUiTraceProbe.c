@@ -25,6 +25,7 @@
 #endif
 #include "BootUiTraceCore.h"
 extern void proc_name(int pid, char *buf, int size);   // bsd/sys/proc.h; the header itself clashes with the Mach types used here
+extern int proc_selfpid(void);
 #include "BootUiTraceDetails.h"
 static struct bt_entry samples[BT_MAX_THREADS];
 // Hot threads: the context-switch rate of each sampled thread between two snapshots, so a thread that is woken hundreds of times a second
@@ -518,4 +519,77 @@ void boot_client_sampler_start(void) {
  if(cpus){memset(cpus,0,sizeof(struct cs_cpu)*CS_CPU_RING);boot_cpu_ring=cpus;}
  thread_t thread=THREAD_NULL;
  if(kernel_thread_start_priority(cs_thread,NULL,BASEPRI_KERNEL,&thread)==KERN_SUCCESS)thread_deallocate(thread);
+}
+// The calling thread's user stack and the images its frames lie in, for the GPU allocation trace (BootDiagExport.c, kernel.boalloc.bin):
+// frames[0] pc, [1] lr, then the frame-pointer chain; slide: the task's shared cache slide (frames in the shared cache symbolize with it).
+// A frame below the shared cache (the GPU plugin, the main binary) lies in an image whose __TEXT starts with its Mach-O header: found by
+// scanning down page by page from the frame, named by its UUID, and cached per pid. At most two such images per stack.
+struct boot_user_image {uint64_t base;uint8_t uuid[16];};
+struct boot_user_stack {uint64_t slide,frames[16];struct boot_user_image images[2];uint32_t count,error;};
+_Static_assert(sizeof(struct boot_user_stack)==192,"user stack");
+struct us_cached {int pid;uint64_t base,size;uint8_t uuid[16];};
+static struct us_cached us_cache[16];
+static unsigned us_cache_next,us_cache_flag;
+static int us_header(vm_map_t map,uint64_t frame,struct us_cached *out) {
+ uint64_t page=frame&~UINT64_C(4095);
+ for(unsigned i=0;i<16384 && page>=4096;++i,page-=4096) {
+  uint32_t head[8]={0};
+  if(read_user(map,page,head,4))return 1;
+  if(head[0]!=0xfeedfacfu)continue;
+  if(read_user(map,page,head,sizeof(head)))return 1;
+  const uint32_t ncmds=head[4],sizeofcmds=head[5];
+  uint64_t at=page+32;const uint64_t end=at+(sizeofcmds<65536?sizeofcmds:65536);
+  memset(out,0,sizeof(*out));out->base=page;
+  for(uint32_t c=0;c<ncmds && c<512 && at+8<=end;++c) {
+   uint32_t lc[2]={0};
+   if(read_user(map,at,lc,sizeof(lc)) || lc[1]<8)return 1;
+   if(lc[0]==0x1b && lc[1]>=24)(void)read_user(map,at+8,out->uuid,16);   // LC_UUID
+   if(lc[0]==0x19 && lc[1]>=72) {   // LC_SEGMENT_64: segname, vmaddr, vmsize
+    struct {char name[16];uint64_t vmaddr,vmsize;} seg;
+    if(!read_user(map,at+8,&seg,sizeof(seg)) && !strncmp(seg.name,"__TEXT",16))out->size=seg.vmsize;
+   }
+   at+=lc[1];
+  }
+  return frame-page<out->size?0:2;
+ }
+ return 3;
+}
+void boot_user_stack_here(struct boot_user_stack *out) {
+ memset(out,0,sizeof(*out));
+ thread_t thread=current_thread();task_t task=current_task();
+ arm_saved_state_t *state=thread->machine.upcb;
+ vm_map_t map=task->map;
+ if(!state || !is_saved_state64(state) || !map){out->error=1;return;}
+ out->slide=task->task_shared_region_slide;
+ struct bt_entry e;memset(&e,0,sizeof(e));
+ e.pc=BT_STRIP_USER_PC((uint64_t)get_saved_state_pc(state));e.lr=BT_STRIP_USER_PC((uint64_t)get_saved_state_lr(state));
+ e.fp=(uint64_t)get_saved_state_fp(state);
+ out->frames[0]=e.pc;out->frames[1]=e.lr;
+ bt_walk_n(&e,read_user,map,&out->frames[2],14);
+ out->error=e.error;
+ while(out->count<16 && out->frames[out->count])++out->count;
+ const int pid=proc_selfpid();
+ unsigned images=0;
+ for(unsigned f=0;f<out->count && images<2;++f) {
+  const uint64_t frame=out->frames[f];
+  if(frame>=0x180000000ULL && frame<0x300000000ULL)continue;   // SHARED_REGION_BASE_ARM64, + SHARED_REGION_SIZE_ARM64
+  struct us_cached hit;memset(&hit,0,sizeof(hit));bool cached=false;
+  if(!__atomic_exchange_n(&us_cache_flag,1,__ATOMIC_ACQUIRE)) {
+   for(unsigned k=0;k<16;++k)if(us_cache[k].pid==pid && us_cache[k].size && frame>=us_cache[k].base && frame-us_cache[k].base<us_cache[k].size)
+    {hit=us_cache[k];cached=true;break;}
+   __atomic_store_n(&us_cache_flag,0,__ATOMIC_RELEASE);
+  }
+  if(!cached) {
+   if(us_header(map,frame,&hit))continue;
+   hit.pid=pid;
+   if(!__atomic_exchange_n(&us_cache_flag,1,__ATOMIC_ACQUIRE)) {
+    us_cache[us_cache_next++&15]=hit;
+    __atomic_store_n(&us_cache_flag,0,__ATOMIC_RELEASE);
+   }
+  }
+  bool known=false;
+  for(unsigned k=0;k<images;++k)if(out->images[k].base==hit.base)known=true;
+  if(known)continue;
+  out->images[images].base=hit.base;memcpy(out->images[images].uuid,hit.uuid,16);++images;
+ }
 }
