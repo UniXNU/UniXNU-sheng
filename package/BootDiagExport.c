@@ -188,12 +188,19 @@ enum {IpcRing = 524288, TouchRing = 65536};
 struct cs_rec {uint64_t abs; int32_t pid; uint16_t state; int16_t pri; uint32_t cs; int32_t peer; uint64_t cpu, wait, frames[11];};
 struct cs_target {int pid; unsigned slide; uint64_t image, seen; char name[32];};
 // CPU occupancy (BootUiTraceProbe.c), kernel.cpus.bin: header "CPU1", total, kept, 0; then 40-byte records {u64 microseconds, i16 priority
-// of what runs on CPU 0..7, u8 idle thread on CPU 0..7, u8 processor state 0..7}.
+// of what runs on CPU 0..7, u8 idle thread on CPU 0..7 (2: the sampler itself), u8 processor state 0..7}.
 struct cs_cpu {uint64_t abs; int16_t pri[8]; uint8_t idle[8], state[8];};
 extern struct cs_cpu *boot_cpu_ring __attribute__((weak_import));
 extern volatile uint32_t boot_cpu_count __attribute__((weak_import));
 enum {CpuRing = 65536};
 static uint32_t cpu_kept, cpu_keep;
+// Process CPU time (BootUiTraceProbe.c), kernel.ptime.bin: header "PTM1", total, kept, 0; then 24-byte records {u64 microseconds of the
+// pass, i32 pid, u32 user microseconds, u32 system microseconds since the pid's last pass (100 ms apart), i16 base priority, u16 0}.
+struct cs_ptime {uint64_t abs; int32_t pid; uint32_t user_us, system_us; int16_t priority; uint16_t reserved;};
+extern struct cs_ptime *boot_ptime_ring __attribute__((weak_import));
+extern volatile uint32_t boot_ptime_count __attribute__((weak_import));
+enum {PtimeRing = 131072};
+static uint32_t ptime_kept, ptime_keep;
 // User client calls (HidInputProbe.cpp), kernel.ioc.bin: header "IOC1", total, kept, 0; then 32-byte records {u64 microseconds entered,
 // u32 microseconds waiting for the client's lock, u32 microseconds in the method, u32 selector, i32 pid, u64 class name address}; the
 // class names are the K rows of kernel.rings.txt.
@@ -427,15 +434,16 @@ static void rings_build(void) {
   }
   {
     // Names of every pid in the user client, GPU call and contiguous allocation rings: N <pid> <name>.
-    int seen[160]; unsigned seen_n = 0;
+    int seen[512]; unsigned seen_n = 0;   // every process that ran: the CPU time ring names them all
     #define NOTE_PID(p_) do {const int p__ = (p_); unsigned k_ = 0; while (k_ < seen_n && seen[k_] != p__) ++k_; \
-      if (k_ == seen_n && seen_n < 160 && p__ > 0) {seen[seen_n++] = p__; char nm_[32] = {0}; proc_name(p__, nm_, sizeof nm_); RT("N %d %s\n", p__, nm_);}} while (0)
+      if (k_ == seen_n && seen_n < 512 && p__ > 0) {seen[seen_n++] = p__; char nm_[32] = {0}; proc_name(p__, nm_, sizeof nm_); RT("N %d %s\n", p__, nm_);}} while (0)
     RT("# pid names (user client, GPU call and contiguous allocation rings): N <pid> <name>; kernel reference boot_diag_shot_tick=%llx\n",
        (unsigned long long)(uintptr_t)&boot_diag_shot_tick);
     if (ioc_kept) {const uint32_t kept = ioc_kept > IocRing ? IocRing : ioc_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(native_ioc_ring[(ioc_kept - kept + i) & (IocRing - 1)].pid);}
     if (gpucall_kept) {const uint32_t kept = gpucall_kept > GpuCallRing ? GpuCallRing : gpucall_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(native_adreno_call_ring[(gpucall_kept - kept + i) & (GpuCallRing - 1)].pid);}
     if (contig_kept) {const uint32_t kept = contig_kept > ContigRing ? ContigRing : contig_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(contig_ring[(contig_kept - kept + i) & (ContigRing - 1)].pid);}
     if (boalloc_kept) {const uint32_t kept = boalloc_kept > BoAllocRing ? BoAllocRing : boalloc_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(boalloc_ring[(boalloc_kept - kept + i) & (BoAllocRing - 1)].pid);}
+    if (ptime_kept) {const uint32_t kept = ptime_kept > PtimeRing ? PtimeRing : ptime_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(boot_ptime_ring[(ptime_kept - kept + i) & (PtimeRing - 1)].pid);}
     #undef NOTE_PID
   }
   if (ipc_ring) {
@@ -491,6 +499,7 @@ uint64_t boot_diag_scan(uint64_t budget) {
   ipc_kept = ipc_count;
   client_kept = (&boot_client_count && &boot_client_ring && boot_client_ring) ? boot_client_count : 0;
   cpu_kept = (&boot_cpu_count && &boot_cpu_ring && boot_cpu_ring) ? boot_cpu_count : 0;
+  ptime_kept = (&boot_ptime_count && &boot_ptime_ring && boot_ptime_ring) ? boot_ptime_count : 0;
   ioc_kept = (&native_ioc_count && &native_ioc_ring && native_ioc_ring) ? native_ioc_count : 0;
   gpucall_kept = (&native_adreno_call_count && &native_adreno_call_ring && native_adreno_call_ring) ? native_adreno_call_count : 0;
   contig_kept = contig_ring ? contig_count : 0;
@@ -503,6 +512,12 @@ uint64_t boot_diag_scan(uint64_t budget) {
   ipc_keep = 0;
   client_keep = 0;
   touch_keep = 0;
+  ptime_keep = 0;
+  if (ptime_kept) {
+    const uint32_t kept = ptime_kept > PtimeRing ? PtimeRing : ptime_kept;
+    const uint64_t cost = 24 + strlen("kernel.ptime.bin") + 16 + (uint64_t)kept * sizeof(struct cs_ptime);
+    if (used + cost <= budget) {ptime_keep = 1; used += cost;}
+  }
   cpu_keep = 0;
   if (cpu_kept) {
     const uint32_t kept = cpu_kept > CpuRing ? CpuRing : cpu_kept;
@@ -583,7 +598,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   if (!chunk) return -1;
   vfs_context_t ctx = vfs_context_kernel();
   int rc = emit("M2VCACH1", 8, arg);
-  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep + touch_keep + cpu_keep + ioc_keep + gpucall_keep + contig_keep + boalloc_keep;
+  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep + touch_keep + cpu_keep + ioc_keep + gpucall_keep + contig_keep + boalloc_keep + ptime_keep;
   if (!rc) rc = emit(&root_len, 4, arg);
   if (!rc) rc = emit("/", 1, arg);
   if (!rc) rc = emit(&count, 4, arg);
@@ -699,6 +714,24 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
         memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
       }
       rc = emit(chunk, n * sizeof(struct cs_cpu), arg);
+      at += n;
+    }
+  }
+  if (!rc && ptime_keep) {
+    const uint32_t total = ptime_kept, kept = total > PtimeRing ? PtimeRing : total;
+    const uint32_t head[4] = {'P' | 'T' << 8 | 'M' << 16 | (uint32_t)'1' << 24, total, kept, 0};
+    rc = put_head(emit, arg, "kernel.ptime.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct cs_ptime));
+    if (!rc) rc = emit(head, sizeof head, arg);
+    for (uint32_t at = 0; !rc && at < kept;) {
+      const uint32_t n = kept - at < 8192 ? kept - at : 8192;
+      for (uint32_t k = 0; k < n; ++k) {
+        struct cs_ptime out = boot_ptime_ring[(total - kept + at + k) & (PtimeRing - 1)];
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(out.abs, &ns);
+        out.abs = ns / 1000;
+        memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
+      }
+      rc = emit(chunk, n * sizeof(struct cs_ptime), arg);
       at += n;
     }
   }
