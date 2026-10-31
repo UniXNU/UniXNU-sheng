@@ -1678,9 +1678,14 @@ static void writer(void *arg, wait_result_t result) {
     reset_ok = boot_reset_probe(boot_log_reset_probe_text, sizeof boot_log_reset_probe_text) == 0;
     PE_parse_boot_argn("sheng-autoreset", &autoreset, sizeof autoreset);
   }
-  // sheng-diag-export=<seconds of log time>: export the diagnostic files once then (set it shortly before sheng-autoreset).
-  uint32_t diag_at = 0;
-  if (&boot_diag_scan && &boot_diag_stream) PE_parse_boot_argn("sheng-diag-export", &diag_at, sizeof diag_at);
+  // sheng-diag=1 turns every diagnostic on: the kernel's rings and samplers (started from boot_diag_shot_tick), the scene screenshots and
+  // the export of the diagnostic files, once, 25 s before sheng-autoreset (sheng-diag-export=<seconds of log time> moves it). Without it
+  // this writer keeps the log rows only.
+  uint32_t diag = 0, diag_at = 0;
+  PE_parse_boot_argn("sheng-diag", &diag, sizeof diag);
+  if (diag == 1 && &boot_diag_scan && &boot_diag_stream && !PE_parse_boot_argn("sheng-diag-export", &diag_at, sizeof diag_at))
+    diag_at = autoreset > 25 ? autoreset - 25 : 0;
+  if (diag != 1) diag_at = 0;
   uint32_t errors = 0;
   boot_log_live = &h;
   boot_log_state = 2;
@@ -1700,7 +1705,7 @@ static void writer(void *arg, wait_result_t result) {
     h.export_generation = export_ready; h.export_bytes = export_ready_bytes; h.export_first = export_ready_first;
     h.diag_first = diag_first; h.diag_bytes = diag_bytes;
     IOLockUnlock(export_lock);
-    if (&boot_diag_shot_tick) boot_diag_shot_tick(now);
+    if (diag == 1 && &boot_diag_shot_tick) boot_diag_shot_tick(now);
     if (diag_at && now >= diag_at && !boot_diag_status) {
       thread_t diag;
       boot_diag_status = 1;
@@ -1784,7 +1789,8 @@ void boot_log_tick(unsigned now) {
   boot_log_panic_buffer = (uint8_t *)IOMallocAligned(LogMsgBlocks * LogBlock, LogBlock);
   export_lock = IOLockAlloc();
 #if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
-  boot_process_start();
+  uint32_t diag = 0;
+  if (PE_parse_boot_argn("sheng-diag", &diag, sizeof diag) && diag == 1) boot_process_start();
 #endif
   thread_t thread;
   if (kernel_thread_start_priority(writer, 0, BASEPRI_KERNEL, &thread) == KERN_SUCCESS) thread_deallocate(thread);
