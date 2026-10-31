@@ -1,0 +1,295 @@
+{
+  "target": "arm64e-apple-ios26.0",
+  "source_pins": {
+    "IOStorageFamily": {
+      "name": "IOStorageFamily",
+      "kind": "refer",
+      "git": "https://github.com/apple-oss-distributions/IOStorageFamily.git",
+      "ref": "IOStorageFamily-337.100.1",
+      "commit": "7edb88fbae296fb7c8ce2f64e115e116e566d51c"
+    },
+    "IOHIDFamily": {
+      "name": "IOHIDFamily",
+      "kind": "refer",
+      "git": "https://github.com/apple-oss-distributions/IOHIDFamily.git",
+      "ref": "IOHIDFamily-2238.120.5",
+      "commit": "e31e90a24c27ad6cbe981650d12a1a4124065b03"
+    }
+  },
+  "compile_pass": true,
+  "link_qualified": false,
+  "runtime_qualified": false,
+  "edge_gestures_qualified": false,
+  "limitations": [
+    "Family imports have no target binding in this build.",
+    "HID diagnostics/startup and verified-root policy/crypto objects are not bundled.",
+    "Source HID mode does not install the Darwin 23 edge-event vtable patch.",
+    "macOS public source headers and generated SDK headers do not prove the iPadOS binary ABI."
+  ],
+  "unresolved_after_native_kernel": [
+    "__ZN11IOHIDDevice10conformsToEjj",
+    "__ZN11IOHIDDevice10gMetaClassE",
+    "__ZN11IOHIDDevice10handleOpenEP9IOServicejPv",
+    "__ZN11IOHIDDevice10handleStopEP9IOService",
+    "__ZN11IOHIDDevice11handleCloseEP9IOServicej",
+    "__ZN11IOHIDDevice11handleStartEP9IOService",
+    "__ZN11IOHIDDevice11setPropertyEPK8OSSymbolP8OSObject",
+    "__ZN11IOHIDDevice12didTerminateEP9IOServicejPb",
+    "__ZN11IOHIDDevice12handleReportEP18IOMemoryDescriptor15IOHIDReportTypej",
+    "__ZN11IOHIDDevice12updateReportEP19IOReportChannelListjPvS2_",
+    "__ZN11IOHIDDevice13newUserClientEP4taskPvjP12OSDictionaryPP12IOUserClient",
+    "__ZN11IOHIDDevice13willTerminateEP9IOServicej",
+    "__ZN11IOHIDDevice14completeReportEP8OSActionij",
+    "__ZN11IOHIDDevice15configureReportEP19IOReportChannelListjPvS2_",
+    "__ZN11IOHIDDevice15createInterfaceEj",
+    "__ZN11IOHIDDevice15registerElementEP19IOHIDElementPrivatePj",
+    "__ZN11IOHIDDevice16destroyInterfaceEj",
+    "__ZN11IOHIDDevice17postElementValuesEPjj",
+    "__ZN11IOHIDDevice17postElementValuesEPjjjjP15IOHIDCompletion",
+    "__ZN11IOHIDDevice17publishPropertiesEP9IOService",
+    "__ZN11IOHIDDevice17stopEventDeliveryEP15IOHIDEventQueuej",
+    "__ZN11IOHIDDevice18checkEventDeliveryEP15IOHIDEventQueuejPb",
+    "__ZN11IOHIDDevice18matchPropertyTableEP12OSDictionaryPi",
+    "__ZN11IOHIDDevice18startEventDeliveryEP15IOHIDEventQueuejj",
+    "__ZN11IOHIDDevice19newDeviceUsagePairsEv",
+    "__ZN11IOHIDDevice19updateElementValuesEPjj",
+    "__ZN11IOHIDDevice19updateElementValuesEPjjjjP15IOHIDCompletionP24IOBufferMemoryDescriptor",
+    "__ZN11IOHIDDevice20handleReportWithTimeEyP18IOMemoryDescriptor15IOHIDReportTypej",
+    "__ZN11IOHIDDevice25handleReportWithTimeAsyncEyP18IOMemoryDescriptor15IOHIDReportTypejjP15IOHIDCompletion",
+    "__ZN11IOHIDDevice4initEP12OSDictionary",
+    "__ZN11IOHIDDevice7messageEjP9IOServicePv",
+    "__ZN11IOHIDDevice8DispatchE5IORPC",
+    "__ZN11IOHIDDevice9getReportEP18IOMemoryDescriptor15IOHIDReportTypej",
+    "__ZN11IOHIDDevice9getReportEP18IOMemoryDescriptor15IOHIDReportTypejjP15IOHIDCompletion",
+    "__ZN11IOHIDDevice9setReportEP18IOMemoryDescriptor15IOHIDReportTypej",
+    "__ZN11IOHIDDevice9setReportEP18IOMemoryDescriptor15IOHIDReportTypejjP15IOHIDCompletion",
+    "__ZN11IOHIDDeviceC2EPK11OSMetaClass",
+    "__ZN11IOHIDDeviceD2Ev",
+    "__ZNK11IOHIDDevice12handleIsOpenEPK9IOService",
+    "__ZNK11IOHIDDevice15newSerialNumberEv",
+    "__ZNK11IOHIDDevice16newVersionNumberEv",
+    "__ZNK11IOHIDDevice17newVendorIDNumberEv",
+    "__ZNK11IOHIDDevice18newProductIDNumberEv",
+    "__ZNK11IOHIDDevice19newLocationIDNumberEv",
+    "__ZNK11IOHIDDevice20newCountryCodeNumberEv",
+    "__ZNK11IOHIDDevice21newManufacturerStringEv",
+    "__ZNK11IOHIDDevice21newPrimaryUsageNumberEv",
+    "__ZNK11IOHIDDevice21newSerialNumberStringEv",
+    "__ZNK11IOHIDDevice23newReportIntervalNumberEv",
+    "__ZNK11IOHIDDevice23newVendorIDSourceNumberEv",
+    "__ZNK11IOHIDDevice25newPrimaryUsagePageNumberEv",
+    "__ZNK11IOHIDDevice33getMemoryWithCurrentElementValuesEv",
+    "__ZTV11IOHIDDevice",
+    "___chkstk_darwin",
+    "___ubsan_handle_add_overflow_minimal",
+    "___ubsan_handle_divrem_overflow_minimal",
+    "___ubsan_handle_mul_overflow_minimal",
+    "___ubsan_handle_negate_overflow_minimal",
+    "___ubsan_handle_sub_overflow_minimal",
+    "___zone_site_register",
+    "_boot_progress_poll",
+    "_kmem_alloc_guard",
+    "_kmem_free_guard",
+    "_native_hid_input_command",
+    "_native_hid_input_observed",
+    "_native_hid_input_requested",
+    "_native_hid_live_checkpoint",
+    "_nprocs",
+    "_verified_root_key",
+    "_verified_root_policies",
+    "_verified_root_policy_count",
+    "_vr_open",
+    "_vr_verify_block",
+    "_vr_xnu_crypto"
+  ],
+  "full_report_sha256": "5903dca7aa85df1babc7799ce650db5ba8b20d1e4456958da162d85ca4fac67e",
+  "kernel_sha256": "cfa0bf98cad2a862483ae57fc2d1e9a75c80fc6493db6d5a785380b3a8899487",
+  "firmware": {
+    "size": 245760,
+    "sha256": "750508bb4d75472d35ce5852ec8470d66afa6bf4a4274c136b3759034260ef59"
+  },
+  "workspace_bases": {
+    "UniXNU": "2ab05c11ae80e8b59dac2d312f627e78cacc0fca",
+    "UniXNU-sheng": "1092bee34e46d2c4c3314a5045c8409a0bef5663"
+  },
+  "uncommitted_changes": true,
+  "components": {
+    "ShengUfs": {
+      "archive_sha256": "c25aee2dd2cbc652bf09d0009d28370b8913aafeb4d43c34024eaa407696d7be",
+      "objects": [
+        {
+          "source": "UniXNU-sheng/drivers/ShengUfs/NativeUfs.cpp",
+          "source_sha256": "7d0ae770d017535a337988e05eb55e768533f860fff0dcf669dd8cfa172a8777",
+          "object_sha256": "b04242633c12de110539de0f117b0ddbfb5cd76e7aa7c6b16d68e70b920c163a",
+          "warnings": 12
+        }
+      ]
+    },
+    "ShengHidInput": {
+      "archive_sha256": "8d449a0f47c9f5582073e585b3a3e18879df43f64d52fade0a2f3613d6cc240c",
+      "objects": [
+        {
+          "source": "UniXNU-sheng/drivers/ShengHidInput/NativeHidInput.cpp",
+          "source_sha256": "1d6d5c37d2d2d6cdc81a28c039332aeb02d9e02470bea60f6b80f12066fc1128",
+          "object_sha256": "547aacd48c97b850d8553f9b209e03bb7d43db6775ee79d4409964c34c419744",
+          "warnings": 0
+        }
+      ]
+    },
+    "ShengInputTransport": {
+      "archive_sha256": "0ab37809b66047ee252720e423299ce2dd8228bef5cad0504c0eed4f75f737eb",
+      "objects": [
+        {
+          "source": "UniXNU-sheng/package/TouchProbe.cpp",
+          "source_sha256": "00d03e8df5d42d8de9f96a9913b884326422281892a7a868e5670ecc3a48fd9a",
+          "object_sha256": "2a9095537b4d203fe3fa83526ccfd39ebc7f5308134b573372a6fd562af758f9",
+          "warnings": 0
+        },
+        {
+          "source": "UniXNU-sheng/package/ButtonProbe.cpp",
+          "source_sha256": "aa9eb1861968acb22c7c098d24806ddd907ba10e630c70283983f9a3156b05b2",
+          "object_sha256": "4a933034d363b39b6eb69dfa6d37194fd2a66505672434c1cba4c44fe8dc84eb",
+          "warnings": 1
+        },
+        {
+          "source": "UniXNU/drivers/QcomGeniSpi/GeniSpi.c",
+          "source_sha256": "2042cfc9647391e24d5a558202046425ac62a05adfc73afe769367b8374e3f91",
+          "object_sha256": "34b73e9c468cde46efe98a3ade54c35085e6f3c2731daf78bd45e5d231df05ab",
+          "warnings": 0
+        },
+        {
+          "source": "UniXNU-sheng/drivers/ShengNovatekTouch/NvtProtocol.c",
+          "source_sha256": "6c641cce6e6edd320042a7c29fc44722e596e9c212d278ae3f02afed1faa66ba",
+          "object_sha256": "92cc6044f8599f770f9228739b8d3d3c3d7704327fd8fea17b769c038c961092",
+          "warnings": 0
+        },
+        {
+          "source": "UniXNU-sheng/drivers/ShengNovatekTouch/NvtTouchCore.c",
+          "source_sha256": "8b149438c07a4518718b6ba9886a16defd55f5768474c1e7a860715c383cab4d",
+          "object_sha256": "76ce720e09c94624690112a84bdabf9cdbcf0b3525c60a9770f93adaac099248",
+          "warnings": 0
+        },
+        {
+          "source": "UniXNU/out/sheng/ipados-26.5.2-23F84/sheng_ipados26/tree/build/sheng-source-drivers/NvtFirmware.c",
+          "source_sha256": "8afb054b0b1eed9eeb2e34688aad54344efc8f5d50323d5886dd29ec79fa27a1",
+          "object_sha256": "e4c6eb2a2d1bf38b88216263443592d12e3cfe416da9e5fe11f1cd62d327e1ab",
+          "warnings": 0
+        }
+      ]
+    },
+    "IOStorageFamily": {
+      "archive_sha256": "69983a847803254e1539d7f4b07239f318e742c545bac7c9b7de26c6e8e906e1",
+      "objects": [
+        {
+          "source": "UniXNU/out/driver-sources/IOStorageFamily/IOAppleLabelScheme.cpp",
+          "source_sha256": "1bd633b2c999010d81bc8f4d5ffd7ca363c0bf40762ec57960abe5d02ccc0a0d",
+          "object_sha256": "c7e03f4843e34bea21e6aec50ebb7ada0cbb3378f938c358e361d9e6a0408102",
+          "warnings": 0
+        },
+        {
+          "source": "UniXNU/out/driver-sources/IOStorageFamily/IOApplePartitionScheme.cpp",
+          "source_sha256": "ff886b759339a248a2fd964dfbdaaeeef03a25c1d872683542ec7fa3d94149b5",
+          "object_sha256": "f9a7673171eea2e5152abca3810750df978ca6b19b1c71d1c352b637d07b9e91",
+          "warnings": 1
+        },
+        {
+          "source": "UniXNU/out/driver-sources/IOStorageFamily/IOBlockStorageDevice.cpp",
+          "source_sha256": "91391448f3abced8238f71cce6b9f1062bd22e43994243e25c86df3e73ffd848",
+          "object_sha256": "64cfb3e747228a5528a2f990ea1efbf5fb7c0f577f062d10ebd755991ab4679e",
+          "warnings": 1
+        },
+        {
+          "source": "UniXNU/out/driver-sources/IOStorageFamily/IOBlockStorageDriver.cpp",
+          "source_sha256": "2b592995cdd38f3c314940f6f85ac0b8f8523864332b9cd74ee6e9d7710b752e",
+          "object_sha256": "3ceb625e21d2394527185f7030445b7a83c1b6e8f0c7e729cc942a972f6c2858",
+          "warnings": 10
+        },
+        {
+          "source": "UniXNU/out/driver-sources/IOStorageFamily/IOFDiskPartitionScheme.cpp",
+          "source_sha256": "6c29d7424f904898d6ad1cf20c04b286bc925616f643382e192e8db479028224",
+          "object_sha256": "dcab10c6e4b6fb014b7f526c9013a8ba1afce1cf8dfb497ace831d014ea9a50f",
+          "warnings": 1
+        },
+        {
+          "source": "UniXNU/out/driver-sources/IOStorageFamily/IOFilterScheme.cpp",
+          "source_sha256": "04dcb3077dab63ca7b5dc12f40ac21e34ca0a64ae5d6856847919672edf3b146",
+          "object_sha256": "77b6772166fcf08b91f33b706dea57e9d64dc7cc56cf46d2b52e9eb747b8b06f",
+          "warnings": 0
+        },
+        {
+          "source": "UniXNU/out/driver-sources/IOStorageFamily/IOGUIDPartitionScheme.cpp",
+          "source_sha256": "7c6fe98216cedaf70ebb113471a6b5940b4de946cc0a3c948f4c585d34d302f1",
+          "object_sha256": "b6dae7b068d873ec14f4453d1b54e06d64640dfbcf85d15e0321afdf1e99fcd6",
+          "warnings": 0
+        },
+        {
+          "source": "UniXNU/out/driver-sources/IOStorageFamily/IOMedia.cpp",
+          "source_sha256": "38de6ac74dab48808261eed136137107a30a826e0845c9c5c6d039b53141da30",
+          "object_sha256": "d78ad7cd376676eaa8b52b14a98f6dfb66f0291f837e4d49e2c836df4c779abc",
+          "warnings": 2
+        },
+        {
+          "source": "UniXNU/out/driver-sources/IOStorageFamily/IOMediaBSDClient.cpp",
+          "source_sha256": "6b4ae728a8fdb267df2d35cca832b2c4fa08c489e491863d595614f6da70cc5a",
+          "object_sha256": "689e40feef24f1c2a30dc5423bf0514727695940419a6f4e7db02ca2fc75872f",
+          "warnings": 9
+        },
+        {
+          "source": "UniXNU/out/driver-sources/IOStorageFamily/IOPartitionScheme.cpp",
+          "source_sha256": "37c92f9067309bc78780394ff14004add4bc373fe8163a9d7829a2540cb634d9",
+          "object_sha256": "4d1bef8f195aa1baedf322f6e9025109178495d4c282531e3481b0b9c9e552ee",
+          "warnings": 2
+        },
+        {
+          "source": "UniXNU/out/driver-sources/IOStorageFamily/IORequest.cpp",
+          "source_sha256": "fd39eb863f42b27c33866a5b50884c9b0dc6a5b6e19e2a3b51cf15fb6dd2babe",
+          "object_sha256": "6ee8ac5c7d37080c986af713885fc9ce4b3a6f3146e99fdb28dc6f8f4ed41a20",
+          "warnings": 1
+        },
+        {
+          "source": "UniXNU/out/driver-sources/IOStorageFamily/IORequestsPool.cpp",
+          "source_sha256": "b2bf3cd503aa57554e13cf79e2d2880b2af908c6ecc80a38f9accdfc5ba413f2",
+          "object_sha256": "d478d2060df57134cf2944a449a277500af33ede6fb4c17eb241bafbc3b808ba",
+          "warnings": 0
+        },
+        {
+          "source": "UniXNU/out/driver-sources/IOStorageFamily/IOStorage.cpp",
+          "source_sha256": "26dc9ccabccb23a24862b4ce0b4ab6cbe73319743df10fa17f8fb5a0b1943966",
+          "object_sha256": "52b0101f5cb26713cc20d836dcc8c5425bd0cabf62f08814c3ee0afa53deee10",
+          "warnings": 1
+        },
+        {
+          "source": "UniXNU/out/driver-sources/IOStorageFamily/IOUserBlockStorageDevice_kext.cpp",
+          "source_sha256": "bb593bb07f1c920e85f00598b1095d3492c159a4f75195de6907ec00288a1dc5",
+          "object_sha256": "1bc0ba3a0cbd5e7d145ec104a35a96706fbddc887f1463880c7d0f49e9d8c73f",
+          "warnings": 1
+        },
+        {
+          "source": "UniXNU/out/sheng/ipados-26.5.2-23F84/sheng_ipados26/tree/build/sheng-source-drivers/storage-generated/IOUserBlockStorageDevice.iig.cpp",
+          "source_sha256": "e76ccddc27647224232acaa1a1f153068d0e9ec5fe355304f529900c5b7ed053",
+          "object_sha256": "d1c5aab84803abeb99baea4a622effa4e783201850a11c4d84a8b65d49908da8",
+          "warnings": 2
+        }
+      ]
+    }
+  },
+  "host_tests": [
+    "UFS RootLayout, RootWindowRead, RootDiagnostics, RootPublication: ASan/UBSan passed",
+    "GENI SPI, NVT protocol with firmware, touch core, touch board: ASan/UBSan passed",
+    "Storage header revision switch, stale file removal and wrong revision rejection passed",
+    "Legacy HID builder arm64e/iOS 26 rejection passed",
+    "Existing unixnu kernel unit tests: 4 passed",
+    "Legacy display builder arm64e/iOS 26 rejection passed",
+    "Four archives combined with ld -r; final link remains unqualified",
+    "Documentation build and device porting-record check against origin/main passed"
+  ],
+  "partial_link": {
+    "sha256": "fb1148edd5ad9df54e212d10c7e1be98651779d1e75dd9de2537d702542fec56",
+    "passed": true
+  },
+  "build_scripts": {
+    "UniXNU/scripts/build-sheng-source-drivers.py": "957c7625e79ece773d07c8fde11c65b139222b56afb37bf39acf80f18216a966",
+    "UniXNU/scripts/prepare-storage-headers.py": "c9b1d43c1d3d248959ebcfa721ba618d373932d5c94851dfb9c4f62f8b2875b5",
+    "UniXNU/scripts/kernel_target.py": "f2351aebc029a69673ead76e1a0b49845fd940e285da82cd693a89084991c4bf"
+  }
+}
