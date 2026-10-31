@@ -387,13 +387,55 @@ void *IOMallocAligned(vm_size_t,vm_offset_t);
 struct cs_rec {uint64_t abs;int32_t pid;uint16_t state;int16_t pri;uint32_t cs;int32_t peer;uint64_t cpu,wait,frames[11];};
 _Static_assert(sizeof(struct cs_rec)==128,"client sample");
 struct cs_target {int pid;unsigned slide;uint64_t image,seen;char name[32];};   // seen: when the sampler first found it (mach units)
-// CPU occupancy at every tick: per CPU the priority of what runs there, whether it is the idle thread, and the processor state; a
-// runnable client next to eight busy CPUs is CPU contention. kernel.cpus.bin.
+// CPU occupancy at every tick: per CPU the priority of what runs there, whether it is the idle thread (2: the sampler itself, which
+// runs there as it reads), and the processor state; a runnable client next to eight busy CPUs is CPU contention. kernel.cpus.bin.
 struct cs_cpu {uint64_t abs;int16_t pri[8];uint8_t idle[8],state[8];};
 _Static_assert(sizeof(struct cs_cpu)==40,"cpu sample");
 #define CS_CPU_RING 65536
 struct cs_cpu *boot_cpu_ring;
 volatile uint32_t boot_cpu_count;
+// Who uses the CPUs: every 100 ms each process's CPU time since the last pass (xnu's recount, user and system), one record for each that
+// ran, with its base priority. kernel.ptime.bin; the export names the pids.
+struct cs_ptime {uint64_t abs;int32_t pid;uint32_t user_us,system_us;int16_t priority;uint16_t reserved;};
+_Static_assert(sizeof(struct cs_ptime)==24,"process time");
+#define CS_PTIME_RING 131072
+struct cs_ptime *boot_ptime_ring;
+volatile uint32_t boot_ptime_count;
+#include <kern/recount.h>
+extern void absolutetime_to_nanoseconds(uint64_t,uint64_t *);
+struct cs_prev {int32_t pid;uint64_t user,system;};
+#define CS_PREV 2048
+static struct cs_prev *cs_prev;   // allocated with the ring: the kernel's __DATA has no room for it
+static uint64_t cs_ptime_now;
+static uint32_t cs_us(uint64_t mach) {uint64_t ns=0;absolutetime_to_nanoseconds(mach,&ns);return (uint32_t)(ns/1000>UINT32_MAX?UINT32_MAX:ns/1000);}
+static int cs_ptime_one(proc_t p,void *arg) {
+ (void)arg;
+ task_t task=proc_task(p);
+ if(!task || !cs_prev)return 0;
+ const int pid=proc_pid(p);
+ const struct recount_times_mach t=recount_task_times(task);
+ // The pid's slot, open addressing; a full table records nothing new.
+ struct cs_prev *slot=NULL;
+ for(unsigned k=0;k<CS_PREV;++k) {
+  struct cs_prev *at=&cs_prev[((unsigned)pid+k)%CS_PREV];
+  if(at->pid==pid+1 || !at->pid){slot=at;break;}
+ }
+ if(!slot)return 0;
+ const bool known=slot->pid==pid+1;
+ const uint64_t user=t.rtm_user,system=t.rtm_system;
+ // A pid used again starts from zero.
+ const uint64_t du=user>=slot->user?user-slot->user:user,ds=system>=slot->system?system-slot->system:system;
+ slot->pid=pid+1;slot->user=user;slot->system=system;
+ if(!known || (!du && !ds) || !boot_ptime_ring)return 0;
+ struct cs_ptime r;memset(&r,0,sizeof(r));
+ r.abs=cs_ptime_now;r.pid=pid;r.user_us=cs_us(du);r.system_us=cs_us(ds);r.priority=(int16_t)task->priority;
+ const uint32_t n=boot_ptime_count;boot_ptime_ring[n&(CS_PTIME_RING-1)]=r;boot_ptime_count=n+1;
+ return 0;   // PROC_RETURNED
+}
+static void cs_ptime_pass(void) {
+ cs_ptime_now=mach_absolute_time();
+ proc_iterate((1U<<0)|(1U<<2),cs_ptime_one,NULL,NULL,NULL);
+}
 struct cs_rec *boot_client_ring;
 volatile uint32_t boot_client_count;
 struct cs_target boot_client_targets[32];
@@ -494,7 +536,7 @@ static void cs_sample(unsigned slot) {
 static void cs_thread(void *arg,wait_result_t result) {
  (void)arg;(void)result;
  for(unsigned tick=0;;++tick) {
-  if(tick%25==0)cs_refresh();   // every 100 ms: an app's launch shows within that
+  if(tick%25==0){cs_refresh();cs_ptime_pass();}   // every 100 ms: an app's launch shows within that
   cs_tick=tick;
   for(unsigned i=0;i<CS_TARGETS;++i)cs_sample(i);
   if(boot_cpu_ring) {
@@ -503,6 +545,7 @@ static void cs_thread(void *arg,wait_result_t result) {
     processor_t p=cpu_to_processor(cpu);
     if(p==PROCESSOR_NULL)continue;
     c.pri[cpu]=(int16_t)p->current_pri;c.idle[cpu]=p->active_thread==p->idle_thread;c.state[cpu]=(uint8_t)p->state;   // pointers only compared
+    if(p->active_thread==current_thread())c.idle[cpu]=2;
    }
    const uint32_t n=boot_cpu_count;boot_cpu_ring[n&(CS_CPU_RING-1)]=c;boot_cpu_count=n+1;
   }
@@ -517,6 +560,9 @@ void boot_client_sampler_start(void) {
  boot_client_ring=ring;
  struct cs_cpu *cpus=(struct cs_cpu *)IOMallocAligned(sizeof(struct cs_cpu)*CS_CPU_RING,4096);
  if(cpus){memset(cpus,0,sizeof(struct cs_cpu)*CS_CPU_RING);boot_cpu_ring=cpus;}
+ struct cs_ptime *times=(struct cs_ptime *)IOMallocAligned(sizeof(struct cs_ptime)*CS_PTIME_RING,4096);
+ struct cs_prev *prev=(struct cs_prev *)IOMallocAligned(sizeof(struct cs_prev)*CS_PREV,4096);
+ if(times && prev){memset(prev,0,sizeof(struct cs_prev)*CS_PREV);cs_prev=prev;memset(times,0,sizeof(struct cs_ptime)*CS_PTIME_RING);boot_ptime_ring=times;}
  thread_t thread=THREAD_NULL;
  if(kernel_thread_start_priority(cs_thread,NULL,BASEPRI_KERNEL,&thread)==KERN_SUCCESS)thread_deallocate(thread);
 }
