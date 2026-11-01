@@ -8,6 +8,7 @@ code is bound at its fileset address plus the collection slide; no original inst
 """
 import hashlib
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -380,7 +381,7 @@ run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--global
      gop / 'NativeGOPPresenter.o', gop_late])
 # Keyboard, buttons and touch, the iPadOS 17 drivers: their source-API objects (public IOHIDFamily headers, so every IOHIDDevice
 # virtual keeps its real name and pointer-authentication discriminator), linked against the original IOHIDDevice of this fileset.
-DEVICE = ROOT.parents[5] / 'UniXNU-sheng'
+DEVICE = Path(os.environ.get('UNIXNU_DEVICE') or ROOT.parents[5] / 'UniXNU-sheng')
 # The UniXNU checkout's copy: it reads the OS profile next to it.
 print(run(['python3', ROOT.parents[4] / 'scripts/build-sheng-source-drivers.py', '--tree', ROOT, '--device', DEVICE,
            '--hid-source', ROOT.parents[3] / 'driver-sources/IOHIDFamily'], text=True), end='')
@@ -476,7 +477,6 @@ board_dir = OUT / 'board'
 board_dir.mkdir(exist_ok=True)
 KITS = ROOT / 'kits/sheng'
 # As on iPadOS 17, ATH12K_WIFI_DIR names a checkout whose deps/linux holds the driver sources.
-import os
 WIFI = Path(os.environ.get('ATH12K_WIFI_DIR') or DEVICE / 'drivers/Ath12kWifi')
 require((WIFI / 'include/nw_abi.h').exists(), 'Ath12kWifi module directory')
 board_objects = []
