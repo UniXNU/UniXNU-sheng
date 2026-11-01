@@ -315,33 +315,29 @@ reference = "board.toml"
 result = "The 27 archive recipe explicitly selects --lto for the fileset reference. The common builder invalidates stale references and handles LTO link objects; XnuPrelink records the recovered 24A446 ABI identities."
 
 [[area.evidence]]
-kind = "device"
-reference = "../UniXNU/out/panic27-fix-20261102/device-log-read-20261102/untagged-90cbf4fac/msgbuf.txt"
-command = "read-sheng-log.py --port /dev/cu.usbmodemshenglog1 --no-reboot"
-result = "sheng b714917c, iPadOS 27.0.1 24A446, boot-prelink-fixed.img: instruction fetch abort at 0xfffffff00dbb4c74 with LR 0xfffffff00b5a3340 in native_legacy_display_allocate. Corecrypto and SourceStorage initialization had completed."
+kind = "source"
+reference = "reports/ipados27-startup-repair-2026-11-02.md"
+result = "Historical working-tree observation: sheng b714917c, iPadOS 27.0.1 24A446, boot-prelink-fixed.img: instruction fetch abort at 0xfffffff00dbb4c74 with LR 0xfffffff00b5a3340 in native_legacy_display_allocate. Corecrypto and SourceStorage initialization had completed."
 
 [[area.evidence]]
-kind = "host"
-reference = "../UniXNU/out/startup27-fix-20261102/startup-static-audit.json"
-command = "python3 -m unittest discover -s kits/XnuPrelink -p 'test_*.py'; python3 out/startup27-fix-20261102/audit-startup.py"
-result = "62 prelink regressions pass. The packed kernel has 266 fixed original-function branches (205 mobile graphics, 51 HID, eight IOSurface, two GPU), preserved absolute GOT values and no additional native external branch instructions. This is host evidence, not a desktop boot result."
+kind = "source"
+reference = "reports/ipados27-startup-repair-2026-11-02.md"
+result = "Historical working-tree observation: 62 prelink regressions pass. The packed kernel has 266 fixed original-function branches (205 mobile graphics, 51 HID, eight IOSurface, two GPU), preserved absolute GOT values and no additional native external branch instructions. This is host evidence, not a desktop boot result."
 
 [[area.evidence]]
-kind = "device"
-reference = "../UniXNU/out/startup27-fix-20261102-v3/device-run2/untagged-1304f7048/msgbuf.txt"
-result = "sheng b714917c, 24A446: NativeLegacyDisplay and NativeHidInput initialized, APFS mounted the root OS and SystemCryptex, then load_init_program stopped with offline scratch Data mount failed: 2. The payload lacked initrd and PackedRAMDisk."
+kind = "source"
+reference = "reports/ipados27-startup-repair-2026-11-02.md"
+result = "Historical working-tree observation: sheng b714917c, 24A446: NativeLegacyDisplay and NativeHidInput initialized, APFS mounted the root OS and SystemCryptex, then load_init_program stopped with offline scratch Data mount failed: 2. The payload lacked initrd and PackedRAMDisk."
 
 [[area.evidence]]
-kind = "host"
-reference = "../UniXNU/out/startup27-fix-20261102-v4/verification.json"
-command = "python3 out/startup27-fix-20261102-v4/verify-image.py; python3 scripts/check-unixnu.py"
-result = "Recovered runtime inputs match boot-framepath.img: seed 1bde7901df3acd0e8a14cd89928bedc12c07ef2128c6bce18ffccf3611a666a3 equals the existing data-seed-215g-skipca/data.dbr. The payload includes the original owner trust cache and GPU addon, required ADT placeholders and 870-byte normal arguments without autoreset or data-reset. Checks cover 266 branches, five absolute data symbols and 189 vnode descriptor pointer sites. Local inputs are stored in the ignored UniXNU unixnu.local.toml."
+kind = "source"
+reference = "reports/ipados27-startup-repair-2026-11-02.md"
+result = "Historical working-tree observation: Recovered runtime inputs match boot-framepath.img: seed 1bde7901df3acd0e8a14cd89928bedc12c07ef2128c6bce18ffccf3611a666a3 equals the existing data-seed-215g-skipca/data.dbr. The payload includes the original owner trust cache and GPU addon, required ADT placeholders and 870-byte normal arguments without autoreset or data-reset. Checks cover 266 branches, five absolute data symbols and 189 vnode descriptor pointer sites. Local inputs are stored in the ignored UniXNU unixnu.local.toml."
 
 [[area.evidence]]
-kind = "device"
-reference = "../UniXNU/out/startup27-fix-20261102-v4/hardware-verification.json"
-command = "fastboot -s b714917c boot diagnostic/boot-diagnostic.img; fastboot boot sheng-linux-log.img; read-sheng-log.py --no-reboot"
-result = "The repaired v4 kernel and restored runtime inputs ran to the 120-second auto-reset deadline: log state 2, 61 rounds, zero write errors and no panic. SpringBoard PID 30, backboardd PID 61 and wifid PID 49 are present. The diagnostic image differs from the normal payload only by sheng-autoreset=120. Visual presentation was not verified. Two unresolved data imports and 24 trap references remain outside this boot qualification."
+kind = "source"
+reference = "reports/ipados27-startup-repair-2026-11-02.md"
+result = "Historical working-tree observation: The repaired v4 kernel and restored runtime inputs ran to the 120-second auto-reset deadline: log state 2, 61 rounds, zero write errors and no panic. SpringBoard PID 30, backboardd PID 61 and wifid PID 49 are present. The diagnostic image differs from the normal payload only by sheng-autoreset=120. Visual presentation was not verified. Two unresolved data imports and 24 trap references remain outside this boot qualification."
 
 [[area.evidence]]
 kind = "source"
