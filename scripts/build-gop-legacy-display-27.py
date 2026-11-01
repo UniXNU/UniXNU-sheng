@@ -23,10 +23,8 @@ sys.path.insert(0, str(ROOT / 'kits/XnuPrelink'))
 ABI_PATH = Path(__file__).resolve().with_name('legacy-display-24A446.json')
 abi = json.loads(ABI_PATH.read_text())
 slide = int(abi['collection_slide'], 16)
-# The fileset emitter moves the linked native kernel; references to absolute symbols move with it. The measured move of the last
-# emission (native-slide, written after each emit) is taken off every original binding so the final references land on them.
-native_slide_file = OUT / 'native-slide'
-native_slide = int(native_slide_file.read_text(), 16) if native_slide_file.exists() else 0
+# Original targets are fixed collection addresses. XnuPrelink recomputes the
+# BTI/B adapter displacement after placing native text; no prior build is needed.
 slots = [(int(t, 16), int(d, 16)) for t, d in abi['slots']]
 D, R = abi['display'], abi['request']
 
@@ -247,7 +245,7 @@ asm = OUT / 'original-bindings.S'
 DATA = {'__ZN25IOMobileFramebufferLegacy10gMetaClassE', '__ZTV25IOMobileFramebufferLegacy'}
 text, addresses = '.text\n.p2align 2\n', ''
 for name, va in sorted(bindings.items()):
-    target = f'{(va - native_slide) & ((1 << 64) - 1):#x}'
+    target = f'{va:#x}'
     if name in DATA:
         # Reached through GOT entries: plain pointers that the emitter does not move.
         addresses += f'.globl {name}\n.set {name}, {va:#x}\n'
@@ -456,7 +454,7 @@ for name, va in sorted(hid_bindings.items()):
     if name in HID_DATA:
         hid_addresses += f'.globl {name}\n.set {name}, {va:#x}\n'
     else:
-        hid_addresses += f'.globl {name}.original\n.set {name}.original, {(va - native_slide) & ((1 << 64) - 1):#x}\n'
+        hid_addresses += f'.globl {name}.original\n.set {name}.original, {va:#x}\n'
         hid_text += f'.globl {name}\n{name}:\n bti c\n b {name}.original\n'
 (OUT / 'hid-bindings.S').write_text(hid_text)
 (OUT / 'hid-addresses.S').write_text(hid_addresses)
@@ -516,5 +514,5 @@ sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'driv
     source_sha256={str(p.relative_to(ROOT)): sha(p) for p in sources}, generated_abi_sha256=sha(OUT / 'OriginalLegacyFramebufferABI.h'),
     kernelcache_sha256=abi['kernelcache_sha256'], compiled_object_sha256=sha(obj), archive_sha256=sha(archive),
     bindings={n: hex(v) for n, v in bindings.items()}, virtual_entries=len(slots), owned_entries=owned,
-    inherited_native_entries=native, native_slide=hex(native_slide), original_instructions_modified=False), indent=2) + '\n')
+    inherited_native_entries=native, original_bindings='fixed-collection-addresses', original_instructions_modified=False), indent=2) + '\n')
 print(f'Built the owned Legacy backend on the iPadOS 27 class: {len(owned)} owned, {len(native)} native, {len(bindings)} original bindings')
