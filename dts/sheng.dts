@@ -6,6 +6,14 @@
     model = "Xiaomi Pad 6S Pro 12.4";
     compatible = "xiaomi,sheng", "qcom,sm8550";
 
+    // Export the radio before launchd evaluates wifid's device-tree condition.
+    // WifiProbe owns PCIe resources and fills local-mac-address at runtime.
+    wlan {
+        compatible = "qcom,wcn7850";
+        unixnu,adt-name = "wlan";
+        status = "okay";
+    };
+
     memory@80000000 {
         device_type = "memory";
         reg = <0 0x80000000 0 0x80000000>;
