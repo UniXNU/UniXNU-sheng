@@ -1346,10 +1346,14 @@ index 29d7dbe..af797d0 100644
  
  #include <os/log.h>
  #include <os/system_event_log.h>
-@@ -101,6 +104,10 @@
+@@ -101,6 +104,14 @@
  #include <libkern/coreanalytics/coreanalytics.h>
  
  #include <sys/code_signing.h> /* for developer mode state */
++#include <vm/vm_protos.h> /* proc_best_name; proc_pid is declared there only for DEVELOPMENT, so the same declaration follows */
++#ifdef MACH_BSD
++extern int proc_pid(struct proc *);
++#endif
 +/* The last four user exceptions of the processes sheng-exc-name lists, for the board's boot log (the message buffer wraps). */
 +struct sheng_exc_record {char name[20]; uint32_t pid, type, esr, frames; uint64_t pc, lr, far, ret[12];};
 +struct sheng_exc_record sheng_exc_ring[4];
