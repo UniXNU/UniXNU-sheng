@@ -40,7 +40,7 @@ jobs:
           repository: UniXNU/uefi-sheng
           path: uefi-sheng
       - name: tools
-        run: brew install dtc llvm cmake
+        run: brew install dtc llvm lld cmake
       - name: platform seed
         env:
           seed: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
@@ -54,7 +54,6 @@ jobs:
         env:
           UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
           GITHUB_TOKEN: ${{ github.token }}
-          PATH: /opt/homebrew/bin:/opt/homebrew/opt/llvm/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
         run: scripts/package.sh --os "${{ inputs.os }}" --uefi ../uefi-sheng
       - name: images
         uses: actions/upload-artifact@v4
