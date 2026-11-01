@@ -17,7 +17,7 @@
 
 ["kernel"]
 "defconfig" = "sheng_ipados27_defconfig"
-"archives" = ["build-corecrypto-14.py", "build-corecrypto-14.py --namespace", "component:ArmDTPlatform", "component:ArmCpu", "build-libpthread-kernel.py", "component:ShengUfs", "build-sheng-source-storage.py --policy-dir scripts/policies/ipados-27.0.1-24A446", "component:RamBlock", "component:Adreno740", "fetch-sheng-dts.py", "fetch-adreno-inputs.py", "prepare-sheng-gmu.py", "prepare-sheng-gpu-smmu.py", "prepare-sheng-gmu-votes.py", "build-adreno740-kits.py", "build-adreno740-accelerator.py", "component:AppleKeyStoreState", "build-gop-legacy-display-27.py"]
+"archives" = ["build-corecrypto-14.py", "build-corecrypto-14.py --namespace", "component:ArmDTPlatform", "component:ArmCpu", "build-libpthread-kernel.py", "component:ShengUfs", "build-sheng-source-storage.py --policy-dir scripts/policies/ipados-27.0.1-24A446", "component:RamBlock", "component:Adreno740", "fetch-sheng-dts.py", "fetch-adreno-inputs.py", "prepare-sheng-gmu.py", "prepare-sheng-gpu-smmu.py", "prepare-sheng-gmu-votes.py", "build-adreno740-kits.py", "build-adreno740-accelerator.py", "component:AppleKeyStoreState", "build-gop-legacy-display-27.py", "build-fileset-release-reference.py --tree ."]
 "config_fragments" = ["arch:configs/common.config", "os:configs/ipados.config"]
 "patch_series" = ["arch:patches/xnu/series", "soc:patches/xnu-12377/series", "os:patches/xnu/series", "device:patches/xnu-12377/series"]
 
