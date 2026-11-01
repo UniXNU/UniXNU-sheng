@@ -2,8 +2,9 @@
 
 Device support for Xiaomi Pad 6S Pro 12.4, codename `sheng`, with Qualcomm
 SM8550. The device profile selects
-[UniXNU-sm8550-common](https://github.com/UniXNU/UniXNU-sm8550-common) and the
-`ipados-17.7.11-21H461` OS profile in UniXNU.
+[UniXNU-sm8550-common](https://github.com/UniXNU/UniXNU-sm8550-common). One
+branch builds every OS profile; `--os 17|26|27` picks the target (the 27
+profile is the one under active maintenance).
 
 ## Structure
 
@@ -49,33 +50,45 @@ changing storage resources or policy.
 
 ## Build
 
-The firmware must embed UniXNU, UniXNUDxe, DarwinBoot and the shared
-`UniXNURamDiskDxe`, with DiskIoDxe and FAT support. These modules expose the
-payload configuration and its boot entries. Follow
-[firmware integration](https://unixnu.com/porting/uefi-firmware#required-integration).
-
-Run these commands from the UniXNU checkout:
+One command from this repository builds everything: dependencies, preflight,
+patches, kernel, package, firmware, payload, boot image and the manifest.
 
 ```sh
-./unixnu defconfig sheng_defconfig --device ../UniXNU-sheng
-./unixnu fetch --device ../UniXNU-sheng
-./unixnu status --device ../UniXNU-sheng --json
-./unixnu build kernel --device ../UniXNU-sheng --kernelcache /path/to/kernelcache
-./unixnu build firmware --device ../UniXNU-sheng --uefi ../uefi-sheng
-./unixnu build payload --device ../UniXNU-sheng --unique-chip-id "$UNIXNU_UNIQUE_CHIP_ID" \
-  --data-ramdisk /path/to/data.dbr --trust-cache /path/to/trustcache
-./unixnu bootimg --device ../UniXNU-sheng --uefi ../uefi-sheng --dtb /path/to/firmware.dtb
+UNIXNU_UNIQUE_CHIP_ID=<8 hex digits> scripts/package.sh --os 27 --uefi ../uefi-sheng
 ```
 
-Outputs are under `out/sheng/ipados-17.7.11-21H461/sheng/`.
-The payload step compiles the hardware DTS and writes `kernel.macho.adt`.
-The boot image takes the firmware's FDT with `--dtb`.
+- The firmware inputs come from the official fastboot archive pinned in
+  `board.toml` `[firmware.image]`: the preflight downloads it with concurrent
+  HTTP ranges, keeps only the porting inputs, deletes the archive and
+  generates the `Binaries/sheng` modules the firmware volume builds from.
+  Extracted firmware lives in no repository.
+- `UNIXNU_UNIQUE_CHIP_ID` is the platform seed of the device, 8 hex digits.
+  It is baked into the images and stays out of every repository.
+- The kernelcache, trust caches and OS volumes come from the IPSW the OS
+  profile pins; the generated GPU headers come from the pinned sources the
+  kernel archives fetch.
+- Outputs land under `out/sheng/<profile>/<config>/` of the UniXNU checkout:
+  `boot/boot.img`, `payload/payload.img`, `kernel/kernel.macho` and
+  `package.manifest.json`.
+- `--check` stops after deps, preflight and patches; `--no-deps` skips
+  fetching on a machine whose sources are already pinned.
 
-Build inputs include the selected kernelcache, verified root policies,
-vendor firmware, generated GPU register and power headers, UEFI source,
-and the Data and trust-cache inputs used by the payload. Keep binary
-inputs in local caches. `scripts/data/adreno-inputs.json` in UniXNU records
-GPU firmware pins.
+See the [packaging script](https://unixnu.com/porting/packaging) page for the
+fixed steps, the board.toml keys and the verification the run performs.
+
+## Build on GitHub
+
+`.github/workflows/package.yml` runs the same script on a macOS runner and
+offers the images as the run's artifacts.
+
+1. Fork this repository and set its `UNIXNU_UNIQUE_CHIP_ID` secret to the
+   platform seed of the device.
+2. Actions, package, Run workflow, pick the OS profile.
+3. Download the run's artifacts, then delete the run. The images serve the one
+   device whose seed they bake; they are not kept.
+
+The run installs and asserts its own tools; nothing else is needed on the
+runner.
 
 ## Documentation
 
@@ -90,12 +103,3 @@ The documentation site is maintained in UniXNU:
 
 Report build results and device boot, storage, display, input, and GPU
 observations separately, with source revisions and commands.
-
-## Local build inputs
-
-Save device paths and boot arguments in `unixnu.local.toml` in the UniXNU
-checkout. See the [configuration reference](https://unixnu.com/reference/configuration#local-build-inputs).
-Then use `./unixnu kernel`, `./unixnu firmware`, `./unixnu payload`, and
-`./unixnu bootimg`. Argument changes require rebuilding the payload and boot
-image. See [boot arguments](https://unixnu.com/xnu/boot-arguments#apply-arguments)
-and [green-bar diagnosis](https://unixnu.com/guide/debugging#green-bar).
