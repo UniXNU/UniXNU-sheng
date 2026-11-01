@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 import posixpath
 import re
 import subprocess
+import shutil
 import urllib.request
 
 COMMIT = '42f3b40c702abbc37c3a04c95af008cd283aeaf3'
@@ -69,4 +70,7 @@ if __name__ == '__main__':
         subprocess.run(['dtc', '-I', 'dts', '-O', 'dtb', '-o',
                         str(output / 'sheng.dtb'), str(preprocessed)],
                        stderr=log, check=True)
+    adreno = Path('build/adreno-firmware')
+    adreno.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(output / 'sheng.dtb', adreno / 'sheng.dtb')
     print(f'Compiled sheng.dtb from {len(hashes)} source files at {COMMIT}')
