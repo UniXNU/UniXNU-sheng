@@ -142,11 +142,15 @@ if stock_config.exists():
 # directory in the firmware checkout (UNIXNU_UEFI; the release sets it for its scripts).
 uefi = Path(os.environ.get('UNIXNU_UEFI') or ROOT / 'uefi-sheng')
 link = uefi / 'Binaries/sheng'
-if link.is_symlink():
-    link.unlink()
-if link.exists():
-    raise SystemExit(f'{link} already holds content; move it away first')
-link.parent.mkdir(parents=True, exist_ok=True)
-shutil.copytree(output, link, symlinks=True)
+generated = (output / 'manifest.json')
+if link.is_dir() and (link / 'manifest.json').is_file() and (link / 'manifest.json').read_bytes() == generated.read_bytes():
+    print(f'Binaries/sheng already matches {output}')
+else:
+    if link.is_symlink() or link.exists():
+        print(f'{link} holds older content; regenerating')
+        shutil.rmtree(link)
+    link.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(output, link, symlinks=True)
+    print(f'Binaries/sheng <- {output}')
 print(f'Binaries/sheng <- {output}')
 print(f'{len(modules)} AArch64 modules; {len(raw_files)} raw files; original DEPEX preserved')
