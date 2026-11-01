@@ -54,6 +54,7 @@ jobs:
         env:
           UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
           GITHUB_TOKEN: ${{ github.token }}
+          PATH: /opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/llvm@lts/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
         run: scripts/package.sh --os "${{ inputs.os }}" --uefi ../uefi-sheng
       - name: images
         uses: actions/upload-artifact@v4
