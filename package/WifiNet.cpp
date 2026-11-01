@@ -77,14 +77,28 @@ struct scan_result {                                                            
   uint8_t rate_count, unused0; uint32_t rates[15]; uint8_t ssid_length, ssid[32], unused1[3]; uint32_t age_ms; uint8_t flags, unused2;
   uint16_t elements_length; uint8_t elements[1024];
 };
-struct assoc_request {                                                                            // 592 bytes
-  uint32_t version; uint16_t mode, auth_lower, auth_upper, unused0; uint32_t ssid_length; uint8_t ssid[32]; uint8_t bssid[6], unused1[2];
-  uint32_t key_version, key_length, key_cipher; uint16_t key_flags, key_index; uint8_t key[64]; uint8_t rest[0x250 - 0x88];
+struct assoc_parameters {
+  uint32_t ssid_length; uint8_t ssid[32]; uint8_t bssid[6], unused[2];
+  uint32_t key_version, key_length, key_cipher; uint16_t key_flags, key_index; uint8_t key[64];
+};
+struct assoc_request {                                                                            // legacy: 592 bytes
+  uint32_t version; uint16_t mode, auth_lower, auth_upper, unused;
+  assoc_parameters network; uint8_t rest[0x250 - 0x88];
+};
+// 24A446 IO80211 __performAssociation uses 32-bit authentication fields. The network
+// prefix moves by four bytes; the trailing fields also grow. Both requests use version 1.
+struct assoc_request27 {                                                                          // 656 bytes
+  uint32_t version; uint16_t mode, unused; uint32_t auth_lower, auth_upper;
+  assoc_parameters network; uint8_t rest[0x290 - 0x8c];
 };
 struct link_event { uint8_t down, unused0[3]; int32_t rssi; uint16_t snr, noise; uint8_t unused1[4]; uint8_t involuntary, unused2[3]; uint32_t reason, subreason; uint8_t unused3[4]; };
 static_assert(sizeof(scan_result) == 1164 && __builtin_offsetof(scan_result, ssid_length) == 0x60 && __builtin_offsetof(scan_result, age_ms) == 0x84 &&
               __builtin_offsetof(scan_result, elements) == 0x8c, "scan result layout");
-static_assert(sizeof(assoc_request) == 592 && __builtin_offsetof(assoc_request, key) == 0x48, "association layout");
+static_assert(sizeof(assoc_parameters) == 0x7c && __builtin_offsetof(assoc_parameters, key) == 0x3c &&
+              __builtin_offsetof(assoc_parameters, key_length) == 0x30 &&
+              __builtin_offsetof(assoc_parameters, key_cipher) == 0x34, "association network prefix");
+static_assert(sizeof(assoc_request) == 592 && __builtin_offsetof(assoc_request, network) == 0x0c, "legacy association layout");
+static_assert(sizeof(assoc_request27) == 656 && __builtin_offsetof(assoc_request27, network) == 0x10, "24A446 association layout");
 static_assert(sizeof(channels_list) == 4824, "channel list layout");
 static_assert(sizeof(link_event) == 32, "link event layout");
 
@@ -93,6 +107,7 @@ uint8_t gMac[6];
 lck_grp_t *gGrp;
 lck_mtx_t *gLock;
 bool gPower = true;
+bool gLinkSuppressed;   // hide the old station snapshot while an explicit disconnect drains
 bool gKeyed;   // the last join used a passphrase
 uint32_t gRxFrames, gRxErrors; int gRxLastError;
 uint32_t gRxNoBuffer, gRxChains, gRxLongest;   // frames dropped for want of a buffer, frames that took a chain, the longest frame
@@ -115,7 +130,8 @@ void post_event(uint32_t code, const void *payload, size_t length) {
   struct kev_msg msg; memset(&msg, 0, sizeof msg);
   msg.vendor_code = KEV_VENDOR_APPLE; msg.kev_class = 6; msg.kev_subclass = 1; msg.event_code = code;
   msg.dv[0].data_length = static_cast<uint32_t>(16 + length); msg.dv[0].data_ptr = data;
-  sheng_kev_post(&msg);
+  const int error = sheng_kev_post(&msg);
+  if (code != kEvScanDone || error) log(6, "wifi-net: event %u bytes %u -> %d", code, static_cast<unsigned>(length), error);
 }
 // link state for the network configuration: the interface's flags and the stack's own link events
 void post_link(bool up) {
@@ -129,15 +145,55 @@ void post_link(bool up) {
   sheng_kev_post(&msg);
 }
 
+void post_link_down(bool involuntary, int reason) {
+  post_link(false);
+  link_event ev{}; ev.down = 1; ev.involuntary = involuntary; ev.reason = static_cast<uint32_t>(reason);
+  post_event(kEvLinkChanged, &ev, sizeof ev);
+  post_event(kEvSsidChanged, nullptr, 0); post_event(kEvBssidChanged, nullptr, 0);
+}
+void disconnect_user() {
+  gUserJoin = true; gLinkSuppressed = true; gAssocResult = kAssocFailed;
+  nw_wifi_disconnect();
+  // A requested disconnect suppresses the station's link_lost callback. Notify
+  // both BSD and Apple80211 here, before asynchronous firmware teardown completes.
+  log(6, "wifi-net: explicit link down");
+  post_link_down(false, 0);
+}
+int drain_disconnect() {
+  disconnect_user(); sheng_wifi_wake();
+  // Ioctls run on the requesting process, independently of the station worker.
+  // Do not replace its one-slot DISCONNECT request with CONNECT before teardown.
+  for (unsigned waited = 0; waited < 2000; waited += 10) {
+    nw_wifi_status current; nw_wifi_status_get(&current);
+    if (current.state < NW_STA_AUTH) return 0;
+    IOSleep(10);
+  }
+  log(4, "wifi-net: disconnect did not drain within 2000 ms");
+  return ETIMEDOUT;
+}
+void visible_status(nw_wifi_status &st) {
+  nw_wifi_status_get(&st);
+  if (!gPower || gLinkSuppressed) {
+    st.state = NW_STA_IDLE; st.ssid_len = 0; memset(st.ssid, 0, sizeof st.ssid);
+    memset(st.bssid, 0, sizeof st.bssid); st.freq_mhz = 0; st.signal_dbm = 0;
+  }
+}
+
 // ---- what the module tells us ----
 void on_scan_done() { __atomic_store_n(&gScanning, 0u, __ATOMIC_RELEASE); gScanCursor = 0; post_event(kEvScanDone, nullptr, 0); }
 // A scan answered from the cache finishes after the time a short scan takes: answered at once, the daemon asks again straight away.
 thread_call_t gCachedScan;
 void cached_scan_done(thread_call_param_t, thread_call_param_t) { on_scan_done(); }
 void on_connect_done(int result) {
+  if (!gPower || gLinkSuppressed) {
+    log(6, "wifi-net: ignore join completion after explicit disconnect: %d", result);
+    return;
+  }
   gAssocResult = result == NW_RES_OK ? kAssocOk : result == NW_RES_BAD_KEY ? kAssocBadKey : result == NW_RES_TIMEOUT ? kAssocTimeout : kAssocFailed;
   log(6, "wifi-net: join finished: module result %d", result);
   if (result == NW_RES_OK) { post_link(true); }
+  // Retain the original event contract: consumers query kAssociateResult.
+  // Repeated joins must preserve this result until another attempt really starts.
   post_event(kEvAssocDone, nullptr, 0);
   if (result == NW_RES_OK) {
     post_event(kEvSsidChanged, nullptr, 0); post_event(kEvBssidChanged, nullptr, 0);
@@ -148,9 +204,8 @@ void on_connect_done(int result) {
 }
 void on_link_lost(int reason) {
   log(6, "wifi-net: link lost: reason %d", reason);
-  post_link(false);
-  link_event ev; memset(&ev, 0, sizeof ev); ev.down = 1; ev.involuntary = 1; ev.reason = static_cast<uint32_t>(reason);
-  post_event(kEvLinkChanged, &ev, sizeof ev);
+  gAssocResult = kAssocFailed;
+  post_link_down(true, reason);
 }
 // What the address configuration exchanges, as it crosses the interface: DHCP messages (type, transaction, offered address) and ARP, the first
 // ones of each direction, and per-kind counts for the traffic line.
@@ -259,6 +314,26 @@ int copy_in(const apple80211req &rq, void *dst, size_t size) {
   memset(dst, 0, size);
   return copyin(rq.req_data, dst, rq.req_len < size ? rq.req_len : size);
 }
+int copy_association(const apple80211req &rq, assoc_parameters &out) {
+  // Select only an observed wire layout, never infer it from credential contents.
+  if (rq.req_len != sizeof(assoc_request) && rq.req_len != sizeof(assoc_request27)) {
+    log(4, "wifi-net: unsupported association layout: %u bytes", rq.req_len);
+    return EINVAL;
+  }
+  union { assoc_request legacy; assoc_request27 current; } wire;
+  int error = copy_in(rq, &wire, sizeof wire);
+  if (!error) {
+    if (rq.req_len == sizeof(assoc_request27)) {
+      if (wire.current.version != 1) error = EINVAL;
+      else { out = wire.current.network; log(6, "wifi-net: join auth lower %x upper %x", wire.current.auth_lower, wire.current.auth_upper); }
+    } else {
+      if (wire.legacy.version != 1) error = EINVAL;
+      else { out = wire.legacy.network; log(6, "wifi-net: join auth lower %x upper %x", wire.legacy.auth_lower, wire.legacy.auth_upper); }
+    }
+  }
+  memset(&wire, 0, sizeof wire);
+  return error;
+}
 unsigned gResultsShown;
 // The regulatory country as the access points announce it (802.11d: the Country element, id 7, of the strongest network that has one), else "XX".
 void country(char cc[3]) {
@@ -273,7 +348,7 @@ void country(char cc[3]) {
 int map_state(unsigned s) { switch (s) { case NW_STA_SCANNING: return 1; case NW_STA_AUTH: return 2; case NW_STA_ASSOC: case NW_STA_KEYS: return 3; case NW_STA_UP: return 4; default: return 0; } }
 
 int apple80211(bool set, apple80211req &rq) {
-  nw_wifi_status st; nw_wifi_status_get(&st);
+  nw_wifi_status st; visible_status(st);
   const int type = rq.req_type;
   // (not on the stack: the largest answer is 4824 bytes)
   union Out { uint8_t raw[5120]; channels_list chans; scan_result res; };
@@ -285,8 +360,13 @@ int apple80211(bool set, apple80211req &rq) {
   uint32_t *w = reinterpret_cast<uint32_t *>(out.raw);
   if (set) {
     switch (type) {
-    case kPower: { uint32_t in[6]; if (copy_in(rq, in, sizeof in)) return EFAULT; gUserJoin = true; gPower = in[2] != 0; log(6, "wifi-net: power set %u", in[2]); if (!gPower) nw_wifi_disconnect(); post_event(kEvPowerChanged, nullptr, 0); return 0; }
+    case kPower: { uint32_t in[6]; if (copy_in(rq, in, sizeof in)) return EFAULT; gUserJoin = true; gPower = in[2] != 0; log(6, "wifi-net: power set %u", in[2]); if (!gPower) disconnect_user(); post_event(kEvPowerChanged, nullptr, 0); return 0; }
     case kScanReq: case kScanReqMultiple: {
+      if (!gPower) return ENETDOWN;
+      if (gLinkSuppressed) {
+        nw_wifi_status current; nw_wifi_status_get(&current);
+        if (current.state >= NW_STA_AUTH) return EBUSY; // preserve pending teardown
+      }
       uint8_t buf[0x80]; if (copy_in(rq, buf, sizeof buf)) return EFAULT;
       uint32_t ssidLength; memcpy(&ssidLength, buf + 16, 4); const uint8_t *ssid = buf + 20;
       // joining or joined: a scan takes the radio off channel for seconds and the access point's beacons and handshake frames are missed, so
@@ -297,19 +377,46 @@ int apple80211(bool set, apple80211req &rq) {
         gScanning = 1; gScanCursor = 0; gResultsShown = 24; uint64_t at; clock_interval_to_deadline(2000, kMillisecondScale, &at); thread_call_enter_delayed(gCachedScan, at); return 0; }
       gScanning = 1; gScanCursor = 0; gResultsShown = 0; nw_wifi_scan(ssidLength && ssidLength <= 32 ? ssid : nullptr, ssidLength <= 32 ? ssidLength : 0); return 0; }
     case kAssociate: {
-      assoc_request a; if (copy_in(rq, &a, sizeof a)) return EFAULT;
-      if (a.ssid_length > 32) return EINVAL;
+      assoc_parameters a{};
+      struct Clear { assoc_parameters &p; ~Clear() { memset(&p, 0, sizeof p); } } clear{a};
+      int error = copy_association(rq, a); if (error) return error;
+      if (!a.ssid_length || a.ssid_length > 32 || a.key_length > 64) return EINVAL;
+      // The station accepts open networks, WPA passphrases and a 32-byte PMK.
+      // Do not silently interpret an unknown cipher as a password or an open network.
+      if (a.key_length && !((a.key_cipher == 6 && a.key_length == 32) ||
+                            (a.key_cipher == 10 && a.key_length >= 8 && a.key_length <= 63))) return EINVAL;
       const bool hasBssid = (a.bssid[0] | a.bssid[1] | a.bssid[2] | a.bssid[3] | a.bssid[4] | a.bssid[5]) != 0;
-      const bool hasKey = a.key_length != 0 && a.key_length <= 64; char pass[65]; memset(pass, 0, sizeof pass); if (hasKey) memcpy(pass, a.key, a.key_length);
+      const bool hasKey = a.key_length != 0 && a.key_length <= 64;
+      if (!gPower) return ENETDOWN;
+      // Consult the physical snapshot too: a just-requested disconnect may not
+      // have drained yet, even though getters already report the link as down.
+      nw_wifi_status current; nw_wifi_status_get(&current);
+      if (current.state >= NW_STA_AUTH) {
+        const bool same = !gLinkSuppressed && current.ssid_len == a.ssid_length &&
+            !memcmp(current.ssid, a.ssid, a.ssid_length) && hasKey == gKeyed &&
+            (!hasBssid || !memcmp(current.bssid, a.bssid, sizeof a.bssid));
+        if (same) {
+          gUserJoin = true;
+          if (current.state == NW_STA_UP) {
+            log(6, "wifi-net: join already connected: completing request");
+            on_connect_done(NW_RES_OK);
+          } else log(6, "wifi-net: duplicate join awaits existing completion");
+          return 0;
+        }
+        log(6, "wifi-net: switching network: draining state %u", current.state);
+        int error = drain_disconnect(); if (error) return error;
+        if (!gPower) return ENETDOWN;
+      }
+      char pass[65]; memset(pass, 0, sizeof pass); if (hasKey) memcpy(pass, a.key, a.key_length);
       // cipher 6: the daemon already derived the pairwise master key (32 bytes); the module takes it as 64 hex digits
       unsigned keyLength = a.key_length;
       if (hasKey && a.key_cipher == 6 && a.key_length == 32) { static const char hex[] = "0123456789abcdef"; for (int i = 0; i < 32; i++) { pass[2 * i] = hex[a.key[i] >> 4]; pass[2 * i + 1] = hex[a.key[i] & 15]; } keyLength = 64; }
-      gAssocResult = kAssocFailed; gUserJoin = true;
-      log(6, "wifi-net: join: ssid length %u, bssid given %d, key length %u cipher %u", a.ssid_length, hasBssid, a.key_length, a.key_cipher);
+      gAssocResult = kAssocFailed; gUserJoin = true; gLinkSuppressed = false;
+      log(6, "wifi-net: join: layout %u, ssid length %u, bssid given %d, key length %u cipher %u", rq.req_len, a.ssid_length, hasBssid, a.key_length, a.key_cipher);
       gKeyed = hasKey; int r = nw_wifi_connect(a.ssid, a.ssid_length, hasBssid ? a.bssid : nullptr, hasKey ? pass : nullptr, hasKey ? keyLength : 0);
       memset(pass, 0, sizeof pass); memset(&a, 0, sizeof a);
       return r ? EINVAL : 0; }
-    case kDisassociate: case kDeauth: gUserJoin = true; log(6, "wifi-net: leave"); nw_wifi_disconnect(); post_link(false); return 0;
+    case kDisassociate: case kDeauth: log(6, "wifi-net: leave"); disconnect_user(); return 0;
     case kScanCacheClear: case kLocale: case kCountryCode: case kPowerSave: case kAuthType: case kCipherKey: return 0;
     default: return EOPNOTSUPP;
     }
@@ -318,7 +425,7 @@ int apple80211(bool set, apple80211req &rq) {
   case kPower: w[0] = 1; w[1] = 1; w[2] = gPower ? 1 : 0; return copy_out(rq, w, 24);
   case kState: return answer_value(rq, static_cast<uint32_t>(gPower ? map_state(st.state) : 0));
   case kOpMode: return answer_value(rq, 1);   // station
-  case kAuthType: w[0] = 1; w[1] = 1; w[2] = gKeyed ? 0x8 : 0; return copy_out(rq, w, 12);   // {version, lower: open system, upper: WPA2 personal or none}
+  case kAuthType: w[0] = 1; w[1] = 1; w[2] = gKeyed ? 0x10 : 0; w[3] = 0; return copy_out(rq, w, 16);   // {version, lower: open system, upper: WPA2 personal, extension}
   case kPowerSave: return answer_value(rq, 0);
   case kCardCaps: {   // a bitmap, bit n in byte n / 8: AES, AES-CCM, power management, short slot and preamble, WPA2, WME, short guard interval at 20 MHz
     static const uint8_t has[] = { 2, 3, 6, 9, 10, 14, 17, 19 };
@@ -366,12 +473,13 @@ errno_t if_ioctl(ifnet_t, unsigned long cmd, void *data) {
     // every request with its answer, for the first few hundred; then a type's first one only
     static unsigned shown; const int type = rq->req_type; const bool first = type >= 0 && type < 256 && !(gLogged[type / 32] & (1u << (type % 32)));
     if (type >= 0 && type < 256) gLogged[type / 32] |= 1u << (type % 32);
-    if (shown < 300 || first) { ++shown; log(6, "wifi-net: request %u: type %d %s len %u val %d -> %d (len %u val %d)", shown, type, cmd == SIOCSA80211 ? "set" : "get", len, val, e, rq->req_len, rq->req_val); }
+    const bool joinState = type == kAssociate || type == kAssociateResult || type == kAuthType || type == kState || type == kDisassociate;
+    if (shown < 300 || first || joinState) { ++shown; log(6, "wifi-net: request %u: type %d %s len %u val %d -> %d (len %u val %d)", shown, type, cmd == SIOCSA80211 ? "set" : "get", len, val, e, rq->req_len, rq->req_val); }
     return e;
   }
   case SIOCGIFMEDIA: {
     struct ifmediareq *m = static_cast<struct ifmediareq *>(data);
-    nw_wifi_status st; nw_wifi_status_get(&st);
+    nw_wifi_status st; visible_status(st);
     // the framework lists wireless interfaces by this media type
     m->ifm_current = IFM_IEEE80211 | IFM_AUTO; m->ifm_mask = 0; m->ifm_status = IFM_AVALID | (st.state == NW_STA_UP ? IFM_ACTIVE : 0);
     m->ifm_active = IFM_IEEE80211 | IFM_AUTO; m->ifm_count = 1;
