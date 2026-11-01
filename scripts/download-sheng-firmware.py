@@ -15,15 +15,22 @@ import urllib.request
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
+directory = ROOT / '.cache/firmware/sheng'
 BOARD = Path(os.environ.get('UNIXNU_DEVICE') or ROOT) / 'board.toml'
 image = tomllib.load(open(BOARD, 'rb'))['firmware']['image']
 URL, MD5 = image['url'], image['md5']
+retained = directory / 'porting-inputs.json'
+if retained.is_file():
+    import json
+    record = json.loads(retained.read_text())
+    if record.get('archive_deleted') and record.get('source_url') == URL and record.get('archive_sha256') == image['sha256']:
+        print(f'firmware inputs already extracted from {URL.rsplit("/", 1)[1]}')
+        raise SystemExit(0)
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--connections', type=int, default=32)
 args = parser.parse_args()
 if not 1 <= args.connections <= 64:
     parser.error('Use between 1 and 64 connections')
-directory = ROOT / '.cache/firmware/sheng'
 directory.mkdir(parents=True, exist_ok=True)
 target = directory / URL.rsplit('/', 1)[1]
 partial = target.with_suffix('.tgz.part')
