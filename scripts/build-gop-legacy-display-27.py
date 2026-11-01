@@ -383,8 +383,8 @@ run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--global
 # virtual keeps its real name and pointer-authentication discriminator), linked against the original IOHIDDevice of this fileset.
 DEVICE = Path(os.environ.get('UNIXNU_DEVICE') or ROOT.parents[5] / 'UniXNU-sheng')
 # The UniXNU checkout's copy: it reads the OS profile next to it.
-print(run(['python3', ROOT.parents[4] / 'scripts/build-sheng-source-drivers.py', '--tree', ROOT, '--device', DEVICE,
-           '--hid-source', ROOT.parents[3] / 'driver-sources/IOHIDFamily'], text=True), end='')
+# The HID source is the tree's refer link (a clean pinned clone of the feed), not a hand-placed copy.
+print(run(['python3', ROOT.parents[4] / 'scripts/build-sheng-source-drivers.py', '--tree', ROOT, '--device', DEVICE], text=True), end='')
 SRC = ROOT / 'build/sheng-source-drivers'
 hid_abi = json.loads(Path(__file__).resolve().with_name('hid-device-24A446.json').read_text())
 hid_slots = [(int(t, 16), int(d, 16)) for t, d in hid_abi['slots']]
