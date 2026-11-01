@@ -13,6 +13,16 @@ on:
         type: choice
         options: ["27", "26", "17"]
         default: "27"
+      init_data:
+        description: "Create a NEW installation seed if no saved seed exists (iPadOS 27 only)"
+        type: boolean
+        default: false
+      data_seed_url:
+        description: "Optional original data.dbr URL for an existing installation; otherwise use the saved cache"
+        type: string
+      data_seed_sha256:
+        description: "Required SHA-256 when data_seed_url is supplied"
+        type: string
 
 permissions:
   contents: read
@@ -24,7 +34,7 @@ concurrency:
 jobs:
   package:
     runs-on: macos-26
-    timeout-minutes: 180
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,6 +43,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: UniXNU/UniXNU
+          ref: 474cfeeb4e35b3fc91ec98cd2bb54e1ab25389b8 # startup pipeline repair
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4
@@ -42,7 +53,14 @@ jobs:
           submodules: recursive
       - name: tools
         run: |
-          brew install dtc llvm lld cmake mtools blacktop/tap/ipsw
+          brew install dtc llvm lld cmake mtools ninja glslang shaderc spirv-tools bison pkgconf rustup blacktop/tap/ipsw
+          {
+            echo "$HOME/.cargo/bin"
+            echo "/opt/homebrew/opt/llvm/bin"
+            echo "/opt/homebrew/opt/lld/bin"
+            echo "/opt/homebrew/opt/bison/bin"
+          } >> "$GITHUB_PATH"
+          rustup toolchain install 1.98.0 --profile minimal --component rust-src
           # Fail fast, naming the tool, before forty minutes of build.
           ok=1
           for t in clang xcodebuild make git ninja cmake dtc fdtget fdtput aea compression_tool \
@@ -61,12 +79,78 @@ jobs:
             echo 'Set the repository secret UNIXNU_UNIQUE_CHIP_ID: the platform seed of the device, 8 hex digits.' >&2
             exit 1
           fi
+      - name: seed cache identity
+        id: seed-key
+        env:
+          SEED: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, os
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write('key=data-seed-v1-' + hashlib.sha256(os.environ['SEED'].encode()).hexdigest()[:16] + '\n')
+          PY
+      - uses: actions/cache/restore@v4
+        id: data-cache
+        if: inputs.os == '27'
+        with:
+          path: |
+            UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr
+            UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/inputs.json
+          key: ${{ steps.seed-key.outputs.key }}-${{ inputs.os }}
+      - name: prepare preserved Data seed
+        if: inputs.os == '27'
+        env:
+          INIT_DATA: ${{ inputs.init_data }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, urllib.request
+          inputs = json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text())['inputs']
+          path = pathlib.Path('UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr')
+          url, digest = inputs.get('data_seed_url', ''), inputs.get('data_seed_sha256', '').lower()
+          if url:
+              print('::add-mask::' + url)
+              if not url.startswith('https://') or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
+                  raise SystemExit('A seed URL requires HTTPS and its SHA-256')
+              with urllib.request.urlopen(url, timeout=120) as source:
+                  data = source.read(64 * 1024 * 1024 + 1)
+              if len(data) > 64 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != digest:
+                  raise SystemExit('Seed size or SHA-256 mismatch')
+              if path.exists() and path.read_bytes() != data:
+                  raise SystemExit('Saved seed differs; preserve and inspect it instead of replacing this installation')
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_bytes(data)
+          if not path.is_file() and os.environ['INIT_DATA'] != 'true':
+              raise SystemExit('No saved seed. Supply the ORIGINAL seed for an existing installation, or select init_data for a FIRST installation')
+          PY
       - name: package
         working-directory: device
         env:
           UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
           GITHUB_TOKEN: ${{ github.token }}
-        run: scripts/package.sh --os "${{ inputs.os }}" --uefi ../uefi-sheng
+          INIT_DATA: ${{ inputs.init_data }}
+          OS_PROFILE: ${{ inputs.os }}
+        run: |
+          args=(--os "$OS_PROFILE" --uefi ../uefi-sheng)
+          if [ "$OS_PROFILE" = 27 ] && [ "$INIT_DATA" = true ]; then
+            args+=(--init-data)
+          fi
+          scripts/package.sh "${args[@]}"
+      - uses: actions/cache/save@v4
+        if: always() && inputs.os == '27' && steps.data-cache.outputs.cache-hit != 'true' && hashFiles('UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr') != ''
+        with:
+          path: |
+            UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr
+            UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/inputs.json
+          key: ${{ steps.seed-key.outputs.key }}-${{ inputs.os }}
+      - name: installation seed backup
+        if: always() && inputs.os == '27' && hashFiles('UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: installation-seed-${{ inputs.os }}
+          retention-days: 1
+          path: |
+            UniXNU/out/sheng/*/*/runtime/data.dbr
+            UniXNU/out/sheng/*/*/runtime/inputs.json
       - name: images
         uses: actions/upload-artifact@v4
         with:
