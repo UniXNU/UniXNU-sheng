@@ -17,7 +17,7 @@
 
 ["kernel"]
 "defconfig" = "sheng_ipados27_defconfig"
-"archives" = ["build-corecrypto-14.py", "build-corecrypto-14.py --namespace", "component:ArmDTPlatform", "component:ArmCpu", "build-libpthread-kernel.py", "component:ShengUfs", "build-sheng-source-storage.py --policy-dir scripts/policies/ipados-27.0.1-24A446", "component:RamBlock", "component:Adreno740", "fetch-sheng-dts.py", "fetch-adreno-inputs.py", "prepare-sheng-gmu.py", "prepare-sheng-gpu-smmu.py", "prepare-sheng-gmu-votes.py", "build-adreno740-kits.py", "build-adreno740-accelerator.py", "component:AppleKeyStoreState", "build-gop-legacy-display-27.py", "build-fileset-release-reference.py --tree ."]
+"archives" = ["build-corecrypto-14.py", "build-corecrypto-14.py --namespace", "component:ArmDTPlatform", "component:ArmCpu", "build-libpthread-kernel.py", "component:ShengUfs", "build-sheng-source-storage.py --policy-dir scripts/policies/ipados-27.0.1-24A446", "component:RamBlock", "component:Adreno740", "fetch-sheng-dts.py", "fetch-adreno-inputs.py", "prepare-sheng-gmu.py", "prepare-sheng-gpu-smmu.py", "prepare-sheng-gmu-votes.py", "build-adreno740-kits.py", "build-adreno740-accelerator.py", "component:AppleKeyStoreState", "build-gop-legacy-display-27.py", "build-fileset-release-reference.py --tree . --lto"]
 "config_fragments" = ["arch:configs/common.config", "os:configs/ipados.config"]
 "patch_series" = ["arch:patches/xnu/series", "soc:patches/xnu-12377/series", "os:patches/xnu/series", "device:patches/xnu-12377/series"]
 
@@ -57,7 +57,18 @@
 "dram_size" = "0x80000000"
 "skip_setup_tool" = "scripts/seed-data-skip-setup.py"
 "panic_screen" = true
-"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "offline-key-events=1", "sheng-aks=1", "offline-hid-input=1", "offline-hid-home=1", "sheng-touch=4", "sheng-touch-hid=1", "sheng-buttons=1"]
+"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "offline-key-events=1", "sheng-aks=1", "offline-hid-input=1", "offline-hid-home=1", "sheng-touch=4", "sheng-touch-hid=1", "sheng-buttons=1", "sheng-log=1", "sheng-smp=1", "armcpu-spi-ipi=1", "armcpu-self-ipi=1", "sheng-data-persist=2", "sheng-adsp=2", "sheng-audio=12", "sheng-wifi=5", "sheng-backlight=1", "sheng-cpufreq=4", "sheng-gpu-power=9", "sheng-gpu-metal=1", "sheng-fb-gpu=1", "sheng-fb-bgra=1", "sheng-dpu-scanout=2", "sheng-no-lc=1", "sheng-vsync=120", "sheng-vsync-fixed=1", "sheng-gpu-dcvs=1", "sheng-disable-watchdogd=1", "sheng-lite=1", "sheng-gpu-addon=1"]
+
+[payload.runtime]
+tool = "scripts/build-boot-runtime.py"
+target = "ios27"
+build = "24A446"
+data_gib = 215
+skip_setup = true
+trust_components = ["StaticTrustCache", "Cryptex1,SystemTrustCache", "Cryptex1,AppTrustCache"]
+wallpapers = ["ipados27", "ipados27-floating"]
+audio_tool = "scripts/build-sheng-audio-hal.py"
+audio_target = "arm64e-apple-ios27.0"
 
 ["payload"."install"]
 "title" = "Install and boot"
@@ -159,7 +170,7 @@
 
 
 ["os_overrides"."ipados-17.7.11-21H461"]
-"remove" = ["payload.root_policies"]
+"remove" = ["payload.root_policies", "payload.runtime"]
 
 ["os_overrides"."ipados-26.5.2-23F84"."components"]
 "include" = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "ShengUfs", "VirtioMmioBlock", "RamBlock", "Adreno740", "AdrenoMetal", "GopFramebuffer", "ShengHidInput", "ShengNovatekTouch", "QcomGeniSpi", "AppleKeyStoreState", "XnuPrelink", "DarwinBoot", "VerifiedRoot", "ShengPreflight", "AirNir", "Ath12kWifi"]
@@ -177,4 +188,4 @@
 "root_match_volume_uuid" = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 
 ["os_overrides"."ipados-26.5.2-23F84"]
-"remove" = ["payload.install", "payload.root_policies"]
+"remove" = ["payload.install", "payload.root_policies", "payload.runtime"]
