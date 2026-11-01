@@ -26,10 +26,18 @@
 "config" = "sheng"
 "dsc" = "Platforms/Xiaomi/shengPkg/sheng.dsc"
 "fd" = "Build/shengPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
-"preflight" = ["scripts/fetch-sheng-dts.py", "scripts/check-sheng.py"]
+"preflight" = ["scripts/fetch-sheng-dts.py", "scripts/download-sheng-firmware.py", "scripts/extract-sheng-firmware.py --delete-archive", "scripts/import-sheng-uefi.py", "scripts/check-sheng.py"]
 "submodules" = ["Common/Mu", "Common/Mu_OEM_Sample", "Silicium-ACPI", "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl"]
 "patches" = ["Resources/MuPatches/Gic-Spurious.patch"]
 "packages" = ["{uefi}", "{uefi}/Platforms/Xiaomi", "{tree}/package", "{tree}/drivers/DarwinBoot", "{edk2}", "{uefi}/Common/Mu", "{uefi}/Common/Mu_OEM_Sample", "{uefi}/Silicon/Qualcomm", "{uefi}/Silicon/Silicium", "{uefi}/Silicium-ACPI", "{uefi}/Silicium-ACPI/Platforms/Xiaomi", "{uefi}/Silicium-ACPI/Silicon/Qualcomm"]
+
+["firmware"."image"]
+# The official fastboot archive the firmware inputs are extracted from (download-sheng-firmware.py,
+# extract-sheng-firmware.py); the archive itself is deleted after the extraction.
+"url" = "https://bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com/OS3.0.305.0.WNXMIXM/sheng_global_images_OS3.0.305.0.WNXMIXM_20260914.0000.00_16.0_global_31450b6677.tgz"
+"sha256" = "c6259e1c8dd89b5b16d086cbdda5d21083c2ca445dd4cde4c8917139f490c7ed"
+"md5" = "31450b6677d9e46edc4937c3f797c51d"
+"bytes" = 7609308281
 
 ["firmware"."defines"]
 "ENABLE_SECUREBOOT" = "1"

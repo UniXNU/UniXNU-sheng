@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Extract genuine sheng binary modules and generate local EDK II INF wrappers."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -17,8 +18,24 @@ image = firmware / 'porting-inputs/uefi.elf'
 if hashlib.sha256(image.read_bytes()).hexdigest() != record['sha256']:
     raise SystemExit('UEFI input differs from verified archive extraction')
 dump = image.with_name(image.name + '.dump')
+tool = ROOT / 'build/tools/uefiextract/uefiextract'
 if not dump.exists():
-    subprocess.run([str(ROOT / 'build/tools/uefiextract/uefiextract'), str(image), 'all'], check=True)
+    if not tool.is_file():
+        import hashlib
+        import urllib.request
+        import zipfile
+        URL = 'https://github.com/LongSoft/UEFITool/releases/download/A76/UEFIExtract_NE_A76_universal_mac.zip'
+        PINNED = 'f3c5ca9402df3c14b28242dcd04b527791a12c1c0bf3c1cbbb3d1a0445168ec5'
+        with urllib.request.urlopen(URL, timeout=60) as response:
+            blob = response.read()
+        if hashlib.sha256(blob).hexdigest() != PINNED:
+            raise SystemExit('UEFIExtract download differs from the pinned A76 build')
+        tool.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+            with tool.open('wb') as target:
+                shutil.copyfileobj(archive.open('UEFIExtract'), target)
+        tool.chmod(0o755)
+    subprocess.run([str(tool), str(image), 'all'], check=True)
 output = firmware / 'uefi-binaries'
 output.mkdir(exist_ok=True)
 modules = []
@@ -121,9 +138,15 @@ manifest = {'source_sha256': record['sha256'], 'source_version': 'OS3.0.305.0.WN
 stock_config = output / 'RawFiles/uefiplat.cfg'
 if stock_config.exists():
     shutil.copyfile(stock_config, firmware / 'uefiplat.cfg')
-link = ROOT / 'uefi-sheng/Binaries/sheng'
-if not link.exists() and not link.is_symlink():
-    link.symlink_to(os.path.relpath(output, link.parent), target_is_directory=True)
-elif not link.is_symlink() or link.resolve() != output:
-    raise SystemExit('Preserve existing Binaries/sheng; generated inputs are in the cache')
+# EDK II metadata does not follow a symlinked package directory: place the generated tree as a real
+# directory in the firmware checkout (UNIXNU_UEFI; the release sets it for its scripts).
+uefi = Path(os.environ.get('UNIXNU_UEFI') or ROOT / 'uefi-sheng')
+link = uefi / 'Binaries/sheng'
+if link.is_symlink():
+    link.unlink()
+if link.exists():
+    raise SystemExit(f'{link} already holds content; move it away first')
+link.parent.mkdir(parents=True, exist_ok=True)
+shutil.copytree(output, link, symlinks=True)
+print(f'Binaries/sheng <- {output}')
 print(f'{len(modules)} AArch64 modules; {len(raw_files)} raw files; original DEPEX preserved')
