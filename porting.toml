@@ -191,10 +191,10 @@ paths = ["drivers/Ath12kWifi", "package/*Wifi*", "package/MhiBoot*", "scripts/*w
 inputs = ["Ath12k device on PCIe, BAR windows, MSI routing, DMA callbacks, firmware, MHI and QRTR services."]
 configuration = ["Select Ath12kWifi. build-gop-legacy-display.py compiles its objects through build-ath12k-wifi.py.", "The 17 and 27 payload defaults set sheng-wifi=5; WifiProbe and the UFS driver read it.", "dts/sheng.dts exports the WCN7850 node as /arm-io/wlan through unixnu,adt-name, before launchd checks the stock wifid job."]
 procedure = ["Verify PCIe enumeration and MSI delivery before MHI startup.", "Record firmware startup, scan, association, address configuration and bidirectional packet delivery separately."]
-findings = ["iPadOS 27 (24A446) launchd skips com.apple.wifid when its _LimitLoadToDeviceTree list has no matching node. The kernel join.txt path and /chosen/mac-address-wifi0 work independently, so traffic and a readable MAC do not establish that wifid started. The board DTS now exports wlan; regenerate payload and boot image after this change.", "The reusable Wi-Fi stack consumes board callbacks; PCIe and the OS network interface are owned by the device integration.", "MHI startup and network traffic are separate completion points.", "WifiNet includes sys/kpi_mbuf.h, the KPI an SDK build may use; sys/mbuf.h is not reachable from one. WifiProbe holds its copy of the RPMh command database and its arena block table in memory allocated at start, so neither sits in the kernel __DATA.", "build-ath12k-wifi.py runs tools/fetch-sources.sh of Ath12kWifi before tools/prepare.sh, so a clean checkout fetches the pinned Linux v7.0.14 sparse tree the module compiles."]
+findings = ["Settings can toggle Wi-Fi and list SSIDs on 24A446. Manual WPA2 association and DHCP have device confirmation. WifiNet supports 592-byte and 656-byte association requests, publishes explicit disconnect events, suppresses stale connection state, completes repeated joins and drains teardown before switching networks. Authentication queries report WPA2 personal as 0x10. Host regression and the kernel/payload/boot-image build pass. See reports/ipados27-wifi-association-2026-11-02.md.", "The board DTS exports WCN7850 as wlan to satisfy the stock wifid device-tree condition.", "The reusable Wi-Fi stack consumes board callbacks; PCIe and the OS network interface are owned by the device integration.", "MHI startup and network traffic are separate completion points.", "WifiNet uses sys/kpi_mbuf.h for the SDK mbuf interface. WifiProbe allocates its RPMh command database and arena block table at startup.", "build-ath12k-wifi.py fetches the pinned Linux v7.0.14 sparse tree before preparing Ath12kWifi."]
 completion = ["Scanning, association, address configuration and sustained receive/transmit traffic pass with the selected firmware."]
-limits = ["The iPadOS 27 wlan-node fix has host validation only; wifid startup, the Settings switch and scanning await a device boot.", "Throughput is low for an 80 MHz link. The system cannot store the network password, so the network is not remembered."]
-next_action = ["Boot the 27 image without sheng-autoreset, verify wifid starts and Settings can enable Wi-Fi and scan, then capture logs if the control path fails.", "Raise throughput on the 80 MHz link and let the system store the network password."]
+limits = ["The current state changes await device validation of joining, network switching, the Wi-Fi icon and password-sheet dismissal. Credential persistence, group-key disconnects and authentication timeouts remain open.", "Throughput is low for an 80 MHz link."]
+next_action = ["Validate joining, network switching, power-off icon state and password-sheet dismissal on the device.", "Measure local throughput, firmware rates, retries and aggregation; see reports/ipados27-wifi-association-2026-11-02.md."]
 
 [[area.evidence]]
 kind = "source"
@@ -211,7 +211,7 @@ result = "Firmware c7-00108, WPA2-Personal access point on 5 GHz, 80 MHz, -73 dB
 [[area.evidence]]
 kind = "source"
 reference = "dts/sheng.dts"
-result = "WCN7850 is exported as wlan to satisfy the stock 24A446 wifid device-tree condition. The default 27 payload enables sheng-wifi=5. Device validation is pending."
+result = "WCN7850 is exported as wlan to satisfy the stock 24A446 wifid device-tree condition. The default 27 payload enables sheng-wifi=5. Settings can toggle Wi-Fi and list SSIDs."
 
 [[area]]
 id = "audio"
