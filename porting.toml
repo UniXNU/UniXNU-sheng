@@ -27,8 +27,8 @@ result = "Implementation and configuration described in this section"
 [[area]]
 id = "firmware"
 status = "implemented"
-components = ["ShengPreflight", "scripts/extract-sheng-firmware.py", "scripts/import-sheng-uefi.py"]
-paths = ["proprietary-files.txt", "scripts/extract-files.py", "scripts/gen-touch-firmware.py", "scripts/fetch-sheng-dts.py", "firmware/**", "scripts/download-sheng-firmware.py"]
+components = ["ShengPreflight"]
+paths = ["proprietary-files.txt", "scripts/extract-files.py", "scripts/gen-touch-firmware.py", "scripts/fetch-sheng-dts.py", "scripts/download-sheng-firmware.py", "scripts/extract-sheng-firmware.py", "scripts/import-sheng-uefi.py", "firmware/**"]
 inputs = ["uefi-sheng firmware, stock firmware DTB, GOP handoff, PSCI SMC interface and vendor firmware inventory."]
 configuration = ["firmware.dsc = Platforms/Xiaomi/shengPkg/sheng.dsc; firmware.config = sheng.", "proprietary-files.txt records input paths and provenance.", "The firmware DSC and FDF embed UniXNU, UniXNUDxe, DarwinBoot, UniXNURamDiskDxe, DiskIoDxe and FAT support."]
 procedure = ["Run ./unixnu build firmware -D ../UniXNU-sheng --uefi ../uefi-sheng.", "Record the firmware commit, output FD and handoff memory map before a boot attempt.", "Build the payload, then run ./unixnu bootimg with the firmware DTB. Inspect boot.json ramdisk_bytes and the required firmware modules."]
