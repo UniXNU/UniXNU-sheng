@@ -19,10 +19,15 @@ states = list(directory.glob('*.tgz.ranges.json'))
 if len(states) != 1:
     raise SystemExit('Expected one firmware download manifest')
 download = json.loads(states[0].read_text())
-if not download.get('verified') or download.get('md5') != '31450b6677d9e46edc4937c3f797c51d':
-    raise SystemExit('Download must finish its complete MD5 verification first')
+import os
+import tomllib
+board = Path(os.environ.get('UNIXNU_DEVICE') or ROOT) / 'board.toml'
+image = tomllib.load(open(board, 'rb'))['firmware']['image']
+if (not download.get('verified') or download.get('url') != image['url'] or
+        download.get('md5') != image['md5'] or download.get('sha256') != image['sha256']):
+    raise SystemExit('Download must finish its verification against board.toml [firmware.image] first')
 archive = directory / download['url'].rsplit('/', 1)[1]
-if archive.stat().st_size != download['bytes']:
+if archive.stat().st_size != image['bytes']:
     raise SystemExit('Archive size changed after verification')
 output = directory / 'porting-inputs'
 output.mkdir(exist_ok=True)
