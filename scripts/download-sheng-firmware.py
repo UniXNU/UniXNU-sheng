@@ -12,11 +12,12 @@ import threading
 import time
 import urllib.request
 
-URL = ('https://bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com/'
-       'OS3.0.305.0.WNXMIXM/'
-       'sheng_global_images_OS3.0.305.0.WNXMIXM_20260914.0000.00_16.0_global_31450b6677.tgz')
-MD5 = '31450b6677d9e46edc4937c3f797c51d'
+import tomllib
+
 ROOT = Path(__file__).resolve().parents[1]
+BOARD = Path(os.environ.get('UNIXNU_DEVICE') or ROOT) / 'board.toml'
+image = tomllib.load(open(BOARD, 'rb'))['firmware']['image']
+URL, MD5 = image['url'], image['md5']
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--connections', type=int, default=32)
 args = parser.parse_args()
@@ -135,6 +136,8 @@ with partial.open('rb') as archive:
         sha256.update(blob)
 if md5.hexdigest() != MD5:
     raise SystemExit(f'Archive MD5 mismatch: {md5.hexdigest()}')
+if sha256.hexdigest() != image['sha256']:
+    raise SystemExit(f'Archive SHA-256 mismatch: {sha256.hexdigest()}')
 state.update(md5=md5.hexdigest(), sha256=sha256.hexdigest(), verified=True)
 persist()
 if partial != target:
