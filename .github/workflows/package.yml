@@ -39,6 +39,7 @@ jobs:
         with:
           repository: UniXNU/uefi-sheng
           path: uefi-sheng
+          submodules: recursive
       - name: tools
         run: |
           brew install dtc llvm lld cmake mtools blacktop/tap/ipsw
