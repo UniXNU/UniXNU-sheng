@@ -49,7 +49,7 @@ jobs:
             command -v "$t" >/dev/null || { echo "missing tool: $t"; ok=0; }
           done
           for t in lld-link llvm-lib llvm-rc llvm-nm llvm-objcopy; do
-            ls "/opt/homebrew/opt/llvm/bin/$t" "/opt/homebrew/opt/lld/bin/$t" >/dev/null 2>&1 || { echo "missing tool: $t"; ok=0; }
+            [ -f "/opt/homebrew/opt/llvm/bin/$t" ] || [ -f "/opt/homebrew/opt/lld/bin/$t" ] || { echo "missing tool: $t"; ok=0; }
           done
           [ "$ok" = 1 ]
       - name: platform seed
