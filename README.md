@@ -103,3 +103,7 @@ The documentation site is maintained in UniXNU:
 
 Report build results and device boot, storage, display, input, and GPU
 observations separately, with source revisions and commands.
+
+## GPU frame diagnostics
+
+`sheng-gpu-trace=1 sheng-gpu-pixels=1 sheng-diag-export=180` exports frame events and completed pixel samples at 180 seconds of boot-log time. It does not schedule a reboot. `scripts/read-sheng-log.py` extracts the files and runs `scripts/decode-gpu-trace.py`; decoded events, explicit command/fence links and raw pixel previews appear under `diag/gpu`. See [GPU frame diagnostics](https://unixnu.com/porting/gpu-diagnostics).

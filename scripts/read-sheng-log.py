@@ -70,6 +70,21 @@ def unpack_export(blob, run, name='export'):
         raise SystemExit('export blob has trailing bytes')
     (out / 'manifest.json').write_text(json.dumps(dict(directory=root, files=files, blob_sha256=hashlib.sha256(blob).hexdigest()), indent=1) + '\n')
     print(f'{out}: {count} files, {sum(f["size"] for f in files)} bytes from {root}')
+    if (out / 'files/gpu.trace.bin').exists():
+        import subprocess
+        subprocess.run([sys.executable, str(Path(__file__).with_name('decode-gpu-trace.py')),
+                        str(out / 'files'), '--out', str(out / 'gpu')], check=True)
+
+
+    if (out/'files/kernel.latency.bin').exists():
+        import subprocess
+        command=[sys.executable,str(Path(__file__).with_name('decode-sheng-latency.py')),
+                 str(out/'files/kernel.latency.bin'),'--out',str(out/'latency.jsonl')]
+        for home in ('mobile','root'):
+            frames=out/f'files/private/var/{home}/Library/Caches/com.apple.backboardd/m2v/frames.trace'
+            if frames.exists():command+=['--frames',str(frames)];break
+        subprocess.run(command,check=True)
+
 
 
 def header(blob):

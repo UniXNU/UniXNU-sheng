@@ -1178,7 +1178,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                      native_ufs_dpu_live ? native_ufs_dpu_live(0) : 0xdead, native_ufs_dpu_live ? native_ufs_dpu_live(1) : 0xdead);
     if (&native_legacy_direct) {
       const volatile uint32_t *d = native_legacy_direct;
-      n += snprintf(row + n, sizeof row - (size_t)n, " | flips %u mapped %u mapfail %u latch>50ms %u max %uus mean %uus released %u copied %u to boot %u | held for the GPU %u total %uus longest %uus gave up %u",
+      n += snprintf(row + n, sizeof row - (size_t)n, " | flips %u mapped %u mapfail %u latch>50ms %u max %uus mean %uus released %u copied %u to boot %u | held for the GPU %u total %uus longest %uus waits>=250ms %u",
                     d[0], d[1], d[2], d[3], d[4], d[0] ? d[5] / d[0] : 0, d[6], d[7], d[8], d[9], d[10], d[11], d[12]);
     }
     at = put(out, at, cap, row, sizeof row);
@@ -1738,10 +1738,12 @@ static void writer(void *arg, wait_result_t result) {
   // sheng-diag=1 turns every diagnostic on: the kernel's rings and samplers (started from boot_diag_shot_tick), the scene screenshots and
   // the export of the diagnostic files, once, 25 s before sheng-autoreset (sheng-diag-export=<seconds of log time> moves it). Without it
   // this writer keeps the log rows only.
-  uint32_t diag = 0, diag_at = 0;
+  uint32_t diag = 0, diag_at = 0, gpu_trace = 0;
+  PE_parse_boot_argn("sheng-gpu-trace", &gpu_trace, sizeof gpu_trace);
   PE_parse_boot_argn("sheng-diag", &diag, sizeof diag);
+  if (gpu_trace == 1) diag = 1;
   if (diag == 1 && &boot_diag_scan && &boot_diag_stream && !PE_parse_boot_argn("sheng-diag-export", &diag_at, sizeof diag_at))
-    diag_at = autoreset > 25 ? autoreset - 25 : 0;
+    diag_at = autoreset > 25 ? autoreset - 25 : gpu_trace == 1 ? 180 : 0;
   if (diag != 1) diag_at = 0;
   uint32_t errors = 0;
   boot_log_live = &h;

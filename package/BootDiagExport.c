@@ -29,20 +29,32 @@ static size_t diag_note_used;
 volatile uint32_t boot_diag_files, boot_diag_skipped, boot_diag_errors;
 volatile uint32_t boot_diag_alloc;   // the scan's allocations that failed: 1 the file table, 2 the note
 
-// In the order of their worth: the format strings of earlier runs are on the host already, and the crash reports are rarely needed.
+#include "BootLatencyTrace.h"
+static void *latency_data;static uint32_t latency_size;
+enum {LatencyCapacity=16+524288*72};
+
+// In the order of their worth: the format strings of earlier runs are on the host already, with crash reports ahead of framework and unified-log files.
 // A root may be a single file: the render server's shader priming state (PrimeShaders.h) in its persistent cache directory, small and
 // the only record of how far priming got (backboardd runs as mobile; the root home is the fallback).
 static const char *const diag_roots[] = {
   "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/prime.log",
   "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/prime-bad",
+  "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/prime-done",
+  "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/prime-fn",
+  "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/prime-current",
   "/private/var/root/Library/Caches/com.apple.backboardd/m2v/prime.log",
   "/private/var/root/Library/Caches/com.apple.backboardd/m2v/prime-bad",
+  "/private/var/root/Library/Caches/com.apple.backboardd/m2v/prime-done",
+  "/private/var/root/Library/Caches/com.apple.backboardd/m2v/prime-fn",
+  "/private/var/root/Library/Caches/com.apple.backboardd/m2v/prime-current",
   "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/shadow.log",
   "/private/var/root/Library/Caches/com.apple.backboardd/m2v/shadow.log",
   "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/frames.trace",
   "/private/var/root/Library/Caches/com.apple.backboardd/m2v/frames.trace",
   "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/cpu.profile",
   "/private/var/root/Library/Caches/com.apple.backboardd/m2v/cpu.profile",
+  "/private/var/mobile/Library/Logs/CrashReporter",
+  "/private/var/root/Library/Logs/CrashReporter",
   // Safari's built-in data lists (int-269: a nil built-in list URL aborted MobileSafari): what a directory read of the framework
   // returns next to what a lookup of each file finds. Small, so they go before the log.
   "/System/Library/PrivateFrameworks/SafariShared.framework/UserAgentQuirks.plist",
@@ -56,7 +68,6 @@ static const char *const diag_roots[] = {
   "/System/Library/PrivateFrameworks/SafariCore.framework",
   "/private/var/db/diagnostics",
   "/private/var/db/uuidtext",
-  "/private/var/mobile/Library/Logs/CrashReporter",
 };
 extern volatile uint64_t native_gop_virtual __attribute__((weak_import));
 extern void native_legacy_direct_snapshot(void) __attribute__((weak_import));   // direct scanout: copies the surface on screen into the boot memory
@@ -101,6 +112,13 @@ enum {DiagRings = 4194304};
 static char *rings_text;
 static size_t rings_len;
 static uint32_t rings_keep, shots_kept, ipc_keep;
+extern uint32_t native_gpu_trace_snapshot(void *,uint32_t) __attribute__((weak_import));
+extern uint32_t native_gpu_pixel_snapshot(void *,uint32_t) __attribute__((weak_import));
+static void *gpu_trace_data[2];
+static uint32_t gpu_trace_size[2];
+static const char *gpu_trace_name[2]={"gpu.trace.bin","gpu.pixels.bin"};
+static const uint32_t gpu_trace_capacity[2]={32+(16384+4096+24*4096)*120,16+24*(112+65536)};
+
 
 static void note(const char *text, const char *path, int error) {
   if (!diag_note) return;
@@ -210,7 +228,7 @@ struct cs_ptime {uint64_t abs; int32_t pid; uint32_t user_us, system_us; int16_t
 extern struct cs_ptime *boot_ptime_ring __attribute__((weak_import));
 extern const char *boot_ptime_name(int) __attribute__((weak_import));   // the name the CPU time pass saw: a process gone by the export has none
 extern volatile uint32_t boot_ptime_count __attribute__((weak_import));
-enum {PtimeRing = 131072};
+enum {PtimeRing = 524288};
 static uint32_t ptime_kept, ptime_keep;
 // User client calls (HidInputProbe.cpp), kernel.ioc.bin: header "IOC1", total, kept, 0; then 32-byte records {u64 microseconds entered,
 // u32 microseconds waiting for the client's lock, u32 microseconds in the method, u32 selector, i32 pid, u64 class name address}; the
@@ -274,7 +292,7 @@ extern struct cs_rec *boot_client_ring __attribute__((weak_import));
 extern volatile uint32_t boot_client_count __attribute__((weak_import));
 extern struct cs_target boot_client_targets[32] __attribute__((weak_import));
 extern volatile unsigned boot_client_target_count __attribute__((weak_import));
-enum {ClientRing = 131072};
+enum {ClientRing = 524288};
 static uint32_t client_kept, client_keep;
 struct ipc_rec {uint64_t abs; uint32_t id; uint32_t from;};
 static struct ipc_rec *ipc_ring;
@@ -308,6 +326,7 @@ static void *ipc_task_of(const char *want, int *pid_out) {
 
 static void ipc_trace_tick(void) {
   if (!&native_legacy_swapstat || native_legacy_swapstat[9] < 50) return;   // the home screen draws
+  boot_latency_start();
   if (&boot_client_sampler_start) boot_client_sampler_start();
   // Everything below allocates only now, once the home screen draws: nothing of this trace runs during startup.
   if (&sheng_contig_hook && !contig_ring) {
@@ -559,6 +578,23 @@ uint64_t boot_diag_scan(uint64_t budget) {
   diag_count = diag_skipped_count = 0; diag_note_used = 0; diag_note[0] = 0;
   const char *note_name = "diag-skipped.txt";
   uint64_t used = 8 + 4 + 1 + 4 + 24 + strlen(note_name) + DiagNote;   // head with root "/", the note file at its full size
+  latency_size=0;
+  if(!latency_data)latency_data=IOMallocAligned(LatencyCapacity,PAGE_SIZE);
+  if(latency_data) {
+    uint32_t n=boot_latency_snapshot(latency_data,LatencyCapacity);
+    if(n && used+24+strlen("kernel.latency.bin")+n<=budget){latency_size=n;used+=24+strlen("kernel.latency.bin")+n;}
+    else if(n)note("latency-budget","kernel.latency.bin",(int)n);
+  }
+  // Freeze the GPU data before scanning other files, and reserve its export budget first.
+  for(unsigned i=0;i<2;++i) {
+    gpu_trace_size[i]=0;
+    if((i==0 && !&native_gpu_trace_snapshot) || (i==1 && !&native_gpu_pixel_snapshot))continue;
+    if(!gpu_trace_data[i])gpu_trace_data[i]=IOMallocAligned(gpu_trace_capacity[i],PAGE_SIZE);
+    if(!gpu_trace_data[i]){note("gpu-allocate",gpu_trace_name[i],-1);continue;}
+    uint32_t n=i?native_gpu_pixel_snapshot(gpu_trace_data[i],gpu_trace_capacity[i]):native_gpu_trace_snapshot(gpu_trace_data[i],gpu_trace_capacity[i]);
+    if(n && used+24+strlen(gpu_trace_name[i])+n<=budget){gpu_trace_size[i]=n;used+=24+strlen(gpu_trace_name[i])+n;}
+    else if(n)note("gpu-budget",gpu_trace_name[i],(int)n);
+  }
   PE_Video video = {};
   shot_width = shot_height = 0;
   if (&native_gop_virtual && native_gop_virtual && !PE_current_console(&video) && video.v_depth == 32 && video.v_width >= 2 && video.v_height >= 2 &&
@@ -670,7 +706,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   if (!chunk) return -1;
   vfs_context_t ctx = vfs_context_kernel();
   int rc = emit("M2VCACH1", 8, arg);
-  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep + touch_keep + cpu_keep + ioc_keep + gpucall_keep + contig_keep + boalloc_keep + ptime_keep;
+  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep + touch_keep + cpu_keep + ioc_keep + gpucall_keep + contig_keep + boalloc_keep + ptime_keep + !!gpu_trace_size[0] + !!gpu_trace_size[1] + !!latency_size;
   if (!rc) rc = emit(&root_len, 4, arg);
   if (!rc) rc = emit("/", 1, arg);
   if (!rc) rc = emit(&count, 4, arg);
@@ -687,6 +723,20 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
       const uint32_t *in = (const uint32_t *)(uintptr_t)(native_gop_virtual + (uint64_t)y * 2 * video.v_rowBytes);
       for (uint32_t x = 0; x < shot_width; ++x) out[x] = live ? in[x * 2] : 0;
       rc = emit(chunk, row, arg);
+    }
+  }
+  for(unsigned i=0;i<2 && !rc;++i)if(gpu_trace_size[i]) {
+    rc=put_head(emit,arg,gpu_trace_name[i],0100644,0,0,gpu_trace_size[i]);
+    for(uint32_t at=0;at<gpu_trace_size[i] && !rc;) {
+      uint32_t n=gpu_trace_size[i]-at;if(n>65536)n=65536;
+      rc=emit((const char *)gpu_trace_data[i]+at,n,arg);at+=n;
+    }
+  }
+  if(!rc && latency_size) {
+    rc=put_head(emit,arg,"kernel.latency.bin",0100644,0,0,latency_size);
+    for(uint32_t at=0;at<latency_size && !rc;) {
+      uint32_t n=latency_size-at;if(n>65536)n=65536;
+      rc=emit((const char *)latency_data+at,n,arg);at+=n;
     }
   }
   if (!rc && rings_keep) {

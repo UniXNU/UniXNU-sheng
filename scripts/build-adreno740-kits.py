@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Add the GMU kit and firmware planner objects to the NativeAdreno archive."""
-import json, subprocess, sys
+import hashlib, json, subprocess, sys
 from pathlib import Path
 from kernel_target import TRIPLE
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +16,14 @@ sources += [ROOT / 'kits/AdrenoFirmware' / name for name in
 sources += sorted(p for p in (ROOT / 'kits/ArmSmmu4K').glob('ArmSmmu4K*.c'))
 sources += [ROOT / 'kits/AdrenoPM4/AdrenoPM4.c']
 objects = []
+trace_hash = hashlib.sha256()
+for path in sorted((ROOT / "drivers/Adreno740").glob("Native*")):
+    if path.is_file():
+        trace_hash.update(path.name.encode()); trace_hash.update(path.read_bytes())
+trace_id = trace_hash.hexdigest()[:16]
+(out / 'gpu-trace-build.json').write_text(json.dumps({
+    'source_sha256': trace_hash.hexdigest(), 'trace_source_id': trace_id, 'target': TRIPLE,
+}, indent=2)+'\n')
 sources += sorted(p for p in (ROOT / 'drivers/Adreno740').glob('NativeAdreno*.cpp')
                   if p.name not in ('NativeAdrenoClient.cpp', 'NativeAdrenoService.cpp', 'NativeAdrenoAccelerator.cpp'))
 # NativeAdrenoAccelerator.cpp is built staged by build-adreno740-accelerator.py (its initializer must not run at boot).
@@ -40,7 +48,7 @@ for source in sources:
         i += 1
     command += ['-I', str(ROOT / 'kits/sheng'), '-I', str(ROOT / 'kits/Sm8550Platform'), '-I', str(ROOT / 'kits/AdrenoFirmware'),
                 '-I', str(ROOT / 'build/sheng-gmu'), '-I', str(ROOT / 'build/sheng-gpu-smmu'), '-I', str(ROOT / 'kits/AdrenoPM4'), '-I', str(ROOT / 'kits/ArmSmmu4K'), '-I', str(ROOT / '.cache/xnu-work/osfmk'),
-                '-I', str(ROOT / 'drivers/Adreno740'), '-I', str(ROOT / 'build/adreno740/include'), '-Wall', '-Wextra', '-Werror',
+                '-DNATIVE_GPU_BUILD_ID=0x' + trace_id + 'ULL', '-I', str(ROOT / 'drivers/Adreno740'), '-I', str(ROOT / 'build/adreno740/include'), '-Wall', '-Wextra', '-Werror',
                 '-Wno-unused-parameter', '-Wno-incompatible-sysroot', '-Wno-c99-designator',
                 '-Wno-reorder-init-list', '-Wno-deprecated-enum-enum-conversion',
                 '-Wno-unnecessary-virtual-specifier']
