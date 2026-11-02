@@ -124,7 +124,7 @@ GPU_COUNTER_NAMES=('cp_clocks','uche_arbiter_stall','uche_latency_cycles','uche_
 def latency_analysis(rows):
     queues,running,dispatch,ipc_pending,ipc,reply_ports={}, {}, [], {}, [], {}
     counter_parts,previous,counters={},None,[]
-    faults={}
+    faults={};waits={};coverage=[]
     for row in rows:
         kind,pid,us,f=row['kind'],row['pid'],row['us'],row['fields']
         if kind==1:
@@ -173,15 +173,22 @@ def latency_analysis(rows):
                                       valid_end=not(interval['flags']&~1) and not(f['selector_mismatch']|f['unstable']))
             else:previous=None
             counters.append(result)
-        elif kind in (6,7,8,9,10,11,12):
+        elif kind in (6,7,8,9,10,11,12,25,26,27):
             fault=faults.setdefault((pid,f['fault']),dict(pid=pid,fault=f['fault'],registers={},frames={},stack={}))
             if kind in (7,8,10):
                 target= fault['registers' if kind==7 else 'frames' if kind==8 else 'stack']
                 prefix='x' if kind==7 else 'pc' if kind==8 else 'word'
                 target.update((f['first']+i,f[prefix+str(i)]) for i in range(4))
+            elif kind==26:fault.setdefault('images',[]).append(dict(**f,uuid=row.get('uuid')))
+            elif kind==25:fault[row['name']]=dict(**f,uuid=row.get('uuid'))
             else:fault[row['name']]=f
+        elif kind in (28,29,30,32):
+            wait=waits.setdefault((pid,f['capture']),dict(pid=pid,thread=row['thread'],capture=f['capture'],frames={},kernel={}))
+            if kind in (29,32):wait['frames' if kind==29 else 'kernel'].update((f['first']+i,f['pc'+str(i)]) for i in range(4))
+            else:wait[row['name']]=f
+        elif kind==31:coverage.append(dict(us=us,**f))
     return dict(ipc=ipc,dispatch=dispatch,gpu_counters=counters,faults=list(faults.values()),
-                pending_dispatch=len(queues),running_dispatch=len(running))
+                pending_dispatch=len(queues),running_dispatch=len(running),waits=list(waits.values()),wait_coverage=coverage)
 
 def latency_records(blob):
     if len(blob)<16:raise ValueError('short latency header')
