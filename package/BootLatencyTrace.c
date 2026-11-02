@@ -28,7 +28,7 @@ struct fault_slot {uint32_t state,pid;uint64_t id,us,tid,fp,sp,pc,lr,slide;task_
 static struct fault_slot *faults;
 static uint64_t fault_sequence;
 static struct bl_store store,critical;
-static struct bl_ipc_filter ipc_filter;
+static struct bl_ipc_filter *ipc_filter;
 static void record_as(uint32_t kind,uint32_t pid,uint64_t tid,uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f) {
  if(!__atomic_load_n(&store.slots,__ATOMIC_ACQUIRE))return;
  uint64_t ns=0;absolutetime_to_nanoseconds(mach_absolute_time(),&ns);
@@ -45,9 +45,9 @@ static void ipc_flow(const void *cookie,uint32_t id,void *task,uint32_t receiver
  uint64_t request=0;
  if(phase==1) {
   int sender_traced=task==sheng_ipc_trace_task || task==sheng_ipc_trace_task2;
-  bl_ipc_sent(&ipc_filter,(uintptr_t)cookie,id,sender_traced?(uintptr_t)reply:0,receiver!=3);
+  bl_ipc_sent(ipc_filter,(uintptr_t)cookie,id,sender_traced?(uintptr_t)reply:0,receiver!=3);
  }
- else if(phase==2 && !bl_ipc_received(&ipc_filter,(uintptr_t)cookie,id,(uintptr_t)port,&request))return;
+ else if(phase==2 && !bl_ipc_received(ipc_filter,(uintptr_t)cookie,id,(uintptr_t)port,&request))return;
  void *p=task ? get_bsdtask_info((task_t)task):NULL;
  boot_latency_record(phase,(uintptr_t)cookie,id,receiver,p?(uint32_t)proc_pid(p):0,(uintptr_t)destination,(uintptr_t)port);
  if(phase==1 && reply)boot_latency_record(13,(uintptr_t)cookie,phase,(uintptr_t)task,(uintptr_t)destination,(uintptr_t)port,(uintptr_t)reply);
@@ -144,6 +144,9 @@ void boot_latency_start(void) {
  struct bl_slot *slots=IOMallocAligned(sizeof(*slots)*BlCapacity,PAGE_SIZE);if(!slots)return;
  struct bl_slot *saved=IOMallocAligned(sizeof(*saved)*BlCriticalCapacity,PAGE_SIZE);
  if(!saved){IOFreeAligned(slots,sizeof(*slots)*BlCapacity);return;}
+ struct bl_ipc_filter *filter=IOMallocAligned(sizeof(*filter),PAGE_SIZE);
+ if(!filter){IOFreeAligned(saved,sizeof(*saved)*BlCriticalCapacity);IOFreeAligned(slots,sizeof(*slots)*BlCapacity);return;}
+ memset(filter,0,sizeof(*filter));ipc_filter=filter;
  memset(slots,0,sizeof(*slots)*BlCapacity);store.capacity=BlCapacity;
  memset(saved,0,sizeof(*saved)*BlCriticalCapacity);critical.slots=saved;critical.capacity=BlCriticalCapacity;
  faults=IOMallocAligned(sizeof(*faults)*FaultSlots,PAGE_SIZE);if(faults)memset(faults,0,sizeof(*faults)*FaultSlots);
@@ -165,7 +168,7 @@ uint32_t boot_latency_snapshot(void *out,uint32_t bytes) {
  }
  uint64_t ns=0;absolutetime_to_nanoseconds(mach_absolute_time(),&ns);
  rows[count++]=(struct bl_record){ns/1000,0,34,0,{total[1],kept[1],total[0],kept[0],
-  __atomic_load_n(&ipc_filter.unpaired,__ATOMIC_RELAXED),__atomic_load_n(&ipc_filter.untracked,__ATOMIC_RELAXED)}};
+  __atomic_load_n(&ipc_filter->unpaired,__ATOMIC_RELAXED),__atomic_load_n(&ipc_filter->untracked,__ATOMIC_RELAXED)}};
  uint32_t head[4]={0x3154414c,(uint32_t)(total[0]+total[1]+1),count,
   (uint32_t)(__atomic_load_n(&store.dropped,__ATOMIC_RELAXED)+__atomic_load_n(&critical.dropped,__ATOMIC_RELAXED))};
  memcpy(out,head,16);return 16+count*sizeof(struct bl_record);
