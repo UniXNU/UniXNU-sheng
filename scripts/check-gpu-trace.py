@@ -69,7 +69,7 @@ class TraceTests(unittest.TestCase):
             subprocess.run(['xcrun','clang++','-std=c++17','-fobjc-arc','-Wall','-Wextra','-Werror',
                             '-fsanitize=address,undefined',str(code/'drivers/AdrenoMetal/bridge/dispatch_trace_host.mm'),
                             '-framework','Foundation','-o',dispatch],check=True)
-            subprocess.run([dispatch],check=True);subprocess.run([dispatch,'unsupported'],check=True)
+            subprocess.run([dispatch],check=True);subprocess.run([dispatch,'unsupported'],check=True);subprocess.run([dispatch,'item-version'],check=True)
 
     def test_counter_plan_matches_pinned_mesa(self):
         import re,xml.etree.ElementTree as ET
