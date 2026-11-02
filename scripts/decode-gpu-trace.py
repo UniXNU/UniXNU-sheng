@@ -55,6 +55,7 @@ FIELDS = {
  56: ('colour_description', 'surface capture kind characters'),
  57: ('colour_hash', 'surface capture kind bytes'),
  58: ('turnip_build', ''), 59: ('turnip_debug', ''),
+ 60: ('wallpaper_freeze', 'phase command surface frozen_command frozen_us allowed parked'),
 }
 PIXEL_FIELDS = 'magic version pid stage capture us command surface physical width height format colour_space source_stride grid_width grid_height row_bytes bytes_per_pixel flags bytes fence'.split()
 
