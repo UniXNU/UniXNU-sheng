@@ -108,6 +108,11 @@ class TraceTests(unittest.TestCase):
         values=trace.latency_analysis(rows)['gpu_counters']
         self.assertEqual([r['valid'] for r in values],[False,True,False])
         self.assertEqual(values[1]['delta']['cp_clocks'],100)
+        result=trace.latency_analysis([dict(kind=26,pid=5,us=1,thread=7,name='fault_image_uuid',uuid='aabb',
+            fields=dict(fault=8,image=9,uuid0=0,uuid1=0,index=0,unused=0)),
+            dict(kind=28,pid=5,us=2,thread=7,name='thread_wait',fields=dict(capture=10,state=1,wait=20,pc=30,lr=40,switches=50))])
+        self.assertEqual(result['faults'][0]['images'][0]['uuid'],'aabb')
+        self.assertEqual(result['waits'][0]['thread_wait']['wait'],20)
 
     def test_detail_schema_and_counters(self):
         root=Path(__file__).resolve().parents[1]

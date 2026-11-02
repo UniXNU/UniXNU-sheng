@@ -652,7 +652,8 @@ static struct cs_waiter *cs_wait_draft;
 static struct cs_wait_seen *cs_wait_seen;
 static int cs_wait_peers[2];static unsigned cs_wait_peer_next;
 static void cs_wait_task(task_t task,int pid) {
- if(!cs_wait_draft || !cs_wait_seen || !task_lock_try(task))return;
+ if(!cs_wait_draft || !cs_wait_seen){boot_latency_record(31,(uint32_t)pid,0,0,0,0,0);return;}
+ if(!task_lock_try(task)){boot_latency_record(31,(uint32_t)pid,0,0,0,1,CS_WAITER_CAP);return;}
  vm_map_t map=task->active?task->map:NULL;
  if(!map){task_unlock(task);return;}
  vm_map_reference(map);ipc_space_t space=task->itk_space;if(space)is_reference(space);
