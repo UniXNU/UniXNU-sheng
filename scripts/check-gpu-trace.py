@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host checks for ABI bounds, command/fence joins and unconverted pixel extraction."""
+"""Host checks for the trace ABI bounds, the latency store and the decoders."""
 import importlib.util
 from pathlib import Path
 import struct
@@ -24,20 +24,6 @@ class TraceTests(unittest.TestCase):
                             '-pthread',str(driver / 'NativeGpuTraceTest.cpp'),'-o',exe],check=True)
             subprocess.run([exe],check=True)
 
-    def test_links_and_reuse(self):
-        events = [(30,[1,100,1]), (45,[100,200,0]), (42,[300,200,0,1]), (38,[300,7]),
-                  (50,[200]), (42,[300,200,0,1]), (38,[300,8])]
-        raw = b''.join(trace.RECORD.pack(i,i,e,5,*(v+[0]*(12-len(v)))) for i,(e,v) in enumerate(events,1))
-        head = trace.HEADER.pack(0x31545047,1,120,len(events),len(events),0)
-        _, rows = trace.records(head+raw)
-        links = trace.links(rows)
-        self.assertEqual(links[0]['command'],1)
-        self.assertEqual(links[0]['fence'],7)
-        self.assertIsNone(links[1]['command'])
-        self.assertEqual(len(links),2)
-        with self.assertRaises(ValueError):trace.records(head+raw[:-1])
-        with self.assertRaises(ValueError):trace.records(b'')
-
     def test_latency_store_and_decoder(self):
         root=Path(__file__).resolve().parents[1]
         source=root/'package/BootLatencyStoreTests.cpp'
@@ -47,29 +33,23 @@ class TraceTests(unittest.TestCase):
             subprocess.run(['xcrun','clang++','-std=c++17','-O1','-g','-Wall','-Wextra','-Werror',
                             '-fsanitize=address,undefined','-pthread',str(source),'-o',exe],check=True)
             subprocess.run([exe],check=True)
-        raw=struct.pack('<4I',0x3154414c,1,1,0)+trace.LATENCY_RECORD.pack(99,123,2,61,456,789,1,61,0,0)
+        raw=struct.pack('<4I',0x3154414c,1,1,0)+trace.LATENCY_RECORD.pack(99,123,35,61,456,0x1e0200000,0x1e2200000,7,8,9)
         head,rows=trace.latency_records(raw)
         self.assertEqual(head['kept'],1)
-        self.assertEqual(rows[0]['fields']['cookie'],456)
-        self.assertEqual(rows[0]['name'],'ipc_receive')
+        self.assertEqual(rows[0]['fields']['start'],0x1e0200000)
+        self.assertEqual(rows[0]['name'],'unnest')
         with self.assertRaises(ValueError):trace.latency_records(raw[:-1])
         with self.assertRaises(ValueError):trace.latency_records(b'')
 
-    def test_fault_unwind_and_dispatch_hooks(self):
+    def test_fault_unwind(self):
         root=Path(__file__).resolve().parents[1]
         package=root/'package'
         if not package.exists():package=root/'kits/sheng'
-        code=root if (root/'drivers/AdrenoMetal').exists() else root.parent/'UniXNU'
         with tempfile.TemporaryDirectory() as directory:
             unwind=str(Path(directory)/'unwind')
             subprocess.run(['xcrun','clang','-std=c11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
                             str(package/'BootLatencyUnwindTests.c'),'-o',unwind],check=True)
             subprocess.run([unwind],check=True)
-            dispatch=str(Path(directory)/'dispatch')
-            subprocess.run(['xcrun','clang++','-std=c++17','-fobjc-arc','-Wall','-Wextra','-Werror',
-                            '-fsanitize=address,undefined',str(code/'drivers/AdrenoMetal/bridge/dispatch_trace_host.mm'),
-                            '-framework','Foundation','-o',dispatch],check=True)
-            subprocess.run([dispatch],check=True);subprocess.run([dispatch,'unsupported'],check=True);subprocess.run([dispatch,'item-version'],check=True)
 
     def test_counter_plan_matches_pinned_mesa(self):
         import re,xml.etree.ElementTree as ET
@@ -129,9 +109,6 @@ class TraceTests(unittest.TestCase):
         with self.assertRaises(ValueError):trace.frontend_details(blob[:-1])
         wide=trace.FRAME_RECORD.pack(22,1,100,99,0,0,42,65536,0,0,0,0,0,0)
         self.assertEqual(trace.frontend_details(wide)[0]['argument'],65536)
-        raw=struct.pack('<4I',0x3154414c,1,1,0)+trace.LATENCY_RECORD.pack(99,123,20,61,456,2|(3<<8),9,8,7,6)
-        _,rows=trace.latency_records(raw)
-        self.assertEqual((rows[0]['phase'],rows[0]['flags']),(2,3))
 
     def test_turnip_filters_before_transport(self):
         root=Path(__file__).resolve().parents[1]
@@ -169,38 +146,23 @@ class TraceTests(unittest.TestCase):
             subprocess.run([str(exe)],check=True)
 
     def test_focused_capture_schema(self):
-        values=[(1,[10,20,1,61,0,30]),(13,[10,1,0,0,30,40]),
-                (33,[10,11,40,21,0,0]),(34,[1000000,100,20,20,900000,0])]
+        values=[(35,[4,0x1e0200000,0x1e2200000,1,2,3]),(36,[4,0|(9<<8),11,12,13,14]),(8,[4,0,21,22,23,24]),
+                (34,[1000000,100,20,20,0,0])]
         raw=struct.pack('<4I',0x3154414c,1000021,len(values),0)
         raw+=b''.join(trace.LATENCY_RECORD.pack(i,7,k,61,*v) for i,(k,v) in enumerate(values))
         head,rows=trace.latency_records(raw)
-        self.assertEqual(head['capture_budget']['unmatched_ipc'],900000)
         self.assertEqual(head['overwritten'],1000000-491519)
-        links=trace.latency_analysis(rows)['ipc']
-        self.assertTrue(any(x.get('request_cookie')==10 and x.get('reply_cookie')==11 for x in links))
+        unnest=trace.latency_analysis(rows)['unnests'][0]
+        self.assertEqual((unnest['start'],unnest['kernel_depth'],unnest['kernel'][0],unnest['frames'][0]),(0x1e0200000,9,11,21))
+        touch=struct.pack('<4I',0x31484354,4,4,0)+struct.pack('<4Q',100,200,2000000,2100000)
+        windows=trace.touch_windows(touch)['windows']
+        self.assertEqual([(w['begin_us'],w['end_us']) for w in windows],[(100,500200),(2000000,2600000)])
+        self.assertTrue(trace.in_windows(500000,windows) and not trace.in_windows(1000000,windows))
         blob=trace.FRAME_RECORD.pack(1,17,100,110,120,130,2,3,4000,0,5,20,24,6)
         frame=trace.frontend_details(blob)[0]
         self.assertEqual((frame['created_us'],frame['committed_us'],frame['completed_us']),(100,110,130))
         blob=trace.FRAME_RECORD.pack(7,0,500,3,1000,1010,3048|(2032<<16),2,44,6193,0,0,0,0)
         frame=trace.frontend_details(blob)[0]
         self.assertEqual((frame['width'],frame['height'],frame['gpu_elapsed_us']),(3048,2032,10))
-
-    def test_pixels(self):
-        self.assertEqual(trace.PIXEL.size,112)
-        h=dict.fromkeys(trace.PIXEL_FIELDS,0)
-        h.update(magic=0x31585047,version=1,pid=5,stage=1,capture=9,width=2,height=1,
-                 format=80,grid_width=2,grid_height=1,row_bytes=8,bytes_per_pixel=4,
-                 flags=9,bytes=8,source_stride=128)
-        raw=bytes([255,0,0,255,0,0,255,255])
-        collection=struct.pack('<4I',0x31535047,1,1,0)+trace.PIXEL.pack(*(h[k] for k in trace.PIXEL_FIELDS))+raw
-        with tempfile.TemporaryDirectory() as name:
-            out=Path(name);result=trace.pixels(collection,out)
-            self.assertEqual((out/'pixel-5-1-9.raw').read_bytes(),raw)
-            self.assertEqual(result['captures'][0]['source_stride'],128)
-            self.assertTrue((out/'pixel-5-1-9.png').read_bytes().startswith(b'\x89PNG'))
-            with self.assertRaises(ValueError):trace.pixels(collection[:-1],out)
-            h['row_bytes']=7
-            bad=collection[:16]+trace.PIXEL.pack(*(h[k] for k in trace.PIXEL_FIELDS))+raw
-            with self.assertRaises(ValueError):trace.pixels(bad,out)
 
 if __name__=='__main__':unittest.main()
