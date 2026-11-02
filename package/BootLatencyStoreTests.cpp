@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include "BootLatencyStore.h"
+#include "BootLatencyIpc.h"
+#include "BootLatencyFiles.h"
 #include <cassert>
 #include <thread>
+#include <string>
 #include <vector>
 int main() {
  bl_slot slots[8]{};bl_store s{slots,8,0,0};bl_record r{};
@@ -12,5 +15,33 @@ int main() {
  for(unsigned t=0;t<4;++t)threads.emplace_back([&]{for(unsigned i=0;i<20000;++i){bl_record v{};v.value[0]=i;v.value[1]=~uint64_t(i);bl_push(&s,&v);}});
  for(auto &t:threads)t.join();
  for(uint64_t n=s.issued-7;n<=s.issued;++n)if(bl_read(&s,n,&r))assert(r.value[1]==~r.value[0]);
+ bl_slot normal_slots[8]{},critical_slots[4]{};bl_store normal{normal_slots,8,0,0},saved{critical_slots,4,0,0};
+ bl_record fault{};fault.kind=3;fault.value[0]=0xfeed;
+ assert(bl_push(bl_critical_kind(fault.kind)?&saved:&normal,&fault));
+ for(unsigned i=0;i<100000;++i){bl_record v{};v.kind=5;bl_push(bl_critical_kind(v.kind)?&saved:&normal,&v);}
+ assert(saved.issued==1 && bl_read(&saved,1,&fault) && fault.value[0]==0xfeed);
+ bl_ipc_filter filter{};uint64_t request=0;
+ for(unsigned i=0;i<100000;++i)assert(!bl_ipc_received(&filter,100+i,7,0,&request));
+ assert(filter.unpaired==100000);
+ bl_ipc_sent(&filter,100,7,0,1);assert(bl_ipc_received(&filter,100,7,0,&request));
+ assert(!bl_ipc_received(&filter,100,7,0,&request));
+ bl_ipc_sent(&filter,200,8,300,0);assert(bl_ipc_received(&filter,201,9,300,&request) && request==200);
+ assert(!bl_ipc_received(&filter,201,9,300,&request));
+ bl_ipc_sent(&filter,400,10,0,1);assert(!bl_ipc_received(&filter,400,11,0,&request));
+ assert(bl_ipc_received(&filter,400,10,0,&request));
+ bl_ipc_sent(&filter,700,1,900,0);bl_ipc_sent(&filter,701,2,900,0);
+ assert(!bl_ipc_received(&filter,702,3,900,&request) && request==0);
+ // Saturation is explicit and never evicts an unrelated pending request.
+ for(unsigned i=0;i<9;++i)bl_ipc_sent(&filter,1+(uint64_t)i*((1u<<19)+16),1,0,1);
+ assert(filter.untracked>0);
+ assert(bl_latency_file("/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/frames.trace"));
+ assert(bl_latency_file("/private/var/mobile/Library/Logs/CrashReporter/STExtractionService-now.ips"));
+ assert(bl_latency_file("/private/var/mobile/Library/Logs/CrashReporter/CalendarWidgetExtension-now.ips"));
+ assert(!bl_latency_file("/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/prime-fn"));
+ assert(!bl_latency_file("/private/var/db/diagnostics/all.tracev3"));
+ assert(!bl_latency_file("/private/var/mobile/Library/Logs/CrashReporter/Safari-now.ips"));
+ char text[]="[wifi] unrelated\nprocess dasd: EXC_BAD_ACCESS\n[audio] unrelated\nmemorystatus: killed\n";
+ unsigned n=bl_latency_messages(text,sizeof text-1);
+ assert(std::string(text,n)=="process dasd: EXC_BAD_ACCESS\nmemorystatus: killed\n");
  static_assert(sizeof(bl_record)==72,"latency ABI");
 }

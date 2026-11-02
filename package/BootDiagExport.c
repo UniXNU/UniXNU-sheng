@@ -1,14 +1,7 @@
 // SPDX-License-Identifier: MIT
-// Diagnostic file export (int-217): the unified log that logd persisted (/private/var/db/diagnostics, with the format strings in
-// /private/var/db/uuidtext) and the crash reports, read by the kernel itself, so neither a sandbox nor a launchd job that never runs
-// (adrenoprobed) stands in the way. BootLog.c asks for the stream once (sheng-diag-export=<seconds>) and writes it into the half of the
-// export region the pipeline-cache blob does not hold; scripts/read-sheng-log.py unpacks it into the run's diag/ directory.
-// Stream: "SHEXR001", u32 stream bytes, u32 0, then the cache export's stream (drivers/AdrenoMetal/CacheExport.h, "M2VCACH1") with root
-// "/" and every path relative to it. The scan lists every file first and spends the budget in the order of worth (the log newest file
-// first, then its format strings, then the crash reports), so an older boot's large log files never push out this boot's. The format
-// strings come last among the log's files because they only change with the binaries: the host keeps those of earlier runs.
-// screen.bgrx is the panel's scanout at half resolution (16-byte header "SHOT", u32 width, height, stride, then BGRX rows), so the
-// run shows what was on the screen. Files that do not fit the budget are named in diag-skipped.txt, the stream's last file.
+// Seven-issue latency export: command/pass phases, allocation/release, CPU,
+// blocked peers and fault evidence. No screenshots, pixel grids, shader-cache
+// inventories, framework files or general unified-log scans.
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
@@ -20,7 +13,7 @@
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
 
-enum {DiagMaxFiles = 6144, DiagPath = 192, DiagDepth = 6, DiagChunk = 256 * 1024, DiagNote = 32768};
+enum {DiagMaxFiles = 128, DiagPath = 192, DiagDepth = 0, DiagChunk = 256 * 1024, DiagNote = 32768};
 struct diag_file {char path[DiagPath]; uint64_t size; uint32_t mode, uid, gid, root, keep;};
 static struct diag_file *diag_files;
 static uint32_t diag_count, diag_skipped_count;
@@ -30,55 +23,17 @@ volatile uint32_t boot_diag_files, boot_diag_skipped, boot_diag_errors;
 volatile uint32_t boot_diag_alloc;   // the scan's allocations that failed: 1 the file table, 2 the note
 
 #include "BootLatencyTrace.h"
+#include "BootLatencyFiles.h"
 static void *latency_data;static uint32_t latency_size;
 enum {LatencyCapacity=16+524288*72};
 
-// In the order of their worth: the format strings of earlier runs are on the host already, with crash reports ahead of framework and unified-log files.
-// A root may be a single file: the render server's shader priming state (PrimeShaders.h) in its persistent cache directory, small and
-// the only record of how far priming got (backboardd runs as mobile; the root home is the fallback).
 static const char *const diag_roots[] = {
-  "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/prime.log",
-  "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/prime-bad",
-  "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/prime-done",
-  "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/prime-fn",
-  "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/prime-current",
-  "/private/var/root/Library/Caches/com.apple.backboardd/m2v/prime.log",
-  "/private/var/root/Library/Caches/com.apple.backboardd/m2v/prime-bad",
-  "/private/var/root/Library/Caches/com.apple.backboardd/m2v/prime-done",
-  "/private/var/root/Library/Caches/com.apple.backboardd/m2v/prime-fn",
-  "/private/var/root/Library/Caches/com.apple.backboardd/m2v/prime-current",
-  "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/shadow.log",
-  "/private/var/root/Library/Caches/com.apple.backboardd/m2v/shadow.log",
   "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/frames.trace",
   "/private/var/root/Library/Caches/com.apple.backboardd/m2v/frames.trace",
-  "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/cpu.profile",
-  "/private/var/root/Library/Caches/com.apple.backboardd/m2v/cpu.profile",
   "/private/var/mobile/Library/Logs/CrashReporter",
   "/private/var/root/Library/Logs/CrashReporter",
-  // Safari's built-in data lists (int-269: a nil built-in list URL aborted MobileSafari): what a directory read of the framework
-  // returns next to what a lookup of each file finds. Small, so they go before the log.
-  "/System/Library/PrivateFrameworks/SafariShared.framework/UserAgentQuirks.plist",
-  "/System/Library/PrivateFrameworks/SafariShared.framework/SitesAllowedToAutoplay.plist",
-  "/System/Library/PrivateFrameworks/SafariShared.framework/SitesAllowedToUseAutoplayQuirks.plist",
-  "/System/Library/PrivateFrameworks/SafariShared.framework/WBSOfflineSearchRemoteDisablementDefaultConfig.plist",
-  "/System/Library/PrivateFrameworks/SafariShared.framework/WBSPasswordBreachConfigurationBag.plist",
-  "/System/Library/PrivateFrameworks/SafariCore.framework/WBSAutoFillQuirks.plist",
-  "/System/Library/PrivateFrameworks/SafariCore.framework/WBSPasswordWarningTopFraudTargets.plist",
-  "/System/Library/PrivateFrameworks/SafariShared.framework",
-  "/System/Library/PrivateFrameworks/SafariCore.framework",
-  "/private/var/db/diagnostics",
-  "/private/var/db/uuidtext",
 };
-extern volatile uint64_t native_gop_virtual __attribute__((weak_import));
-extern void native_legacy_direct_snapshot(void) __attribute__((weak_import));   // direct scanout: copies the surface on screen into the boot memory
 extern void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
-static uint32_t shot_width, shot_height;   // the half-resolution screenshot; 0 when there is no scanout
-// Scene screenshots taken while the run goes (boot_diag_shot_tick): up to DiagShots of the panel at quarter resolution, kept in memory and
-// exported as screen-<seconds of log time>.bgrx, so a scene that is gone by the export is still on file. They are analysed by code only.
-enum {DiagShots = 24};   // every 8 s from 90 s to 274 s at quarter resolution: the scene of each moment of the user's session
-static uint8_t *shot_data[DiagShots];
-static uint32_t shot_time[DiagShots], shot_w, shot_h, shot_taken;
-static const uint32_t shot_at[DiagShots] = {90, 98, 106, 114, 122, 130, 138, 146, 154, 162, 170, 178, 186, 194, 202, 210, 218, 226, 234, 242, 250, 258, 266, 274};
 // The kernel's rings, as text (kernel.rings.txt), formatted at the scan so its length is known and emitted as it was then.
 extern volatile uint64_t (*native_legacy_ring)[2] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_ring_cap __attribute__((weak_import));
@@ -111,13 +66,12 @@ extern char boot_log_autoreset_text[200];
 enum {DiagRings = 4194304};
 static char *rings_text;
 static size_t rings_len;
-static uint32_t rings_keep, shots_kept, ipc_keep;
+static uint32_t rings_keep;
 extern uint32_t native_gpu_trace_snapshot(void *,uint32_t) __attribute__((weak_import));
-extern uint32_t native_gpu_pixel_snapshot(void *,uint32_t) __attribute__((weak_import));
-static void *gpu_trace_data[2];
-static uint32_t gpu_trace_size[2];
-static const char *gpu_trace_name[2]={"gpu.trace.bin","gpu.pixels.bin"};
-static const uint32_t gpu_trace_capacity[2]={32+(16384+4096+24*4096)*120,16+24*(112+65536)};
+static void *gpu_trace_data[1];
+static uint32_t gpu_trace_size[1];
+static const char *gpu_trace_name[1]={"gpu.trace.bin"};
+static const uint32_t gpu_trace_capacity[1]={32+(16384+4096)*120};
 
 
 static void note(const char *text, const char *path, int error) {
@@ -127,6 +81,7 @@ static void note(const char *text, const char *path, int error) {
 }
 
 static void add(const char *path, uint32_t root, vfs_context_t ctx) {
+  if(!bl_latency_file(path))return;
   vnode_t file = NULLVP;
   int error = vnode_lookup(path, 0, &file, ctx);
   if (error) {note("lookup", path, error); ++boot_diag_errors; return;}
@@ -238,7 +193,7 @@ extern struct ioc_rec *native_ioc_ring __attribute__((weak_import));
 extern volatile uint32_t native_ioc_count __attribute__((weak_import));
 extern void native_ioc_trace_start(const int *, unsigned) __attribute__((weak_import));
 enum {IocRing = 262144};
-static uint32_t ioc_kept, ioc_keep;
+static uint32_t ioc_kept;
 // The GPU driver's calls (NativeAdrenoPublish.cpp), kernel.gpucalls.bin: header "GPU1", total, kept, 0; then 32-byte records {u64
 // microseconds entered, u32 microseconds in the driver, u32 of those waiting for the device lock, u16 ABI method, u16 0, i32 pid, u32
 // status, u32 KiB of an allocation}.
@@ -246,7 +201,7 @@ struct gpu_call_rec {uint64_t entered; uint32_t us, lock_us; uint16_t method, fl
 extern struct gpu_call_rec *native_adreno_call_ring __attribute__((weak_import));
 extern volatile uint32_t native_adreno_call_count __attribute__((weak_import));
 enum {GpuCallRing = 262144};
-static uint32_t gpucall_kept, gpucall_keep;
+static uint32_t gpucall_kept;
 // Physically contiguous allocations (the xnu hook in cpm_allocate), kernel.contig.bin: header "CTG1", total, kept, 0; then 72-byte records
 // {u64 microseconds began, u32 microseconds searching, u32 pages | found << 31, i32 pid, u32 frames, u64 kernel return addresses[6]};
 // kernel.rings.txt has the running address of boot_diag_shot_tick for the slide.
@@ -294,20 +249,9 @@ extern struct cs_target boot_client_targets[32] __attribute__((weak_import));
 extern volatile unsigned boot_client_target_count __attribute__((weak_import));
 enum {ClientRing = 524288};
 static uint32_t client_kept, client_keep;
-struct ipc_rec {uint64_t abs; uint32_t id; uint32_t from;};
-static struct ipc_rec *ipc_ring;
-static volatile uint32_t ipc_count;
-static uint32_t ipc_kept, touch_kept, touch_keep;   // the counts the export measured, so each file has the length it announced
+static uint32_t touch_kept,touch_keep;
 static int ipc_pid[2];
 static unsigned ipc_scans;
-
-static void ipc_hook(uint32_t id, void *sender_task, uint32_t receiver) {
-  const uint32_t n = __atomic_fetch_add(&ipc_count, 1, __ATOMIC_RELAXED);
-  struct ipc_rec *r = &ipc_ring[n & (IpcRing - 1)];
-  proc_t proc = sender_task ? (proc_t)get_bsdtask_info((task_t)sender_task) : NULL;
-  const uint32_t pid = sender_task ? (proc ? (uint32_t)proc_pid(proc) & 0xffffff : 0xffffff) : 0;
-  r->abs = mach_absolute_time(); r->id = id; r->from = receiver << 24 | pid;
-}
 
 static void *ipc_task_of(const char *want, int *pid_out) {
   for (int pid = 1; pid < 512; ++pid) {
@@ -337,53 +281,21 @@ static void ipc_trace_tick(void) {
     boalloc_ring = IOMallocAligned(sizeof(struct boalloc_rec) * BoAllocRing, PAGE_SIZE);
     if (boalloc_ring) {memset(boalloc_ring, 0, sizeof(struct boalloc_rec) * BoAllocRing); native_adreno_bo_hook = boalloc_hook;}
   }
-  if (&native_adreno_call_ring && !native_adreno_call_ring) {
-    struct gpu_call_rec *calls = IOMallocAligned(sizeof(struct gpu_call_rec) * GpuCallRing, PAGE_SIZE);
-    if (calls) {memset(calls, 0, sizeof(struct gpu_call_rec) * GpuCallRing); native_adreno_call_ring = calls;}
-  }
   if (&native_touch_report_ring && !native_touch_report_ring) {
     uint64_t *touches = IOMallocAligned(sizeof(uint64_t) * TouchRing, PAGE_SIZE);
     if (touches) {memset(touches, 0, sizeof(uint64_t) * TouchRing); native_touch_report_ring = touches;}
   }
-  if (&native_ioc_trace_start && &boot_client_target_count) {
-    int pids[32]; unsigned n = 0;
-    for (unsigned i = 0; i < boot_client_target_count && i < 32; ++i) pids[n++] = boot_client_targets[i].pid;
-    native_ioc_trace_start(pids, n);
-  }
-  if (!&sheng_ipc_send_hook || !&sheng_ipc_trace_task || !&sheng_ipc_trace_task2) return;
-  if (!ipc_ring) {
-    ipc_ring = IOMallocAligned(sizeof(struct ipc_rec) * IpcRing, PAGE_SIZE);
-    if (!ipc_ring) return;
-    memset(ipc_ring, 0, sizeof(struct ipc_rec) * IpcRing);
-  }
+  if (!&sheng_ipc_trace_task || !&sheng_ipc_trace_task2) return;
   if (ipc_pid[0] > 0 && ipc_pid[1] > 0 && (++ipc_scans % 8) != 0) return;   // a restarted process has a new pid and task
   int pid = 0;
   void *task = ipc_task_of("backboardd", &pid);
   if (task) {ipc_pid[0] = pid; if (sheng_ipc_trace_task != task) sheng_ipc_trace_task = task;}
   task = ipc_task_of("SpringBoard", &pid);
   if (task) {ipc_pid[1] = pid; if (sheng_ipc_trace_task2 != task) sheng_ipc_trace_task2 = task;}
-  if (ipc_pid[0] > 0 && !sheng_ipc_send_hook) sheng_ipc_send_hook = ipc_hook;
 }
 
-// Called once per log round with the seconds of log time: takes the next scene screenshot when it is due.
-void boot_diag_shot_tick(unsigned now) {
-  ipc_trace_tick();
-  if (shot_taken >= DiagShots || now < shot_at[shot_taken]) return;
-  PE_Video video = {};
-  if (!(&native_gop_virtual && native_gop_virtual && !PE_current_console(&video) && video.v_depth == 32 && video.v_width >= 2 && video.v_height >= 2 &&
-        video.v_width <= 16384 && video.v_height <= 16384 && video.v_rowBytes >= video.v_width * 4)) {++shot_taken; return;}
-  const uint32_t w = (uint32_t)video.v_width / 4, h = (uint32_t)video.v_height / 4;
-  const unsigned n = shot_taken++;
-  shot_data[n] = IOMallocAligned((size_t)w * h * 4, PAGE_SIZE);
-  if (!shot_data[n]) return;
-  if (&native_legacy_direct_snapshot) native_legacy_direct_snapshot();
-  for (uint32_t y = 0; y < h; ++y) {
-    uint32_t *out = (uint32_t *)(shot_data[n] + (size_t)y * w * 4);
-    const uint32_t *in = (const uint32_t *)(uintptr_t)(native_gop_virtual + (uint64_t)y * 4 * video.v_rowBytes);
-    for (uint32_t x = 0; x < w; ++x) out[x] = in[x * 4];
-  }
-  shot_w = w; shot_h = h; shot_time[n] = now;
-}
+// Called once per diagnostic log round; starts the latency collectors.
+void boot_diag_shot_tick(unsigned now) {(void)now;ipc_trace_tick();}
 
 #define RT(...) do {if (rings_len + 160 < DiagRings) {int n_ = snprintf(rings_text + rings_len, DiagRings - rings_len, __VA_ARGS__); if (n_ > 0) rings_len += (size_t)n_;}} while (0)
 // One text file with every kernel ring of the batch: lines are "<tag> fields", 64-bit microseconds on the uptime clock the render
@@ -537,23 +449,6 @@ static void rings_build(void) {
     if (&native_adreno_pipe_count && native_adreno_pipe_log) {const uint32_t n = native_adreno_pipe_count; for (uint32_t i = n > 512 ? n - 512 : 0; i < n; ++i) NOTE_PID((int)native_adreno_pipe_log[(i & 511) * 32 + 1]);}
     #undef NOTE_PID
   }
-  if (ipc_ring) {
-    const uint32_t n = ipc_kept ? ipc_kept : ipc_count, kept = n > IpcRing ? IpcRing : n;
-    RT("# ipc to backboardd (receiver 1, pid %d) and SpringBoard (receiver 2, pid %d): total %u kept %u (kernel.ipc.bin); P <pid> <name> for every sender in it\n",
-       ipc_pid[0], ipc_pid[1], n, kept);
-    int seen[64]; unsigned seen_n = 0;
-    for (uint32_t i = 0; i < kept && seen_n < 64; ++i) {
-      const uint32_t raw = ipc_ring[(n - kept + i) & (IpcRing - 1)].from & 0xffffff;
-      const int pid = raw == 0xffffff ? -1 : (int)raw;
-      unsigned k = 0;
-      while (k < seen_n && seen[k] != pid) ++k;
-      if (k < seen_n) continue;
-      seen[seen_n++] = pid;
-      char name[32] = {0};
-      if (pid > 0) proc_name(pid, name, sizeof name); else snprintf(name, sizeof name, "kernel");
-      RT("P %d %s\n", pid, name);
-    }
-  }
   if (&native_gop_wait_ring_count) {
     const uint32_t n = native_gop_wait_ring_count;
     RT("# scanout waits that ended without a swap after 100 ms or more (the object waited on is the presenter's swap slot): W <us> <waited ms> <reason 0 deadline 1 interrupted 2 other> <pid> <swap offered> <delivered> <online> <requested ms> (total %u; reasons: deadline %u interrupted %u other %u woken with a swap %u)\n",
@@ -586,30 +481,36 @@ uint64_t boot_diag_scan(uint64_t budget) {
     else if(n)note("latency-budget","kernel.latency.bin",(int)n);
   }
   // Freeze the GPU data before scanning other files, and reserve its export budget first.
-  for(unsigned i=0;i<2;++i) {
+  for(unsigned i=0;i<1;++i) {
     gpu_trace_size[i]=0;
-    if((i==0 && !&native_gpu_trace_snapshot) || (i==1 && !&native_gpu_pixel_snapshot))continue;
+    if(!&native_gpu_trace_snapshot)continue;
     if(!gpu_trace_data[i])gpu_trace_data[i]=IOMallocAligned(gpu_trace_capacity[i],PAGE_SIZE);
     if(!gpu_trace_data[i]){note("gpu-allocate",gpu_trace_name[i],-1);continue;}
-    uint32_t n=i?native_gpu_pixel_snapshot(gpu_trace_data[i],gpu_trace_capacity[i]):native_gpu_trace_snapshot(gpu_trace_data[i],gpu_trace_capacity[i]);
+    uint32_t n=native_gpu_trace_snapshot(gpu_trace_data[i],gpu_trace_capacity[i]);
     if(n && used+24+strlen(gpu_trace_name[i])+n<=budget){gpu_trace_size[i]=n;used+=24+strlen(gpu_trace_name[i])+n;}
     else if(n)note("gpu-budget",gpu_trace_name[i],(int)n);
   }
-  PE_Video video = {};
-  shot_width = shot_height = 0;
-  if (&native_gop_virtual && native_gop_virtual && !PE_current_console(&video) && video.v_depth == 32 && video.v_width >= 2 && video.v_height >= 2 &&
-      video.v_width <= 16384 && video.v_height <= 16384 && video.v_rowBytes >= video.v_width * 4) {
-    const uint64_t cost = 24 + strlen("screen.bgrx") + 16 + (uint64_t)(video.v_width / 2) * (video.v_height / 2) * 4;
-    if (used + cost <= budget) {shot_width = (uint32_t)video.v_width / 2; shot_height = (uint32_t)video.v_height / 2; used += cost;}
+  rings_keep=0;
+  // Files are scanned before optional exports. Frame records have first claim
+  // on the budget, so fast IPC and scene data cannot displace the causal trace.
+  vfs_context_t ctx = vfs_context_kernel();
+  for(unsigned i=0;i<sizeof diag_roots/sizeof diag_roots[0];++i)scan(diag_roots[i],0,i,ctx);
+  qsort(diag_files,diag_count,sizeof diag_files[0],worth);
+  unsigned crash_count[5]={0};uint64_t crash_bytes=0;uint32_t files_kept=0;
+  for(uint32_t i=0;i<diag_count;++i) {
+    struct diag_file *f=&diag_files[i];int process=bl_crash_process(f->path);
+    uint64_t cost=24+strlen(f->path)-1+f->size;
+    if(process>=0 && (crash_count[process]>=2 || f->size>4*1024*1024 || crash_bytes+f->size>8*1024*1024))continue;
+    if(used+cost>budget){note("skipped",f->path,(int)(f->size>>10));++diag_skipped_count;continue;}
+    f->keep=1;used+=cost;++files_kept;
+    if(process>=0){++crash_count[process];crash_bytes+=f->size;}
   }
-  // The kernel's rings and the scene screenshots come before every file: they are this run's own record.
-  rings_keep = shots_kept = 0;
-  ipc_kept = ipc_count;
+  boot_diag_files=files_kept;
   client_kept = (&boot_client_count && &boot_client_ring && boot_client_ring) ? boot_client_count : 0;
   cpu_kept = (&boot_cpu_count && &boot_cpu_ring && boot_cpu_ring) ? boot_cpu_count : 0;
   ptime_kept = (&boot_ptime_count && &boot_ptime_ring && boot_ptime_ring) ? boot_ptime_count : 0;
-  ioc_kept = (&native_ioc_count && &native_ioc_ring && native_ioc_ring) ? native_ioc_count : 0;
-  gpucall_kept = (&native_adreno_call_count && &native_adreno_call_ring && native_adreno_call_ring) ? native_adreno_call_count : 0;
+  ioc_kept = 0;
+  gpucall_kept = 0;
   contig_kept = contig_ring ? contig_count : 0;
   boalloc_kept = boalloc_ring ? boalloc_count : 0;
   rings_build();
@@ -617,7 +518,6 @@ uint64_t boot_diag_scan(uint64_t budget) {
     const uint64_t cost = 24 + strlen("kernel.rings.txt") + rings_len;
     if (used + cost <= budget) {rings_keep = 1; used += cost;}
   }
-  ipc_keep = 0;
   client_keep = 0;
   touch_keep = 0;
   ptime_keep = 0;
@@ -632,12 +532,6 @@ uint64_t boot_diag_scan(uint64_t budget) {
     const uint64_t cost = 24 + strlen("kernel.cpus.bin") + 16 + (uint64_t)kept * sizeof(struct cs_cpu);
     if (used + cost <= budget) {cpu_keep = 1; used += cost;}
   }
-  gpucall_keep = 0;
-  if (gpucall_kept) {
-    const uint32_t kept = gpucall_kept > GpuCallRing ? GpuCallRing : gpucall_kept;
-    const uint64_t cost = 24 + strlen("kernel.gpucalls.bin") + 16 + (uint64_t)kept * sizeof(struct gpu_call_rec);
-    if (used + cost <= budget) {gpucall_keep = 1; used += cost;}
-  }
   boalloc_keep = 0;
   if (boalloc_kept) {
     const uint32_t kept = boalloc_kept > BoAllocRing ? BoAllocRing : boalloc_kept;
@@ -650,12 +544,6 @@ uint64_t boot_diag_scan(uint64_t budget) {
     const uint64_t cost = 24 + strlen("kernel.contig.bin") + 16 + (uint64_t)kept * sizeof(struct contig_rec);
     if (used + cost <= budget) {contig_keep = 1; used += cost;}
   }
-  ioc_keep = 0;
-  if (ioc_kept) {
-    const uint32_t kept = ioc_kept > IocRing ? IocRing : ioc_kept;
-    const uint64_t cost = 24 + strlen("kernel.ioc.bin") + 16 + (uint64_t)kept * sizeof(struct ioc_rec);
-    if (used + cost <= budget) {ioc_keep = 1; used += cost;}
-  }
   touch_kept = (&native_touch_report_count && &native_touch_report_ring && native_touch_report_ring) ? native_touch_report_count : 0;
   if (touch_kept) {
     const uint32_t kept = touch_kept > TouchRing ? TouchRing : touch_kept;
@@ -667,27 +555,7 @@ uint64_t boot_diag_scan(uint64_t budget) {
     const uint64_t cost = 24 + strlen("kernel.client.bin") + 16 + (uint64_t)kept * sizeof(struct cs_rec);
     if (used + cost <= budget) {client_keep = 1; used += cost;}
   }
-  if (ipc_ring && ipc_kept) {
-    const uint32_t kept = ipc_kept > IpcRing ? IpcRing : ipc_kept;
-    const uint64_t cost = 24 + strlen("kernel.ipc.bin") + 16 + (uint64_t)kept * sizeof(struct ipc_rec);
-    if (used + cost <= budget) {ipc_keep = 1; used += cost;}
-  }
-  for (unsigned i = 0; i < DiagShots; ++i) {
-    if (!shot_data[i]) continue;
-    const uint64_t cost = 24 + strlen("screen-000.bgrx") + 16 + (uint64_t)shot_w * shot_h * 4;
-    if (used + cost <= budget) {++shots_kept; used += cost;} else shot_time[i] = 0xffffffffu;
-  }
-  vfs_context_t ctx = vfs_context_kernel();
-  for (unsigned i = 0; i < sizeof diag_roots / sizeof diag_roots[0]; ++i) scan(diag_roots[i], 0, i, ctx);
-  qsort(diag_files, diag_count, sizeof diag_files[0], worth);
-  uint32_t kept = 0;
-  for (uint32_t i = 0; i < diag_count; ++i) {
-    struct diag_file *f = &diag_files[i];
-    const uint64_t cost = 24 + strlen(f->path) - 1 + f->size;
-    if (used + cost > budget) {note("skipped", f->path, (int)(f->size >> 10)); ++diag_skipped_count; continue;}
-    f->keep = 1; used += cost; ++kept;
-  }
-  boot_diag_files = kept; boot_diag_skipped = diag_skipped_count;
+  boot_diag_skipped = diag_skipped_count;
   return used;
 }
 
@@ -706,26 +574,11 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   if (!chunk) return -1;
   vfs_context_t ctx = vfs_context_kernel();
   int rc = emit("M2VCACH1", 8, arg);
-  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep + touch_keep + cpu_keep + ioc_keep + gpucall_keep + contig_keep + boalloc_keep + ptime_keep + !!gpu_trace_size[0] + !!gpu_trace_size[1] + !!latency_size;
+  const uint32_t root_len = 1, count = boot_diag_files + 1 + rings_keep + client_keep + touch_keep + cpu_keep + contig_keep + boalloc_keep + ptime_keep + !!gpu_trace_size[0] + !!latency_size;
   if (!rc) rc = emit(&root_len, 4, arg);
   if (!rc) rc = emit("/", 1, arg);
   if (!rc) rc = emit(&count, 4, arg);
-  if (!rc && shot_width) {
-    // Every second pixel of every second row, read from the scanout mapping the display presenter set up.
-    PE_Video video = {};
-    if (&native_legacy_direct_snapshot) native_legacy_direct_snapshot();
-    const uint32_t row = shot_width * 4, head[4] = {'S' | 'H' << 8 | 'O' << 16 | (uint32_t)'T' << 24, shot_width, shot_height, row};
-    const bool live = !PE_current_console(&video) && video.v_width / 2 == shot_width && video.v_height / 2 == shot_height;
-    rc = put_head(emit, arg, "screen.bgrx", 0100644, 0, 0, 16 + (uint64_t)row * shot_height);
-    if (!rc) rc = emit(head, sizeof head, arg);
-    for (uint32_t y = 0; !rc && y < shot_height; ++y) {
-      uint32_t *out = (uint32_t *)chunk;
-      const uint32_t *in = (const uint32_t *)(uintptr_t)(native_gop_virtual + (uint64_t)y * 2 * video.v_rowBytes);
-      for (uint32_t x = 0; x < shot_width; ++x) out[x] = live ? in[x * 2] : 0;
-      rc = emit(chunk, row, arg);
-    }
-  }
-  for(unsigned i=0;i<2 && !rc;++i)if(gpu_trace_size[i]) {
+  for(unsigned i=0;i<1 && !rc;++i)if(gpu_trace_size[i]) {
     rc=put_head(emit,arg,gpu_trace_name[i],0100644,0,0,gpu_trace_size[i]);
     for(uint32_t at=0;at<gpu_trace_size[i] && !rc;) {
       uint32_t n=gpu_trace_size[i]-at;if(n>65536)n=65536;
@@ -744,42 +597,6 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
     for (size_t at = 0; !rc && at < rings_len;) {
       const uint32_t n = rings_len - at < 65536 ? (uint32_t)(rings_len - at) : 65536;
       rc = emit(rings_text + at, n, arg);
-      at += n;
-    }
-  }
-  if (!rc && ipc_keep) {
-    const uint32_t ipc_total = ipc_kept, kept = ipc_total > IpcRing ? IpcRing : ipc_total;   // the measured count: newer records wait for the next export
-    const uint32_t head[4] = {'I' | 'P' << 8 | 'C' << 16 | (uint32_t)'2' << 24, ipc_total, kept, 0};
-    rc = put_head(emit, arg, "kernel.ipc.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct ipc_rec));
-    if (!rc) rc = emit(head, sizeof head, arg);
-    for (uint32_t at = 0; !rc && at < kept;) {   // oldest first, microseconds since boot
-      uint32_t n = kept - at < 4096 ? kept - at : 4096;
-      for (uint32_t k = 0; k < n; ++k) {
-        const struct ipc_rec *r = &ipc_ring[(ipc_total - kept + at + k) & (IpcRing - 1)];
-        uint64_t ns = 0;
-        absolutetime_to_nanoseconds(r->abs, &ns);
-        struct ipc_rec out = {ns / 1000, r->id, r->from};
-        memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
-      }
-      rc = emit(chunk, n * sizeof(struct ipc_rec), arg);
-      at += n;
-    }
-  }
-  if (!rc && gpucall_keep) {
-    const uint32_t total = gpucall_kept, kept = total > GpuCallRing ? GpuCallRing : total;
-    const uint32_t head[4] = {'G' | 'P' << 8 | 'U' << 16 | (uint32_t)'1' << 24, total, kept, 0};
-    rc = put_head(emit, arg, "kernel.gpucalls.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct gpu_call_rec));
-    if (!rc) rc = emit(head, sizeof head, arg);
-    for (uint32_t at = 0; !rc && at < kept;) {
-      const uint32_t n = kept - at < 8192 ? kept - at : 8192;
-      for (uint32_t k = 0; k < n; ++k) {
-        struct gpu_call_rec out = native_adreno_call_ring[(total - kept + at + k) & (GpuCallRing - 1)];
-        uint64_t ns = 0;
-        absolutetime_to_nanoseconds(out.entered, &ns);
-        out.entered = ns / 1000;
-        memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
-      }
-      rc = emit(chunk, n * sizeof(struct gpu_call_rec), arg);
       at += n;
     }
   }
@@ -857,24 +674,6 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
       at += n;
     }
   }
-  if (!rc && ioc_keep) {
-    const uint32_t ioc_total = ioc_kept, kept = ioc_total > IocRing ? IocRing : ioc_total;
-    const uint32_t head[4] = {'I' | 'O' << 8 | 'C' << 16 | (uint32_t)'1' << 24, ioc_total, kept, 0};
-    rc = put_head(emit, arg, "kernel.ioc.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct ioc_rec));
-    if (!rc) rc = emit(head, sizeof head, arg);
-    for (uint32_t at = 0; !rc && at < kept;) {
-      const uint32_t n = kept - at < 8192 ? kept - at : 8192;
-      for (uint32_t k = 0; k < n; ++k) {
-        struct ioc_rec out = native_ioc_ring[(ioc_total - kept + at + k) & (IocRing - 1)];
-        uint64_t ns = 0;
-        absolutetime_to_nanoseconds(out.entered, &ns);
-        out.entered = ns / 1000;
-        memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
-      }
-      rc = emit(chunk, n * sizeof(struct ioc_rec), arg);
-      at += n;
-    }
-  }
   if (!rc && touch_keep) {
     const uint32_t touch_total = touch_kept, kept = touch_total > TouchRing ? TouchRing : touch_total;
     const uint32_t head[4] = {'T' | 'C' << 8 | 'H' << 16 | (uint32_t)'1' << 24, touch_total, kept, 0};
@@ -909,15 +708,6 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
       rc = emit(chunk, n * sizeof(struct cs_rec), arg);
       at += n;
     }
-  }
-  for (unsigned i = 0; !rc && i < DiagShots; ++i) {
-    if (!shot_data[i] || shot_time[i] == 0xffffffffu) continue;
-    char name[24];
-    snprintf(name, sizeof name, "screen-%03u.bgrx", shot_time[i] % 1000);
-    const uint32_t row = shot_w * 4, head[4] = {'S' | 'H' << 8 | 'O' << 16 | (uint32_t)'T' << 24, shot_w, shot_h, row};
-    rc = put_head(emit, arg, name, 0100644, 0, 0, 16 + (uint64_t)row * shot_h);
-    if (!rc) rc = emit(head, sizeof head, arg);
-    for (uint32_t y = 0; !rc && y < shot_h; ++y) rc = emit(shot_data[i] + (size_t)y * row, row, arg);
   }
   for (uint32_t i = 0; !rc && i < diag_count; ++i) {
     const struct diag_file *f = &diag_files[i];
