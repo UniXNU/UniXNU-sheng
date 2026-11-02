@@ -127,6 +127,8 @@ class TraceTests(unittest.TestCase):
         row=trace.frontend_details(blob)[0]
         self.assertEqual((row['operation'],row['kind'],row['phase'],row['function']),(22,3,2,0x187654321))
         with self.assertRaises(ValueError):trace.frontend_details(blob[:-1])
+        wide=trace.FRAME_RECORD.pack(22,1,100,99,0,0,42,65536,0,0,0,0,0,0)
+        self.assertEqual(trace.frontend_details(wide)[0]['argument'],65536)
         raw=struct.pack('<4I',0x3154414c,1,1,0)+trace.LATENCY_RECORD.pack(99,123,20,61,456,2|(3<<8),9,8,7,6)
         _,rows=trace.latency_records(raw)
         self.assertEqual((rows[0]['phase'],rows[0]['flags']),(2,3))
