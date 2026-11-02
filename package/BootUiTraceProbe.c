@@ -382,7 +382,7 @@ int proc_pid(proc_t);
 task_t proc_task(proc_t);
 void proc_iterate(unsigned,int (*)(proc_t,void *),void *,int (*)(proc_t,void *),void *);
 void *IOMallocAligned(vm_size_t,vm_offset_t);
-#define CS_TARGETS 6
+#define CS_TARGETS 7
 #define CS_RING 131072
 struct cs_rec {uint64_t abs;int32_t pid;uint16_t state;int16_t pri;uint32_t cs;int32_t peer;uint64_t cpu,wait,frames[11];};
 _Static_assert(sizeof(struct cs_rec)==128,"client sample");
@@ -438,7 +438,7 @@ static int cs_ptime_one(proc_t p,void *arg) {
  // A pid used again starts from zero.
  const uint64_t du=user>=slot->user?user-slot->user:user,ds=system>=slot->system?system-slot->system:system;
  slot->pid=pid+1;slot->user=user;slot->system=system;
- if(!known)strlcpy(slot->name,proc_best_name(p),sizeof(slot->name));
+ if(!known || !strcmp(slot->name,"xpcproxy"))strlcpy(slot->name,proc_best_name(p),sizeof(slot->name));
  if(!known || (!du && !ds) || !boot_ptime_ring)return 0;
  // The pass's three busiest processes, for their busiest thread's stack (cs_hot_samples).
  const uint64_t used=du+ds;
@@ -462,7 +462,7 @@ struct cs_rec *boot_client_ring;
 volatile uint32_t boot_client_count;
 struct cs_target boot_client_targets[32];
 volatile unsigned boot_client_target_count;
-static const char *const cs_names[CS_TARGETS]={"SpringBoard","WidgetRenderer_","InputUI","Preferences","MobileSafari","PosterBoard"};
+static const char *const cs_names[CS_TARGETS]={"backboardd","SpringBoard","WidgetRenderer_","InputUI","Preferences","MobileSafari","PosterBoard"};
 static task_t cs_task[CS_TARGETS],cs_found_task[CS_TARGETS];
 static int cs_pid[CS_TARGETS],cs_found_pid[CS_TARGETS];
 // A blocked thread that did not switch since the last record of its slot is not recorded again (at most once a second, as a heartbeat):
@@ -513,6 +513,7 @@ static void cs_refresh(void) {
   if(cs_task[i])cs_note_target(cs_task[i],cs_pid[i],cs_names[i]);
  }
 }
+extern uint64_t native_gpu_render_thread(uint32_t) __attribute__((weak_import));
 static void cs_sample(unsigned slot) {
  task_t task=cs_task[slot];
  if(!task || !task_lock_try(task))return;
@@ -524,10 +525,15 @@ static void cs_sample(unsigned slot) {
  struct bt_entry e;memset(&e,0,sizeof(e));
  bool got=false;
  thread_t thread=(thread_t)queue_first(&task->threads);
+ const uint64_t render=!strcmp(cs_names[slot],"backboardd") && &native_gpu_render_thread?native_gpu_render_thread((uint32_t)cs_pid[slot]):0;
+ if(render) {
+  thread_t candidate;
+  queue_iterate(&task->threads,candidate,thread_t,task_threads)if(candidate->thread_id==render){thread=candidate;break;}
+ }
  if(!queue_end(&task->threads,(queue_entry_t)thread)) {
   bool irq=ml_set_interrupts_enabled(false);
   if(simple_lock_try(&thread->sched_lock,&thread_lck_grp)) {
-   r.state=(uint16_t)thread->state;if(thread_get_runq(thread)!=PROCESSOR_NULL)r.state|=0x8000;
+   r.state=(uint16_t)thread->state;if(render && thread->thread_id==render)r.state|=0x1000;if(thread_get_runq(thread)!=PROCESSOR_NULL)r.state|=0x8000;
    r.pri=(int16_t)thread->sched_pri;r.cs=thread->c_switch;r.wait=(uint64_t)thread->wait_event;r.cpu=recount_thread_time_mach(thread);
    arm_saved_state_t *state=thread->machine.upcb;
    if(state && is_saved_state64(state)) {

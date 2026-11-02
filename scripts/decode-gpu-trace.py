@@ -56,7 +56,36 @@ FIELDS = {
  57: ('colour_hash', 'surface capture kind bytes'),
  58: ('turnip_build', ''), 59: ('turnip_debug', ''),
  60: ('wallpaper_freeze', 'phase command surface frozen_command frozen_us allowed parked'),
+ 61: ('encode_batch', 'batch phase queued_us tasks depth thread'),
+ 62: ('frontend_stage', 'command commit phase batch thread surfaces bytes'),
+ 63: ('thread', 'thread role name0 name1 name2 name3'),
 }
+LATENCY_RECORD = struct.Struct('<QQII6Q')
+LATENCY_FIELDS = {
+ 1: ('ipc_send_attempt', 'cookie message receiver task_pid unused0 unused1'),
+ 2: ('ipc_receive', 'cookie message receiver task_pid unused0 unused1'),
+ 3: ('user_exception', 'exception code subcode pc lr sp'),
+ 4: ('gpu_vote', 'previous_level requested_level reason busy_percent needed_mhz accepted_level'),
+ 5: ('touch_publish', 'report contacts index tracking_id x_tenth_pixel y_tenth_pixel'),
+}
+RUNTIME_STAGES = {40:'memory_begin',41:'memory_pool',42:'memory_kib',43:'available_kib',
+ 44:'allocated',45:'reused',46:'memory_low',47:'memory_high',48:'cached_kib',49:'deferred_kib',
+ 50:'free_begin',51:'free_end',52:'release_queue_full',53:'complete_begin',54:'complete_state',
+ 55:'complete_handlers',56:'complete_retained',57:'complete_end'}
+
+def latency_records(blob):
+    if len(blob)<16:raise ValueError('short latency header')
+    magic,total,kept,dropped=struct.unpack_from('<4I',blob)
+    if magic!=0x3154414c or kept>524288 or len(blob)!=16+kept*LATENCY_RECORD.size:
+        raise ValueError('invalid latency stream')
+    rows=[]
+    for at in range(16,len(blob),LATENCY_RECORD.size):
+        us,tid,kind,pid,*values=LATENCY_RECORD.unpack_from(blob,at)
+        name,names=LATENCY_FIELDS.get(kind,('unknown',''))
+        rows.append(dict(us=us,thread=tid,kind=kind,pid=pid,name=name,fields=dict(zip(names.split(),values))))
+    rows.sort(key=lambda r:r['us'])
+    return dict(total=total,kept=kept,dropped=dropped,overwritten=max(0,total-524288)),rows
+
 PIXEL_FIELDS = 'magic version pid stage capture us command surface physical width height format colour_space source_stride grid_width grid_height row_bytes bytes_per_pixel flags bytes fence'.split()
 
 
@@ -79,6 +108,10 @@ def records(blob):
         name, names = FIELDS.get(event, ('unknown', ''))
         row = dict(sequence=seq, us=us, event=event, name=name, pid=pid,
                    fields=dict(zip(names.split(), values)), raw=values)
+        if event == 39:
+            row['stage_name'] = RUNTIME_STAGES.get(values[1], str(values[1]))
+        if event == 63:
+            row['text'] = struct.pack('<4Q', *values[2:6]).split(b'\0')[0].decode('utf-8', errors='replace')
         if event in (46, 47, 58, 59):
             row['text'] = struct.pack('<12Q', *values).split(b'\0')[0].decode('utf-8', errors='replace')
         if event == 56:

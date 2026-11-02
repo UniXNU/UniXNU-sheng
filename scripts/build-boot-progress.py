@@ -64,6 +64,10 @@ diag_source = ROOT / 'kits/sheng/BootDiagExport.c'
 diag_obj = OUT / 'BootDiagExport.o'
 diag_command = [str(diag_source) if arg == str(policy_source) else str(diag_obj) if arg == str(policy_obj) else arg for arg in policy_command]
 subprocess.run(diag_command, cwd=policy_record['directory'], check=True, timeout=90)
+latency_source = ROOT / 'kits/sheng/BootLatencyTrace.c'
+latency_obj = OUT / 'BootLatencyTrace.o'
+latency_command = [str(latency_source) if arg == str(source) else str(latency_obj) if arg == str(obj) else arg for arg in command]
+subprocess.run(latency_command, cwd=record['directory'], check=True, timeout=90)
 # The firmware file reader of the audio DSP bring-up (AdspProbe.cpp) uses the VFS too.
 fw_source = ROOT / 'kits/sheng/AdspFirmware.c'
 fw_obj = OUT / 'AdspFirmware.o'
@@ -72,9 +76,11 @@ subprocess.run(fw_command, cwd=policy_record['directory'], check=True, timeout=9
 
 archive = OUT / 'libBootProgress.a'
 archive.unlink(missing_ok=True)
-subprocess.run(['xcrun', 'ar', 'rcs', str(archive), str(obj), str(fault_obj), str(policy_obj), str(diag_obj), str(fw_obj)], check=True, timeout=30)
+subprocess.run(['xcrun', 'ar', 'rcs', str(archive), str(obj), str(fault_obj), str(policy_obj), str(diag_obj), str(latency_obj), str(fw_obj)], check=True, timeout=30)
 (OUT / 'build-report.json').write_text(json.dumps({
     'watchdog_policy_sha256': hashlib.sha256(policy_source.read_bytes()).hexdigest(),
+    'latency_sha256': hashlib.sha256(latency_source.read_bytes()).hexdigest(),
+    'latency_store_sha256': hashlib.sha256((latency_source.parent / 'BootLatencyStore.h').read_bytes()).hexdigest(),
     'diag_sha256': hashlib.sha256(diag_source.read_bytes()).hexdigest(),
     'fault_sha256': hashlib.sha256(fault_source.read_bytes()).hexdigest(),
     'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
