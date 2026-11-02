@@ -80,6 +80,7 @@ subprocess.run(['xcrun', 'ar', 'rcs', str(archive), str(obj), str(fault_obj), st
 (OUT / 'build-report.json').write_text(json.dumps({
     'watchdog_policy_sha256': hashlib.sha256(policy_source.read_bytes()).hexdigest(),
     'latency_sha256': hashlib.sha256(latency_source.read_bytes()).hexdigest(),
+    'latency_unwind_sha256': hashlib.sha256((latency_source.parent / 'BootLatencyUnwind.h').read_bytes()).hexdigest(),
     'latency_store_sha256': hashlib.sha256((latency_source.parent / 'BootLatencyStore.h').read_bytes()).hexdigest(),
     'diag_sha256': hashlib.sha256(diag_source.read_bytes()).hexdigest(),
     'fault_sha256': hashlib.sha256(fault_source.read_bytes()).hexdigest(),

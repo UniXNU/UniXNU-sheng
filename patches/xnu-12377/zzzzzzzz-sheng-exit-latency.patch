@@ -1,0 +1,24 @@
+--- a/bsd/kern/kern_exit.c
++++ b/bsd/kern/kern_exit.c
+@@ -1638,6 +1638,8 @@
+ /*
+  * NOTE: exit_with_reason drops a reference on the passed exit_reason
+  */
++void (*sheng_user_exit_hook)(int, int, uint32_t, uint64_t, const char *, const char *);
++
+ int
+ exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, boolean_t perf_notify,
+     int jetsam_flags, struct os_reason *exit_reason)
+@@ -1647,6 +1649,12 @@
+ 	struct uthread *ut;
+ 	int error = 0;
+ 	bool proc_exiting = false;
++
++	if (__improbable(sheng_user_exit_hook != NULL) && (rv & 127)) {
++		sheng_user_exit_hook(proc_getpid(p), rv, exit_reason ? exit_reason->osr_namespace : 0,
++		    exit_reason ? exit_reason->osr_code : 0, p->p_name,
++		    exit_reason ? exit_reason_get_string_desc(exit_reason) : NULL);
++	}
+ 
+ #if DEVELOPMENT || DEBUG
+ 	/*
