@@ -24,6 +24,13 @@ class TraceTests(unittest.TestCase):
                             '-pthread',str(driver / 'NativeGpuTraceTest.cpp'),'-o',exe],check=True)
             subprocess.run([exe],check=True)
 
+    def test_problem_text(self):
+        text=b'native-metal: library refused: compiler missing'
+        raw=trace.RECORD.pack(1,5,65,77,0,*struct.unpack('<11Q',text.ljust(88,b'\0')))
+        head=trace.HEADER.pack(0x31545047,1,120,1,1,0)
+        _,rows=trace.records(head+raw)
+        self.assertEqual((rows[0]['name'],rows[0]['text']),('problem',text.decode()))
+
     def test_latency_store_and_decoder(self):
         root=Path(__file__).resolve().parents[1]
         source=root/'package/BootLatencyStoreTests.cpp'
@@ -137,7 +144,9 @@ class TraceTests(unittest.TestCase):
             directory=Path(directory);source=directory/relative;source.parent.mkdir(parents=True)
             source.write_bytes((candidates[0]/relative).read_bytes())
             subprocess.run(['git','init','-q',str(directory)],check=True)
-            subprocess.run(['git','apply',str(patch)],cwd=directory,check=True)
+            # The prepared source may already carry the patch; apply it only to the pinned form.
+            if subprocess.run(['git','apply','--reverse','--check',str(patch)],cwd=directory,capture_output=True).returncode:
+                subprocess.run(['git','apply',str(patch)],cwd=directory,check=True)
             text=source.read_text();a=text.index('pub fn now_nanos()');b=text.index('/// Whether the host asked',a)
             text=text[:a]+'pub fn now_nanos() -> u64 {1}\n'+text[b:]
             text+='\n#[cfg(test)] mod focus {\n use super::*;\n #[test] fn idle_cannot_evict_commands() {\n  std::env::set_var("SHENG_DIAG","1");\n  for _ in 0..100000 {mark(0,Stage::SchedulerSleep,0);mark(0,Stage::SchedulerResumed,1);}\n  let mut rows=[StageRecord::default();4];assert_eq!(read(0,&mut rows).0,0);\n  mark(5,Stage::CommitCall,0);mark(5,Stage::CompleteBegin,0);mark(5,Stage::CompleteEnd,0);\n  assert_eq!(read(0,&mut rows).0,3);assert_eq!(rows[0].id,5);\n }\n}\n'
