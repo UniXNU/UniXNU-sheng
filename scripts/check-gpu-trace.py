@@ -38,6 +38,23 @@ class TraceTests(unittest.TestCase):
         with self.assertRaises(ValueError):trace.records(head+raw[:-1])
         with self.assertRaises(ValueError):trace.records(b'')
 
+    def test_latency_store_and_decoder(self):
+        root=Path(__file__).resolve().parents[1]
+        source=root/'package/BootLatencyStoreTests.cpp'
+        if not source.exists():source=root/'kits/sheng/BootLatencyStoreTests.cpp'
+        with tempfile.TemporaryDirectory() as directory:
+            exe=str(Path(directory)/'latency')
+            subprocess.run(['xcrun','clang++','-std=c++17','-O1','-g','-Wall','-Wextra','-Werror',
+                            '-fsanitize=address,undefined','-pthread',str(source),'-o',exe],check=True)
+            subprocess.run([exe],check=True)
+        raw=struct.pack('<4I',0x3154414c,1,1,0)+trace.LATENCY_RECORD.pack(99,123,2,61,456,789,1,61,0,0)
+        head,rows=trace.latency_records(raw)
+        self.assertEqual(head['kept'],1)
+        self.assertEqual(rows[0]['fields']['cookie'],456)
+        self.assertEqual(rows[0]['name'],'ipc_receive')
+        with self.assertRaises(ValueError):trace.latency_records(raw[:-1])
+        with self.assertRaises(ValueError):trace.latency_records(b'')
+
     def test_pixels(self):
         self.assertEqual(trace.PIXEL.size,112)
         h=dict.fromkeys(trace.PIXEL_FIELDS,0)

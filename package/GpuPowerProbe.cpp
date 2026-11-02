@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
+#include "BootLatencyTrace.h"
 // Default-off, staged read-only observation of the Adreno power and clock state. `sheng-gpu-power=<n>`:
 //   1  read GCC GPU branches, GPUCC gdscr/branches, GPU SMMU global space 0 and RBBM_STATUS, each only when the previous stage
 //      showed its prerequisite on (GpuPowerBoard.h); no register is written
@@ -1886,6 +1887,7 @@ void gpuDcvsThread(void *, wait_result_t) {
             native_gpu_dcvs_log[slot][0] = tns / 1000;
             native_gpu_dcvs_log[slot][1] = (uint64_t)cur << 56 | (uint64_t)want << 48 | (uint64_t)(voted ? reason : 8) << 40 |
                                            (uint64_t)(busyNs * 100 / ns) << 32 | (uint32_t)need;
+            boot_latency_record(4,cur,want,voted?reason:8,busyNs*100/ns,need,voted?want:cur);
             native_gpu_dcvs_log_count = native_gpu_dcvs_log_count + 1;
             if (voted) {hold = want > cur; cur = want; native_gpu_dcvs[1] = cur; native_gpu_dcvs[2] = native_gpu_dcvs[2] + 1;}
             else native_gpu_dcvs[3] = native_gpu_dcvs[3] + 1;
