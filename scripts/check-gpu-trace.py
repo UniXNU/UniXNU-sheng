@@ -133,6 +133,58 @@ class TraceTests(unittest.TestCase):
         _,rows=trace.latency_records(raw)
         self.assertEqual((rows[0]['phase'],rows[0]['flags']),(2,3))
 
+    def test_turnip_filters_before_transport(self):
+        root=Path(__file__).resolve().parents[1]
+        if not (root/'patches/mesa').exists():root=root.parent/'UniXNU'
+        patch=(root/'patches/mesa/turnip-frame-diagnostics.patch').read_text().split('diff --git')[1]
+        header='\n'.join(line[1:] for line in patch.splitlines() if line.startswith('+') and not line.startswith('+++'))
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/'transport.cpp';exe=Path(directory)/'transport'
+            (Path(directory)/'tu_frame_diagnostic.h').write_text(header)
+            source.write_text('#include <cassert>\n#include "tu_frame_diagnostic.h"\n'+
+                'static int calls; extern "C" bool tu_darwin_frame_diagnostic(uint32_t,const void *,uint32_t){++calls;return true;}\n'+
+                'int main(){setenv("SHENG_GPU_TRACE","1",1);for(int i=0;i<100000;i++)tu_frame_event(37);assert(calls==0);'+
+                'tu_frame_event(36);tu_frame_event(38);tu_frame_event(43);assert(calls==3);}')
+            subprocess.run(['xcrun','clang++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',str(source),'-o',str(exe)],check=True)
+            subprocess.run([str(exe)],check=True)
+
+    def test_runtime_idle_stage_filter(self):
+        import shutil
+        root=Path(__file__).resolve().parents[1]
+        if not (root/'drivers/AdrenoMetal').exists():root=root.parent/'UniXNU'
+        candidates=list(root.glob('out/sheng/*/*/tree/.cache/gpu-reference/metal2vulkan'))
+        if not candidates or not shutil.which('rustc'):self.skipTest('prepared runtime and rustc are required')
+        relative=Path('crates/metal2vulkan-runtime/src/stage_trace.rs')
+        patch=root/'drivers/AdrenoMetal/bridge/patches/0029-latency-stage-selection.patch'
+        with tempfile.TemporaryDirectory() as directory:
+            directory=Path(directory);source=directory/relative;source.parent.mkdir(parents=True)
+            source.write_bytes((candidates[0]/relative).read_bytes())
+            subprocess.run(['git','init','-q',str(directory)],check=True)
+            subprocess.run(['git','apply',str(patch)],cwd=directory,check=True)
+            text=source.read_text();a=text.index('pub fn now_nanos()');b=text.index('/// Whether the host asked',a)
+            text=text[:a]+'pub fn now_nanos() -> u64 {1}\n'+text[b:]
+            text+='\n#[cfg(test)] mod focus {\n use super::*;\n #[test] fn idle_cannot_evict_commands() {\n  std::env::set_var("SHENG_DIAG","1");\n  for _ in 0..100000 {mark(0,Stage::SchedulerSleep,0);mark(0,Stage::SchedulerResumed,1);}\n  let mut rows=[StageRecord::default();4];assert_eq!(read(0,&mut rows).0,0);\n  mark(5,Stage::CommitCall,0);mark(5,Stage::CompleteBegin,0);mark(5,Stage::CompleteEnd,0);\n  assert_eq!(read(0,&mut rows).0,3);assert_eq!(rows[0].id,5);\n }\n}\n'
+            source.write_text(text);exe=directory/'stage-test'
+            subprocess.run(['rustc','--edition=2021','--test',str(source),'-o',str(exe)],check=True)
+            subprocess.run([str(exe)],check=True)
+
+    def test_focused_capture_schema(self):
+        values=[(1,[10,20,1,61,0,30]),(13,[10,1,0,0,30,40]),
+                (33,[10,11,40,21,0,0]),(34,[1000000,100,20,20,900000,0])]
+        raw=struct.pack('<4I',0x3154414c,1000021,len(values),0)
+        raw+=b''.join(trace.LATENCY_RECORD.pack(i,7,k,61,*v) for i,(k,v) in enumerate(values))
+        head,rows=trace.latency_records(raw)
+        self.assertEqual(head['capture_budget']['unmatched_ipc'],900000)
+        self.assertEqual(head['overwritten'],1000000-491519)
+        links=trace.latency_analysis(rows)['ipc']
+        self.assertTrue(any(x.get('request_cookie')==10 and x.get('reply_cookie')==11 for x in links))
+        blob=trace.FRAME_RECORD.pack(1,17,100,110,120,130,2,3,4000,0,5,20,24,6)
+        frame=trace.frontend_details(blob)[0]
+        self.assertEqual((frame['created_us'],frame['committed_us'],frame['completed_us']),(100,110,130))
+        blob=trace.FRAME_RECORD.pack(7,0,500,3,1000,1010,3048|(2032<<16),2,44,6193,0,0,0,0)
+        frame=trace.frontend_details(blob)[0]
+        self.assertEqual((frame['width'],frame['height'],frame['gpu_elapsed_us']),(3048,2032,10))
+
     def test_pixels(self):
         self.assertEqual(trace.PIXEL.size,112)
         h=dict.fromkeys(trace.PIXEL_FIELDS,0)
