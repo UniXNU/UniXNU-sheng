@@ -101,6 +101,7 @@ RUNTIME_STAGES = {40:'memory_begin',41:'memory_pool',42:'memory_kib',43:'availab
  50:'free_begin',51:'free_end',52:'release_queue_full',53:'complete_begin',54:'complete_state',
  55:'complete_handlers',56:'complete_retained',57:'complete_end'}
 
+CPU_DETAIL_KINDS=dict(enumerate(('encoding','closure_release','completed_callback','buffer','texture','owner_deallocator','surface_release','function','library','compute_pipeline','render_pipeline','sampler','depth_stencil','event','fence','encoder','command_buffer','queue','heap','binary_archive','memory_owner'),1))
 FRAME_RECORD=struct.Struct('<II4Q8I')
 def frontend_details(blob):
     if len(blob)%FRAME_RECORD.size:raise ValueError('truncated frontend stream')
@@ -109,7 +110,7 @@ def frontend_details(blob):
         kind,seq,t0,t1,t2,t3,a,b,c,d,tid,cpu0,cpu1,tid2=FRAME_RECORD.unpack_from(blob,at)
         if kind==17:
             rows.append(dict(name='cpu_detail',sequence=seq,us=t0,operation=t1,command=t2,object=t3,
-                             kind=a&65535,phase=a>>16,thread=b,function=c|(d<<32),elapsed_us=cpu0,line=cpu1))
+                             kind=a&65535,detail_name=CPU_DETAIL_KINDS.get(a&65535,'unknown'),phase=a>>16,thread=b,function=c|(d<<32),elapsed_us=cpu0,line=cpu1))
         elif kind==18:rows.append(dict(name='cpu_detail_link',us=t0,operation=t1,parent=t2,queued_us=t3,began_us=a|(b<<32)))
         elif kind==19:
             raw=struct.pack('<3Q2I',t1,t2,t3,b,c)
