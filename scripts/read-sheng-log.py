@@ -76,6 +76,16 @@ def unpack_export(blob, run, name='export'):
                         str(out / 'files'), '--out', str(out / 'gpu')], check=True)
 
 
+    if (out/'files/kernel.latency.bin').exists():
+        import subprocess
+        command=[sys.executable,str(Path(__file__).with_name('decode-sheng-latency.py')),
+                 str(out/'files/kernel.latency.bin'),'--out',str(out/'latency.jsonl')]
+        for home in ('mobile','root'):
+            frames=out/f'files/private/var/{home}/Library/Caches/com.apple.backboardd/m2v/frames.trace'
+            if frames.exists():command+=['--frames',str(frames)];break
+        subprocess.run(command,check=True)
+
+
 
 def header(blob):
     if len(blob) < BLOCK:

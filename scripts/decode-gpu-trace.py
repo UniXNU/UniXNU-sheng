@@ -59,19 +59,129 @@ FIELDS = {
  61: ('encode_batch', 'batch phase queued_us tasks depth thread'),
  62: ('frontend_stage', 'command commit phase batch thread surfaces bytes'),
  63: ('thread', 'thread role name0 name1 name2 name3'),
+ 64: ('cpu_detail','operation kind phase command object function parent thread began_us elapsed_us line queued_us'),
+ 67: ('cpu_definition','key part text0 text1 text2 text3'),
+ 68: ('dispatch','item phase queue function parent context'),
 }
 LATENCY_RECORD = struct.Struct('<QQII6Q')
 LATENCY_FIELDS = {
- 1: ('ipc_send_attempt', 'cookie message receiver task_pid unused0 unused1'),
- 2: ('ipc_receive', 'cookie message receiver task_pid unused0 unused1'),
+ 1: ('ipc_send_attempt', 'cookie message receiver task_pid destination_task destination_port'),
+ 2: ('ipc_receive', 'cookie message receiver task_pid destination_task destination_port'),
  3: ('user_exception', 'exception code subcode pc lr sp'),
  4: ('gpu_vote', 'previous_level requested_level reason busy_percent needed_mhz accepted_level'),
  5: ('touch_publish', 'report contacts index tracking_id x_tenth_pixel y_tenth_pixel'),
+ 6: ('fault_state','fault fp sp far esr shared_cache_slide'),
+ 7: ('fault_registers','fault first x0 x1 x2 x3'),
+ 8: ('fault_frames','fault first pc0 pc1 pc2 pc3'),
+ 9: ('fault_images','fault shared_cache_slide dyld_info version images main_image'),
+ 10: ('fault_stack','fault first word0 word1 word2 word3'),
+ 11: ('fault_codes','fault exception code subcode pc lr'),
+ 12: ('fault_result','fault flags error frames delay_us stack_error'),
+ 13: ('ipc_ports','cookie phase sender_task destination_task destination_port reply_port'),
+ 14: ('task_identity','task task_pid name0 name1 name2 name3'),
+ 16: ('gpu_counter_config','counter select_reg countable low_reg generation selector_readback'),
+ 17: ('gpu_counter_values','sample first v0 v1 v2 v3'),
+ 18: ('gpu_counter_interval','sample began_us ended_us busy_ticks flags epoch'),
+ 19: ('gpu_counter_validity','sample selector_mismatch unstable reset epoch_before epoch_after'),
+ 20: ('dispatch','item phase queue function parent context'),
+ 22: ('signal_exit','subject_pid status reason_namespace reason_code current_thread_owner unused'),
+ 23: ('signal_description','subject_pid status part text0 text1 text2'),
+ 24: ('exit_process_name','subject_pid unused0 unused1 text0 text1 text2'),
+ 25: ('fault_cache_uuid','fault cache_base uuid0 uuid1 main_image unused'),
+ 26: ('fault_image_uuid','fault image uuid0 uuid1 index unused'),
+ 27: ('fault_uuid_result','fault total captured error limit unused'),
+ 28: ('thread_wait','capture state wait pc lr switches'),
+ 29: ('thread_wait_frames','capture first pc0 pc1 pc2 pc3'),
+ 30: ('thread_wait_peer','capture peer_pid peer_status stack_error unused0 unused1'),
+ 31: ('thread_wait_coverage','subject_pid visited recorded omitted lock_busy capacity'),
+ 32: ('thread_wait_kernel','capture first pc0 pc1 pc2 pc3'),
 }
 RUNTIME_STAGES = {40:'memory_begin',41:'memory_pool',42:'memory_kib',43:'available_kib',
  44:'allocated',45:'reused',46:'memory_low',47:'memory_high',48:'cached_kib',49:'deferred_kib',
  50:'free_begin',51:'free_end',52:'release_queue_full',53:'complete_begin',54:'complete_state',
  55:'complete_handlers',56:'complete_retained',57:'complete_end'}
+
+FRAME_RECORD=struct.Struct('<II4Q8I')
+def frontend_details(blob):
+    if len(blob)%FRAME_RECORD.size:raise ValueError('truncated frontend stream')
+    rows=[]
+    for at in range(0,len(blob),FRAME_RECORD.size):
+        kind,seq,t0,t1,t2,t3,a,b,c,d,tid,cpu0,cpu1,tid2=FRAME_RECORD.unpack_from(blob,at)
+        if kind==17:
+            rows.append(dict(name='cpu_detail',sequence=seq,us=t0,operation=t1,command=t2,object=t3,
+                             kind=a&65535,phase=a>>16,thread=b,function=c|(d<<32),elapsed_us=cpu0,line=cpu1))
+        elif kind==18:rows.append(dict(name='cpu_detail_link',us=t0,operation=t1,parent=t2,queued_us=t3,began_us=a|(b<<32)))
+        elif kind==19:
+            raw=struct.pack('<3Q2I',t1,t2,t3,b,c)
+            rows.append(dict(name='cpu_definition',key=t0,part=a,text=raw.split(b'\0')[0].decode('utf-8',errors='replace')))
+    return rows
+
+GPU_COUNTER_NAMES=('cp_clocks','uche_arbiter_stall','uche_latency_cycles','uche_latency_samples',
+ 'uche_tp_read_beats','uche_sp_read_beats','uche_tp_requests','tp_busy','tp_l1_requests','tp_l1_misses',
+ 'sp_busy','sp_alu_working','sp_tp_stall','sp_fs_full_alu','sp_icache_requests','sp_icache_misses',
+ 'sp_pixels','cmp_read_data','cmp_write_data')
+
+def latency_analysis(rows):
+    queues,running,dispatch,ipc_pending,ipc,reply_ports={}, {}, [], {}, [], {}
+    counter_parts,previous,counters={},None,[]
+    faults={}
+    for row in rows:
+        kind,pid,us,f=row['kind'],row['pid'],row['us'],row['fields']
+        if kind==1:
+            ipc_pending[f['cookie']]=dict(pid=pid,us=us,**f)
+            request=reply_ports.pop(f['destination_port'],None)
+            if request:ipc.append(dict(reply_cookie=f['cookie'],request_cookie=request,reply_port=f['destination_port']))
+        elif kind==2:
+            sent=ipc_pending.pop(f['cookie'],None)
+            ipc.append(dict(cookie=f['cookie'],message=f['message'],receive_us=us,receiver_pid=pid,
+                            send_us=sent['us'] if sent and sent['message']==f['message'] else None))
+        elif kind==13 and f['phase']==1:
+            request=reply_ports.pop(f['destination_port'],None)
+            if request:ipc.append(dict(reply_cookie=f['cookie'],request_cookie=request,reply_port=f['destination_port']))
+            if f['reply_port']:reply_ports[f['reply_port']]=f['cookie']
+        elif kind==20:
+            phase=f['phase']&255;key=pid,f['item']
+            if phase==1:
+                queues[key]=dict(pid=pid,item=f['item'],queued_us=us,parent=f['parent'],function=f['function'],queue=f['queue'])
+            elif phase==2:
+                item=queues.pop(key,dict(pid=pid,item=f['item'],queued_us=None,parent=f['parent'],function=f['function'],queue=f['queue']))
+                item.update(started_us=us,thread=row['thread']);running[key]=item
+            elif phase==3:
+                item=running.pop(key,None)
+                if item:
+                    item['ended_us']=us;item['run_us']=us-item['started_us']
+                    item['queue_us']=item['started_us']-item['queued_us'] if item['queued_us'] is not None else None
+                    dispatch.append(item)
+        elif kind==17:
+            part=counter_parts.setdefault(f['sample'],dict(values={}))
+            part['values'].update((f['first']+i,f['v'+str(i)]) for i in range(4) if f['first']+i<len(GPU_COUNTER_NAMES))
+        elif kind==18:counter_parts.setdefault(f['sample'],dict(values={}))['interval']=f
+        elif kind==19:
+            part=counter_parts.pop(f['sample'],dict(values={}));interval=part.get('interval')
+            complete=interval and len(part['values'])==len(GPU_COUNTER_NAMES)
+            result=dict(sample=f['sample'],scope='global_br',valid=False,validity=f,interval=interval)
+            if complete and previous and previous['valid_end']:
+                valid=(not interval['flags'] and not (f['selector_mismatch']|f['unstable']|f['reset']) and
+                       f['epoch_before']==previous['epoch'] and f['epoch_after']==f['epoch_before'])
+                elapsed=interval['ended_us']-previous['ended_us']
+                deltas=[part['values'][i]-previous['values'][i] for i in range(len(GPU_COUNTER_NAMES))]
+                valid=valid and elapsed>0 and min(deltas)>=0
+                if valid:
+                    d=dict(zip(GPU_COUNTER_NAMES,deltas));result.update(valid=True,elapsed_us=elapsed,delta=d,
+                        cp_clocks_per_us=d['cp_clocks']/elapsed,tp_sp_read_bytes=32*(d['uche_tp_read_beats']+d['uche_sp_read_beats']))
+            if complete:previous=dict(values=part['values'],epoch=f['epoch_after'],ended_us=interval['ended_us'],
+                                      valid_end=not(interval['flags']&~1) and not(f['selector_mismatch']|f['unstable']))
+            else:previous=None
+            counters.append(result)
+        elif kind in (6,7,8,9,10,11,12):
+            fault=faults.setdefault((pid,f['fault']),dict(pid=pid,fault=f['fault'],registers={},frames={},stack={}))
+            if kind in (7,8,10):
+                target= fault['registers' if kind==7 else 'frames' if kind==8 else 'stack']
+                prefix='x' if kind==7 else 'pc' if kind==8 else 'word'
+                target.update((f['first']+i,f[prefix+str(i)]) for i in range(4))
+            else:fault[row['name']]=f
+    return dict(ipc=ipc,dispatch=dispatch,gpu_counters=counters,faults=list(faults.values()),
+                pending_dispatch=len(queues),running_dispatch=len(running))
 
 def latency_records(blob):
     if len(blob)<16:raise ValueError('short latency header')
@@ -82,7 +192,15 @@ def latency_records(blob):
     for at in range(16,len(blob),LATENCY_RECORD.size):
         us,tid,kind,pid,*values=LATENCY_RECORD.unpack_from(blob,at)
         name,names=LATENCY_FIELDS.get(kind,('unknown',''))
-        rows.append(dict(us=us,thread=tid,kind=kind,pid=pid,name=name,fields=dict(zip(names.split(),values))))
+        row=dict(us=us,thread=tid,kind=kind,pid=pid,name=name,fields=dict(zip(names.split(),values)))
+        if kind not in LATENCY_FIELDS:row['raw']=values
+        if kind in (23,24):row['text']=struct.pack('<3Q',*values[3:]).split(b'\0')[0].decode('utf-8',errors='replace')
+        if kind in (25,26):row['uuid']=struct.pack('<2Q',*values[2:4]).hex()
+        if kind==14:row['text']=struct.pack('<4Q',*values[2:]).split(b'\0')[0].decode('utf-8',errors='replace')
+        if kind==20:
+            row['phase']=values[1]&255
+            row['flags']=values[1]>>8
+        rows.append(row)
     rows.sort(key=lambda r:r['us'])
     return dict(total=total,kept=kept,dropped=dropped,overwritten=max(0,total-524288)),rows
 
@@ -110,6 +228,8 @@ def records(blob):
                    fields=dict(zip(names.split(), values)), raw=values)
         if event == 39:
             row['stage_name'] = RUNTIME_STAGES.get(values[1], str(values[1]))
+        if event==67:
+            row['text']=struct.pack('<4Q',*values[2:6]).split(b'\0')[0].decode('utf-8',errors='replace')
         if event == 63:
             row['text'] = struct.pack('<4Q', *values[2:6]).split(b'\0')[0].decode('utf-8', errors='replace')
         if event in (46, 47, 58, 59):

@@ -70,6 +70,8 @@ extern "C" {
 #include "NativeAdrenoCpInit.h"
 #include "NativeAdrenoPwrup.h"
 #include "NativeAdrenoA740HwInit.h"
+#include "NativeGpuPerfCounters.h"
+extern "C" bool native_adreno_preempt_stats(uint32_t *) __attribute__((weak_import));
 #include "AdrenoPM4.h"
 // Weak: an image that does not link NativeAdreno reports "nolink" instead of failing to link.
 extern "C" IOReturn NativeAdrenoGmuContextBringup(volatile uint8_t *smmu, size_t bytes, unsigned bank, unsigned asid,
@@ -1813,6 +1815,38 @@ unsigned gpuLevelFor(uint64_t mhz) {
     while (l < kGpuTop && kGpuMHz[l] < mhz) ++l;
     return l;
 }
+void gpuPerfTick(uint64_t busyTicks) {
+ static NativeGpuPerfCounters counters;static bool configured=false;
+ static uint64_t sample=0,lastBusy=0;
+ if(!boot_latency_enabled())return;
+ if(!configured) {
+  counters.configure([](uint32_t reg,uint32_t value){gpuWr(reg,value);});
+  __asm__ volatile("dsb sy" ::: "memory");configured=true;
+  for(unsigned i=0;i<NativeGpuPerfCount;++i) {
+   const auto &c=NativeGpuPerfPlan[i];boot_latency_record(16,i,c.select,c.value,c.low,7,gpuRd(c.select));
+  }
+ }
+ uint32_t before[26]={},after[26]={};
+ const bool preempt=bootArg("sheng-gpu-preempt",2)!=0;
+ const bool gotBefore=!preempt || (&native_adreno_preempt_stats && native_adreno_preempt_stats(before));
+ uint64_t began=0;absolutetime_to_nanoseconds(mach_absolute_time(),&began);
+ const auto values=counters.capture([](uint32_t reg){return gpuRd(reg);});
+ uint64_t ended=0;absolutetime_to_nanoseconds(mach_absolute_time(),&ended);
+ const bool gotAfter=!preempt || (&native_adreno_preempt_stats && native_adreno_preempt_stats(after));
+ uint32_t flags=values.first?1u:0u;
+ if(before[0]!=after[0] || before[1]!=after[1])flags|=2;
+ if(before[8] || after[8])flags|=4;
+ if(!gotBefore || !gotAfter)flags|=8;
+ if(values.reset)flags|=16;if(values.mismatch)flags|=32;if(values.unstable)flags|=64;
+ const uint64_t id=++sample;
+ for(unsigned first=0;first<NativeGpuPerfCount;first+=4) {
+  uint64_t v[4]={};for(unsigned n=0;n<4 && first+n<NativeGpuPerfCount;++n)v[n]=values.values[first+n];
+  boot_latency_record(17,id,first,v[0],v[1],v[2],v[3]);
+ }
+ boot_latency_record(18,id,began/1000,ended/1000,busyTicks-lastBusy,flags,(uint64_t)after[0]<<32|after[1]);
+ boot_latency_record(19,id,values.mismatch,values.unstable,values.reset,(uint64_t)before[0]<<32|before[1],(uint64_t)after[0]<<32|after[1]);
+ lastBusy=busyTicks;
+}
 void gpuDcvsThread(void *, wait_result_t) {
     ShengGmuIo &io = gColdDevice.io;
     unsigned floor = bootArg("sheng-gpu-dcvs-min", 3);
@@ -1834,9 +1868,11 @@ void gpuDcvsThread(void *, wait_result_t) {
     nanoseconds_to_absolutetime(50000000ull, &wakeAbs);
     uint32_t touches = &native_hid_input_events ? native_hid_input_events[6] : 0;
     bool idle = false;
+    const bool tracePerf=bootArg("sheng-gpu-perf",0)==1;unsigned perfTick=0;
     for (;;) {
         IOSleep(16);
         const uint64_t busy = gpuBusyTicks(), t = mach_absolute_time();
+        if(tracePerf && !(++perfTick&1))gpuPerfTick(busy);
         uint64_t ns = 0;
         absolutetime_to_nanoseconds(t - lastT, &ns);
         uint64_t busyNs = (busy - lastBusy) * 625 / 12;   // 52.083 ns per XO tick
