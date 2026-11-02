@@ -22,6 +22,7 @@ FIELDS = {
  22: ('display_fence', 'request reason target submitted retired elapsed_ns ring0 ring1 query_reason repeated_queries'),
  23: ('display_latch', 'request flush elapsed_ns shown pending'),
  63: ('thread', 'thread role name0 name1 name2 name3'),
+ 65: ('problem', 'part'),
 }
 LATENCY_RECORD = struct.Struct('<QQII6Q')
 LATENCY_FIELDS = {
@@ -223,6 +224,8 @@ def records(blob):
                    fields=dict(zip(names.split(), values)), raw=values)
         if event == 63:
             row['text'] = struct.pack('<4Q', *values[2:6]).split(b'\0')[0].decode('utf-8', errors='replace')
+        if event == 65:
+            row['text'] = struct.pack('<11Q', *values[1:12]).split(b'\0')[0].decode('utf-8', errors='replace')
         rows.append(row)
     rows.sort(key=lambda row: (row['us'], row['sequence']))
     return dict(issued=issued, dropped=dropped, records=len(rows)), rows
