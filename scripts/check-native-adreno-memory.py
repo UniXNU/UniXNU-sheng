@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Qualify native XNU memory code without allocating kernel memory or opening GPU."""
+import argparse
 import hashlib
 import json
 import re
@@ -8,6 +9,10 @@ import struct
 import subprocess
 import sys
 from pathlib import Path
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--core-only', action='store_true', help='Run host memory, VM, ring, preemption, submit, client and lifecycle checks')
+args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'kits/XnuPrelink'))
@@ -30,15 +35,17 @@ for name in ['IOKit/IOTypes.h', 'IOKit/IOReturn.h', 'IOKit/IOBufferMemoryDescrip
     p = includes / name
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('#include "XnuMemoryFixture.h"\n')
+(includes / 'sys').mkdir(exist_ok=True)
+(includes / 'sys/resource_private.h').write_text('#define PRIO_DARWIN_GPU_BACKGROUND 3\n#define PRIO_DARWIN_GPU_UTILITY 4\n')
 test = out / 'test-memory'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', '-O2', '-Wall', '-Wextra',
                 '-Werror', '-fsanitize=address,undefined', '-I', includes,
-                '-I', kit / 'tests', '-I', kit, kit / 'NativeAdrenoMemory.cpp',
+                '-I', kit / 'tests', '-I', kit, kit / 'NativeAdrenoMemory.cpp', kit / 'tests/HostKernelHooks.cpp',
                 kit / 'tests/test_memory.cpp', '-o', test], check=True, timeout=60)
 host = subprocess.run([test], check=True, capture_output=True, text=True, timeout=30)
 print(host.stdout, end='')
 counts = re.search(r'(\d+) allocation profiles, (\d+) allocation/cache/lifetime failure controls, (\d+) argument/CPU refusal controls', host.stdout)
-if not counts or tuple(map(int, counts.groups())) != (18, 16, 20):
+if not counts or tuple(map(int, counts.groups())) != (18, 16, 19):
     raise SystemExit('Expected ownership/refusal coverage absent')
 (out / 'host.log').write_text(host.stdout)
 
@@ -58,12 +65,12 @@ for stem in ['ArmSmmu4KContext', 'ArmSmmu4KProgram', 'ArmSmmu4KLive', 'ArmSmmu4K
 binding_test = out / 'test-smmu-memory'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
                 '-I', kit / 'tests', '-I', kit, '-I', smmu,
-                kit / 'NativeAdrenoMemory.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
+                kit / 'NativeAdrenoMemory.cpp', kit / 'tests/HostKernelHooks.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
                 kit / 'tests/test_smmu_memory.cpp', *host_smmu_objects,
                 '-o', binding_test], check=True, timeout=60)
 binding_host = subprocess.run([binding_test], check=True, capture_output=True, text=True, timeout=30)
 print(binding_host.stdout, end='')
-if '34 native allocator/table-pool bindings and 4 capacity/scatter/publication/ownership refusals' not in binding_host.stdout:
+if '34 on-demand table-page bindings and 4 allocation/range/publication/quarantine refusals' not in binding_host.stdout:
     raise SystemExit('Actual native memory to native SMMU binding coverage absent')
 (out / 'binding-host.log').write_text(binding_host.stdout)
 
@@ -81,12 +88,12 @@ if '2048 oracle profiles / 524288 queries; 65536 reversed spans' not in alias_ho
 vm_test = out / 'test-vm'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
                 '-I', kit / 'tests', '-I', kit, '-I', smmu,
-                kit / 'NativeAdrenoMemory.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
+                kit / 'NativeAdrenoMemory.cpp', kit / 'tests/HostKernelHooks.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
                 kit / 'NativeAdrenoVm.cpp', kit / 'tests/test_vm.cpp',
                 *host_smmu_objects, '-o', vm_test], check=True, timeout=90)
 vm_host = subprocess.run([vm_test], check=True, capture_output=True, text=True, timeout=60)
 print(vm_host.stdout, end='')
-if '1 native map/hold/unmap transaction, 13 pre-ownership refusals, 1 scattered-span ordering and capacity case and 1 post-hold poison/retention case' not in vm_host.stdout:
+if '1 native map/hold/unmap transaction, 13 pre-ownership refusals, 1 scattered-span ordering and growth case and 1 post-hold poison/retention case' not in vm_host.stdout:
     raise SystemExit('Actual native VM transaction coverage absent')
 if 'VM alias index/fallback preserve attribute-class refusals before MMIO/ownership; 8192-span different-class map/unmap' not in vm_host.stdout:
     raise SystemExit('Native VM attribute-class alias controls absent')
@@ -99,7 +106,7 @@ subprocess.run(['xcrun', 'clang', '-std=c11', *host_flags, '-c',
 ring_test = out / 'test-ring'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
                 '-I', kit / 'tests', '-I', kit, '-I', ROOT / 'kits/AdrenoPM4',
-                kit / 'NativeAdrenoRing.cpp', kit / 'tests/test_ring.cpp', ring_kind,
+                kit / 'NativeAdrenoRing.cpp', kit / 'NativeAdrenoPreempt.cpp', kit / 'tests/test_ring.cpp', ring_kind,
                 '-o', ring_test], check=True, timeout=90)
 ring_host = subprocess.run([ring_test], check=True, capture_output=True, text=True, timeout=60)
 print(ring_host.stdout, end='')
@@ -107,12 +114,19 @@ if '1 exact ring programming and submission, 1 wrap submission, 1 refused re-att
     raise SystemExit('Actual native ring/fence coverage absent')
 (out / 'ring-host.log').write_text(ring_host.stdout)
 
+# Preemption register protocol and power-vote lifetime.
+preempt_test = out / 'test-preempt'
+subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
+                '-I', kit / 'tests', '-I', kit, kit / 'NativeAdrenoPreempt.cpp',
+                kit / 'tests/test_preempt.cpp', '-o', preempt_test], check=True, timeout=60)
+subprocess.run([preempt_test], check=True, timeout=30)
+
 # Real execbuf code over the SMMU and CP peers.
 submit_test = out / 'test-submit'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
                 '-I', kit / 'tests', '-I', kit, '-I', smmu, '-I', ROOT / 'kits/AdrenoPM4',
-                kit / 'NativeAdrenoMemory.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
-                kit / 'NativeAdrenoVm.cpp', kit / 'NativeAdrenoRing.cpp',
+                kit / 'NativeAdrenoMemory.cpp', kit / 'tests/HostKernelHooks.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
+                kit / 'NativeAdrenoVm.cpp', kit / 'NativeAdrenoRing.cpp', kit / 'NativeAdrenoPreempt.cpp',
                 kit / 'NativeAdrenoSubmit.cpp', kit / 'tests/test_submit.cpp',
                 *host_smmu_objects, ring_kind, '-o', submit_test], check=True, timeout=90)
 submit_host = subprocess.run([submit_test], check=True, capture_output=True, text=True, timeout=60)
@@ -125,8 +139,8 @@ if '1 execbuf submission with exact IB packet and fence, 8 pre-reference refusal
 client_test = out / 'test-userclient'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
                 '-I', kit / 'tests', '-I', kit, '-I', smmu, '-I', ROOT / 'kits/AdrenoPM4',
-                kit / 'NativeAdrenoMemory.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
-                kit / 'NativeAdrenoVm.cpp', kit / 'NativeAdrenoRing.cpp',
+                kit / 'NativeAdrenoMemory.cpp', kit / 'tests/HostKernelHooks.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
+                kit / 'NativeAdrenoVm.cpp', kit / 'NativeAdrenoRing.cpp', kit / 'NativeAdrenoPreempt.cpp',
                 kit / 'NativeAdrenoSubmit.cpp', kit / 'NativeAdrenoUserClient.cpp',
                 kit / 'NativeAdrenoTimer.cpp', kit / 'tests/test_userclient.cpp',
                 *host_smmu_objects, ring_kind, '-o', client_test], check=True, timeout=120)
@@ -151,7 +165,7 @@ if '1 derived-offset check, 2 stable reads, 1 rollover retry, 1 I/O failure and 
 gpu_test = out / 'test-gpu'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
                 '-I', kit / 'tests', '-I', kit, '-I', ROOT / 'kits/AdrenoPM4',
-                kit / 'NativeAdrenoRing.cpp', kit / 'NativeAdrenoCpInit.cpp',
+                kit / 'NativeAdrenoRing.cpp', kit / 'NativeAdrenoPreempt.cpp', kit / 'NativeAdrenoCpInit.cpp',
                 kit / 'NativeAdrenoIrq.cpp', kit / 'NativeAdrenoTimer.cpp',
                 kit / 'NativeAdrenoGpu.cpp', kit / 'tests/test_gpu.cpp',
                 ring_kind, '-o', gpu_test], check=True, timeout=120)
@@ -165,8 +179,8 @@ if '1 full lifecycle start/stop, 3 board-step failures, 3 real component failure
 client_test = out / 'test-client'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
                 '-I', kit / 'tests', '-I', kit, '-I', smmu, '-I', ROOT / 'kits/AdrenoPM4',
-                kit / 'NativeAdrenoMemory.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
-                kit / 'NativeAdrenoVm.cpp', kit / 'NativeAdrenoRing.cpp',
+                kit / 'NativeAdrenoMemory.cpp', kit / 'tests/HostKernelHooks.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
+                kit / 'NativeAdrenoVm.cpp', kit / 'NativeAdrenoRing.cpp', kit / 'NativeAdrenoPreempt.cpp',
                 kit / 'NativeAdrenoSubmit.cpp', kit / 'NativeAdrenoUserClient.cpp',
                 kit / 'NativeAdrenoTimer.cpp', kit / 'NativeAdrenoClient.cpp',
                 kit / 'tests/test_client.cpp',
@@ -176,6 +190,10 @@ print(client_host.stdout, end='')
 if '1 userspace-to-kernel round trip including CPU mapping leases and queue lifecycle, 1 version mismatch, 1 altered-size rejection and 8 client-side refusals' not in client_host.stdout:
     raise SystemExit('Actual userspace client round-trip coverage absent')
 (out / 'client-host.log').write_text(client_host.stdout)
+
+if args.core_only:
+    print('PASS: core memory, VM, scheduling, user-client, timer and lifecycle host checks')
+    raise SystemExit(0)
 
 # Device-tree reg parsing over the real SM8550 GPU/GMU cells.
 board_test = out / 'test-board'
@@ -209,20 +227,20 @@ if '4 FIPS vectors and the pinned GMU firmware (66844 bytes) validated, 6 malfor
 gmumem_test = out / 'test-gmumem'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
                 '-I', kit / 'tests', '-I', kit, '-I', smmu, '-I', ROOT / 'kits/AdrenoPM4',
-                kit / 'NativeAdrenoMemory.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
+                kit / 'NativeAdrenoMemory.cpp', kit / 'tests/HostKernelHooks.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
                 kit / 'NativeAdrenoVm.cpp', kit / 'NativeAdrenoGmuMemory.cpp',
                 kit / 'tests/test_gmumem.cpp', *host_smmu_objects,
                 '-o', gmumem_test], check=True, timeout=120)
 gmumem_host = subprocess.run([gmumem_test], check=True, capture_output=True, text=True, timeout=60)
 print(gmumem_host.stdout, end='')
-if '1 fixed a6xx GMU layout allocation and release, 5 size/range refusals' not in gmumem_host.stdout:
+if '1 fixed a6xx GMU layout allocation and release, 3 size/range refusals, 1 allocation failure and 1 repeat-allocation refusal' not in gmumem_host.stdout:
     raise SystemExit('Actual GMU memory layout coverage absent')
 (out / 'gmumem-host.log').write_text(gmumem_host.stdout)
 
 gmumap_test = out / 'test-gmumap'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
                 '-I', kit / 'tests', '-I', kit, '-I', smmu, '-I', ROOT / 'kits/AdrenoPM4',
-                kit / 'NativeAdrenoMemory.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
+                kit / 'NativeAdrenoMemory.cpp', kit / 'tests/HostKernelHooks.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
                 kit / 'NativeAdrenoVm.cpp', kit / 'NativeAdrenoGmuMemory.cpp',
                 kit / 'tests/test_gmumap.cpp', *host_smmu_objects,
                 '-o', gmumap_test], check=True, timeout=120)
@@ -235,9 +253,9 @@ if '1 lower-region fixed-address GMU payload mapping and unmap, 1 pre-allocation
 # GMU cold-start config assembled from the validated view and payload layout.
 gmuconfig_test = out / 'test-gmuconfig'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
-                '-I', kit / 'tests', '-I', kit, '-I', smmu, '-I', ROOT / 'kits/sheng',
+                '-I', kit / 'tests', '-I', kit, '-I', smmu, '-I', ROOT / 'kits/sheng', '-I', ROOT / 'kits/Sm8550Platform',
                 '-I', ROOT / 'kits/AdrenoFirmware', '-I', out,
-                kit / 'NativeAdrenoMemory.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
+                kit / 'NativeAdrenoMemory.cpp', kit / 'tests/HostKernelHooks.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
                 kit / 'NativeAdrenoVm.cpp', kit / 'NativeAdrenoGmuMemory.cpp',
                 kit / 'NativeAdrenoGmuConfig.cpp', kit / 'tests/test_gmuconfig.cpp',
                 *host_smmu_objects, '-o', gmuconfig_test], check=True, timeout=120)
@@ -250,7 +268,7 @@ if '1 assembled GMU config, 7 argument refusals and 1 non-startup-profile refusa
 # Five-window GMU MMIO adapter and time/hash services over fake windows.
 gmuplatform_test = out / 'test-gmuplatform'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
-                '-I', kit / 'tests', '-I', kit, '-I', ROOT / 'kits/sheng',
+                '-I', kit / 'tests', '-I', kit, '-I', ROOT / 'kits/sheng', '-I', ROOT / 'kits/Sm8550Platform',
                 '-I', ROOT / 'kits/AdrenoFirmware', '-I', out,
                 kit / 'NativeAdrenoSha256.cpp', kit / 'NativeAdrenoGmuPlatform.cpp',
                 kit / 'tests/test_gmuplatform.cpp', '-o', gmuplatform_test],
@@ -265,7 +283,7 @@ if '1 five-window adapter with real accesses, 11 bounds/argument refusals, 1 ser
 smmuctx_test = out / 'test-smmuctx'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
                 '-I', kit / 'tests', '-I', kit, '-I', smmu,
-                kit / 'NativeAdrenoMemory.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
+                kit / 'NativeAdrenoMemory.cpp', kit / 'tests/HostKernelHooks.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
                 kit / 'NativeAdrenoSmmuContext.cpp', kit / 'tests/test_smmuctx.cpp',
                 *host_smmu_objects, '-o', smmuctx_test], check=True, timeout=120)
 smmuctx_host = subprocess.run([smmuctx_test], check=True, capture_output=True, text=True, timeout=60)
@@ -281,7 +299,7 @@ subprocess.run(['xcrun', 'clang', '-std=c11', *host_flags, '-c', smmu / 'ArmSmmu
 gmuctx_test = out / 'test-gmuctx'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
                 '-I', kit / 'tests', '-I', kit, '-I', smmu,
-                kit / 'NativeAdrenoMemory.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
+                kit / 'NativeAdrenoMemory.cpp', kit / 'tests/HostKernelHooks.cpp', kit / 'NativeAdrenoSmmuMemory.cpp',
                 kit / 'NativeAdrenoVm.cpp', kit / 'NativeAdrenoGmuMemory.cpp',
                 kit / 'NativeAdrenoSmmuContext.cpp', kit / 'NativeAdrenoGmuContext.cpp',
                 kit / 'tests/test_gmuctx.cpp', *host_smmu_objects, mmio_object,
@@ -447,7 +465,7 @@ if '1 exact A7XX mask programming, 10 decoded interrupt/status cases, 5 poison-o
 cpinit_test = out / 'test-cpinit'
 subprocess.run(['xcrun', 'clang++', '-std=c++23', *host_flags, '-I', includes,
                 '-I', kit / 'tests', '-I', kit, '-I', ROOT / 'kits/AdrenoPM4',
-                kit / 'NativeAdrenoRing.cpp', kit / 'NativeAdrenoCpInit.cpp',
+                kit / 'NativeAdrenoRing.cpp', kit / 'NativeAdrenoPreempt.cpp', kit / 'NativeAdrenoCpInit.cpp',
                 kit / 'tests/test_cpinit.cpp', ring_kind, '-o', cpinit_test],
                check=True, timeout=90)
 cpinit_host = subprocess.run([cpinit_test], check=True, capture_output=True, text=True, timeout=60)
@@ -552,7 +570,7 @@ for literal in ['0x0800', '0x0802', '0x0804', '0x0806', '0x0807', '0x0885',
 
 recipe = ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'
 record = json.loads(recipe.read_text().strip().rstrip(','))
-sources = [kit / name for name in ['NativeAdrenoMemory.cpp', 'NativeAdrenoCpu.cpp', 'NativeAdrenoSmmuMemory.cpp', 'NativeAdrenoVm.cpp', 'NativeAdrenoRing.cpp', 'NativeAdrenoSubmit.cpp', 'NativeAdrenoIrq.cpp', 'NativeAdrenoCpInit.cpp', 'NativeAdrenoUserClient.cpp', 'NativeAdrenoTimer.cpp', 'NativeAdrenoGpu.cpp', 'NativeAdrenoBoard.cpp', 'NativeAdrenoSha256.cpp', 'NativeAdrenoFirmware.cpp', 'NativeAdrenoGmuMemory.cpp', 'NativeAdrenoGmuConfig.cpp', 'NativeAdrenoGmuPlatform.cpp', 'NativeAdrenoSmmuContext.cpp', 'NativeAdrenoKernelTime.cpp', 'NativeAdrenoPwrup.cpp']]
+sources = [kit / name for name in ['NativeAdrenoMemory.cpp', 'NativeAdrenoCpu.cpp', 'NativeAdrenoSmmuMemory.cpp', 'NativeAdrenoVm.cpp', 'NativeAdrenoRing.cpp', 'NativeAdrenoPreempt.cpp', 'NativeAdrenoSubmit.cpp', 'NativeAdrenoIrq.cpp', 'NativeAdrenoCpInit.cpp', 'NativeAdrenoUserClient.cpp', 'NativeAdrenoTimer.cpp', 'NativeAdrenoGpu.cpp', 'NativeAdrenoBoard.cpp', 'NativeAdrenoSha256.cpp', 'NativeAdrenoFirmware.cpp', 'NativeAdrenoGmuMemory.cpp', 'NativeAdrenoGmuConfig.cpp', 'NativeAdrenoGmuPlatform.cpp', 'NativeAdrenoSmmuContext.cpp', 'NativeAdrenoKernelTime.cpp', 'NativeAdrenoPwrup.cpp']]
 xnu = ROOT / '.cache/xnu-work'
 xnu_names = ['iokit/IOKit/IOMemoryDescriptor.h', 'iokit/IOKit/IOBufferMemoryDescriptor.h',
              'iokit/Kernel/IOMemoryDescriptor.cpp', 'iokit/Kernel/IOBufferMemoryDescriptor.cpp',
