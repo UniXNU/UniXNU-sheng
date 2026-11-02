@@ -20,6 +20,7 @@ p.add_argument('--candidate', type=Path, default=ROOT / 'build/xnu-prelink/nativ
 p.add_argument('--message-file', type=Path, help='Bounded ASCII diagnostic fixture; no printf conversions')
 p.add_argument('--output', type=Path, default=ROOT / 'build/panic-screen-qemu')
 p.add_argument('--exec-policy-format', action='store_true', help='Heap strings, precision, unmapped page and unsafe-pointer refusal')
+p.add_argument('--stale-marker', action='store_true', help='Start with a previous boot panic marker in the framebuffer')
 args = p.parse_args()
 message = args.message_file.read_text().rstrip('\n') if args.message_file else 'PANIC SCREEN OFFLINE'
 heap = 0xfffffff4d0010000
@@ -145,6 +146,10 @@ for file, address in (
     ('free.bin', physical(names['_vm_page_free_count'])),
 ):
     command += ['-device', f'loader,file={OUT / file},addr={address:#x},force-raw=on']
+if args.stale_marker:
+    assert '_boot_progress_panic_text' in names
+    (OUT / 'stale-marker.bin').write_bytes(struct.pack('<II', 0xc0ffee11, 0x5ceeda7a))
+    command += ['-device', f'loader,file={OUT / "stale-marker.bin"},addr={frame+(height-1)*rowbytes:#x},force-raw=on']
 sockpath = OUT / 'qmp.sock'
 sockpath.unlink(missing_ok=True)
 command += ['-qmp', f'unix:{sockpath},server=on,wait=off']
@@ -179,7 +184,12 @@ with (OUT / 'stderr.log').open('w') as errors:
             while time.monotonic() < deadline:
                 qmp('pmemsave', {'val': frame + (height - 1) * rowbytes,
                                 'size': 8, 'filename': str(marker)})
-                if marker.read_bytes() == struct.pack('<II', 0xc0ffee11, 0x5ceeda7a):
+                if '_boot_progress_panic_text' in names:
+                    text = OUT / 'progress.bin'
+                    qmp('pmemsave', {'val': physical(names['_boot_progress_panic_text']), 'size': 2048, 'filename': str(text)})
+                    if text.read_bytes()[-1] == 2:
+                        break
+                elif marker.read_bytes() == struct.pack('<II', 0xc0ffee11, 0x5ceeda7a):
                     break
                 time.sleep(0.05)
             else:
@@ -206,7 +216,7 @@ font = next(int(line.split()[0], 16) for line in syms.splitlines() if line.endsw
 glyphs = struct.unpack_from('<95Q', code, font - load)
 pixels = (OUT / 'framebuffer.bin').read_bytes()
 lines = message.split('\n') + [
-         'TCR=0x00000022a51a251a', 'SCTLR=0x000000003454593d',
+         'frames',
          'pages=0x0000000000012345', 'free=0x000000000000abcd']
 for line, text in enumerate(lines):
     for column, char in enumerate(text):
@@ -225,7 +235,8 @@ copied = None
 if '_boot_progress_panic_text' in names:
     raw = (OUT / 'panic-text.bin').read_bytes()
     copied = raw[:raw.index(0)].decode('ascii')
-    assert copied == message.replace('\n', ' ')[:255], copied
+    assert copied == (message.replace('\n', ' ') + ' frames')[:2046], copied
+    assert raw[-1] == 2
 report = {'panic_text_copy': copied, 'evidence': 'QEMU TCG execution of diagnostic only; synthetic memory counters',
           'renderer_sha256': hashlib.sha256(code).hexdigest(), 'renderer_bytes': len(code),
           'renderer_va': hex(load), 'matched_lines': lines,
