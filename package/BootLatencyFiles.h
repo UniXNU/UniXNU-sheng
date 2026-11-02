@@ -8,7 +8,7 @@ static inline int bl_latency_contains(const char *text,size_t size,const char *t
  return 0;
 }
 static inline int bl_crash_process(const char *path) {
- const char *name=strrchr(path,'/');name=name?name+1:path;
+ const char *name=path;for(const char *at=path;*at;++at)if(*at=='/')name=at+1;
  static const char *const processes[]={"STExtractionService","dasd","WidgetRenderer","FitnessWidget","CalendarWidget"};
  for(unsigned i=0;i<sizeof processes/sizeof processes[0];++i) {
   size_t n=strlen(processes[i]);
