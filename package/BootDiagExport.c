@@ -101,6 +101,13 @@ enum {DiagRings = 4194304};
 static char *rings_text;
 static size_t rings_len;
 static uint32_t rings_keep, shots_kept, ipc_keep;
+extern uint32_t native_gpu_trace_snapshot(void *,uint32_t) __attribute__((weak_import));
+extern uint32_t native_gpu_pixel_snapshot(void *,uint32_t) __attribute__((weak_import));
+static void *gpu_trace_data[2];
+static uint32_t gpu_trace_size[2];
+static const char *gpu_trace_name[2]={"gpu.trace.bin","gpu.pixels.bin"};
+static const uint32_t gpu_trace_capacity[2]={32+(16384+4096+24*4096)*120,16+24*(112+65536)};
+
 
 static void note(const char *text, const char *path, int error) {
   if (!diag_note) return;
@@ -559,6 +566,16 @@ uint64_t boot_diag_scan(uint64_t budget) {
   diag_count = diag_skipped_count = 0; diag_note_used = 0; diag_note[0] = 0;
   const char *note_name = "diag-skipped.txt";
   uint64_t used = 8 + 4 + 1 + 4 + 24 + strlen(note_name) + DiagNote;   // head with root "/", the note file at its full size
+  // Freeze the GPU data before scanning other files, and reserve its export budget first.
+  for(unsigned i=0;i<2;++i) {
+    gpu_trace_size[i]=0;
+    if((i==0 && !&native_gpu_trace_snapshot) || (i==1 && !&native_gpu_pixel_snapshot))continue;
+    if(!gpu_trace_data[i])gpu_trace_data[i]=IOMallocAligned(gpu_trace_capacity[i],PAGE_SIZE);
+    if(!gpu_trace_data[i]){note("gpu-allocate",gpu_trace_name[i],-1);continue;}
+    uint32_t n=i?native_gpu_pixel_snapshot(gpu_trace_data[i],gpu_trace_capacity[i]):native_gpu_trace_snapshot(gpu_trace_data[i],gpu_trace_capacity[i]);
+    if(n && used+24+strlen(gpu_trace_name[i])+n<=budget){gpu_trace_size[i]=n;used+=24+strlen(gpu_trace_name[i])+n;}
+    else if(n)note("gpu-budget",gpu_trace_name[i],(int)n);
+  }
   PE_Video video = {};
   shot_width = shot_height = 0;
   if (&native_gop_virtual && native_gop_virtual && !PE_current_console(&video) && video.v_depth == 32 && video.v_width >= 2 && video.v_height >= 2 &&
@@ -670,7 +687,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   if (!chunk) return -1;
   vfs_context_t ctx = vfs_context_kernel();
   int rc = emit("M2VCACH1", 8, arg);
-  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep + touch_keep + cpu_keep + ioc_keep + gpucall_keep + contig_keep + boalloc_keep + ptime_keep;
+  const uint32_t root_len = 1, count = boot_diag_files + 1 + (shot_width ? 1 : 0) + rings_keep + shots_kept + ipc_keep + client_keep + touch_keep + cpu_keep + ioc_keep + gpucall_keep + contig_keep + boalloc_keep + ptime_keep + !!gpu_trace_size[0] + !!gpu_trace_size[1];
   if (!rc) rc = emit(&root_len, 4, arg);
   if (!rc) rc = emit("/", 1, arg);
   if (!rc) rc = emit(&count, 4, arg);
@@ -687,6 +704,13 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
       const uint32_t *in = (const uint32_t *)(uintptr_t)(native_gop_virtual + (uint64_t)y * 2 * video.v_rowBytes);
       for (uint32_t x = 0; x < shot_width; ++x) out[x] = live ? in[x * 2] : 0;
       rc = emit(chunk, row, arg);
+    }
+  }
+  for(unsigned i=0;i<2 && !rc;++i)if(gpu_trace_size[i]) {
+    rc=put_head(emit,arg,gpu_trace_name[i],0100644,0,0,gpu_trace_size[i]);
+    for(uint32_t at=0;at<gpu_trace_size[i] && !rc;) {
+      uint32_t n=gpu_trace_size[i]-at;if(n>65536)n=65536;
+      rc=emit((const char *)gpu_trace_data[i]+at,n,arg);at+=n;
     }
   }
   if (!rc && rings_keep) {

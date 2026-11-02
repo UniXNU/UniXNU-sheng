@@ -70,6 +70,11 @@ def unpack_export(blob, run, name='export'):
         raise SystemExit('export blob has trailing bytes')
     (out / 'manifest.json').write_text(json.dumps(dict(directory=root, files=files, blob_sha256=hashlib.sha256(blob).hexdigest()), indent=1) + '\n')
     print(f'{out}: {count} files, {sum(f["size"] for f in files)} bytes from {root}')
+    if (out / 'files/gpu.trace.bin').exists():
+        import subprocess
+        subprocess.run([sys.executable, str(Path(__file__).with_name('decode-gpu-trace.py')),
+                        str(out / 'files'), '--out', str(out / 'gpu')], check=True)
+
 
 
 def header(blob):
