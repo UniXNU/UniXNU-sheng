@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: UniXNU/UniXNU
-          ref: be0e4fab0072bceaa8d744a4a6875ba5461cd7ff # GPU and display integration
+          ref: a3663791f2cfbe5385a69e9f6b3e1195ca19684c # GPU and display integration
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4
