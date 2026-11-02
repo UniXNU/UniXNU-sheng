@@ -56,7 +56,7 @@ static void put (struct ctx *g, u8 c)
   const u32 cell = 6 * SCALE, line = 14 * SCALE;
   u32 row, col, dy, dx;
 
-  if (g->log && g->logn < PANIC_TEXT_BYTES - 1 && c >= 9 && c <= 126) {
+  if (g->log && g->logn < PANIC_TEXT_BYTES - 2 && c >= 9 && c <= 126) {
     g->log[g->logn++] = (c < 32) ? ' ' : c;
     g->log[g->logn] = 0;
   }
@@ -237,7 +237,13 @@ __attribute__((noreturn, used, section(".text.b_main"))) void panic_screen_main 
   /* First panic wins: a marker in the last row's first two pixels means a panic already drew
    * the screen; a later panic (another thread or exception) must not overwrite it. */
   volatile u64 *mark = (volatile u64 *)(g.base + (u64)(g.h - 1) * g.rb);   /* pixels 0xC0FFEE11, 0x5CEEDA7A */
-  if (*mark == 0x5CEEDA7AC0FFEE11ul) {
+  /* The framebuffer survives a warm reboot. Claim this boot's zeroed BSS
+   * instead; reserve the last text byte so formatting cannot overwrite it. */
+  if (PANIC_TEXT) {
+    if (__atomic_exchange_n ((u8 *)PANIC_TEXT + PANIC_TEXT_BYTES - 1, 1, __ATOMIC_ACQ_REL)) {
+      park ();
+    }
+  } else if (*mark == 0x5CEEDA7AC0FFEE11ul) {
     park ();
   }
   g.x = 0;
@@ -280,7 +286,11 @@ __attribute__((noreturn, used, section(".text.b_main"))) void panic_screen_main 
   hex (&g, "\npages=", *(volatile const u32 *)PAGE_TOTAL);
   hex (&g, "\nfree=", *(volatile const u32 *)PAGE_FREE);
   /* The raw argument slots are not dumped: the formatted message above already carries them (room for the PANIC_TEXT copy). */
-  *mark = 0x5CEEDA7AC0FFEE11ul;
+  if (PANIC_TEXT) {
+    __atomic_store_n ((u8 *)PANIC_TEXT + PANIC_TEXT_BYTES - 1, 2, __ATOMIC_RELEASE);
+  } else {
+    *mark = 0x5CEEDA7AC0FFEE11ul;
+  }
   __asm__ volatile ("dsb sy");
   if (PANIC_FLUSH) ((void (*)(void))PANIC_FLUSH) ();
   park ();
