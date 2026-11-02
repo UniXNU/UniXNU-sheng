@@ -145,9 +145,9 @@ __attribute__((noinline)) void native_hid_live_checkpoint(IOService *device) {
     }
     __asm__ volatile("" ::: "memory");
 }
-// The time (mach units) of every touch report handed to the HID event driver (event 6), the newest 65536, for the export's touch timeline.
-// Allocated by BootDiagExport.c once the home screen draws (a static array of this size does not fit the kernel's data segment;
-// an allocation in the boot-time probe was in both images that stopped early in boot, i3ccf8f4a6 and i3f12fdf1a).
+// The time (mach units) of every touch report handed to the HID event driver (event 6), the newest 65536: the touch windows the
+// latency analysis is limited to. Allocated by BootDiagExport.c once the home screen draws (a static array of this size does not fit
+// the kernel's data segment).
 volatile uint64_t *native_touch_report_ring;
 volatile uint32_t native_touch_report_count;
 void native_hid_input_observed(unsigned event,int result) {
@@ -218,38 +218,3 @@ void native_hid_input_probe(void) {
 }
 }
 
-// User client calls (the xnu hook in IOUserClient::callExternalMethod, installed by native_ioc_trace_start once the home screen draws):
-// every call from the processes in native_ioc_pids (the client sampler's targets), and calls of 200 us or more from any process.
-// Record: when it came in, microseconds waiting for the client's IPC lock, microseconds in the method, the selector, the caller's
-// pid, and the address of the client's class name (static; BootDiagExport.c names it). kernel.ioc.bin.
-struct NativeIocRec {uint64_t entered;uint32_t lockUs,callUs,selector;int32_t pid;uint64_t className;};
-static_assert(sizeof(NativeIocRec)==32,"user client call record");
-extern "C" {
-extern void (*sheng_ioconnect_hook)(void *,uint32_t,uint64_t,uint64_t,uint64_t) __attribute__((weak_import));
-int proc_selfpid(void);
-NativeIocRec *native_ioc_ring;
-volatile uint32_t native_ioc_count;
-volatile int native_ioc_pids[32];
-}
-static void nativeIocHook(void *client,uint32_t selector,uint64_t entered,uint64_t locked,uint64_t returned) {
-    const int pid=proc_selfpid();
-    uint64_t lockNs=0,callNs=0;
-    absolutetime_to_nanoseconds(locked-entered,&lockNs);absolutetime_to_nanoseconds(returned-locked,&callNs);
-    bool target=false;
-    for(unsigned i=0;i<32 && !target;++i)target=native_ioc_pids[i]==pid && pid>0;
-    if(!target && lockNs+callNs<200000)return;
-    const uint32_t n=__atomic_fetch_add(&native_ioc_count,1,__ATOMIC_RELAXED);
-    NativeIocRec &r=native_ioc_ring[n&262143];
-    r.entered=entered;r.lockUs=(uint32_t)(lockNs/1000);r.callUs=(uint32_t)(callNs/1000);r.selector=selector;r.pid=pid;
-    r.className=(uint64_t)(uintptr_t)reinterpret_cast<OSObject *>(client)->getMetaClass()->getClassName();
-}
-extern "C" void native_ioc_trace_start(const int *pids,unsigned count) {
-    if(!&sheng_ioconnect_hook)return;
-    for(unsigned i=0;i<32;++i)native_ioc_pids[i]=i<count?pids[i]:0;
-    if(!native_ioc_ring) {
-        NativeIocRec *ring=(NativeIocRec *)IOMallocZero(sizeof(NativeIocRec)*262144);
-        if(!ring)return;
-        native_ioc_ring=ring;
-    }
-    if(!sheng_ioconnect_hook)sheng_ioconnect_hook=nativeIocHook;
-}

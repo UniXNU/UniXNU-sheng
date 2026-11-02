@@ -9,26 +9,22 @@
 #include <vm/vm_map_xnu.h>
 #endif
 #include <kdp/kdp_dyld.h>
+#include <kern/backtrace.h>
 extern int proc_selfpid(void);
 struct proc;
 extern int proc_pid(struct proc *);
 #include <IOKit/IOLib.h>
 #include "BootLatencyStore.h"
-#include "BootLatencyIpc.h"
 #include "BootLatencyUnwind.h"
 #include "BootLatencyTrace.h"
-extern void *sheng_ipc_trace_task __attribute__((weak_import));
-extern void *sheng_ipc_trace_task2 __attribute__((weak_import));
-extern void (*sheng_ipc_flow_hook)(const void *,uint32_t,void *,uint32_t,uint32_t,void *,void *,void *) __attribute__((weak_import));
 extern void (*sheng_user_fault_hook)(int,const int64_t *,unsigned) __attribute__((weak_import));
-extern void (*native_gpu_dispatch_hook)(uint32_t,const uint64_t *,uint32_t) __attribute__((weak_import));
+extern void (*sheng_unnest_hook)(uint64_t,uint64_t) __attribute__((weak_import));
 extern void (*sheng_user_exit_hook)(int,int,uint32_t,uint64_t,const char *,const char *) __attribute__((weak_import));
 enum {BlCapacity=491519,BlCriticalCapacity=32768,FaultSlots=32};
 struct fault_slot {uint32_t state,pid;uint64_t id,us,tid,fp,sp,pc,lr,slide;task_t task;};
 static struct fault_slot *faults;
 static uint64_t fault_sequence;
 static struct bl_store store,critical;
-static struct bl_ipc_filter *ipc_filter;
 static void record_as(uint32_t kind,uint32_t pid,uint64_t tid,uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f) {
  if(!__atomic_load_n(&store.slots,__ATOMIC_ACQUIRE))return;
  uint64_t ns=0;absolutetime_to_nanoseconds(mach_absolute_time(),&ns);
@@ -40,19 +36,6 @@ void boot_latency_record(uint32_t kind,uint64_t a,uint64_t b,uint64_t c,uint64_t
  record_as(kind,(uint32_t)proc_selfpid(),thread_tid(current_thread()),a,b,c,d,e,f);
 }
 int boot_latency_enabled(void) {return __atomic_load_n(&store.slots,__ATOMIC_ACQUIRE)!=NULL;}
-static void ipc_flow(const void *cookie,uint32_t id,void *task,uint32_t receiver,uint32_t phase,
-                     void *destination,void *port,void *reply) {
- uint64_t request=0;
- if(phase==1) {
-  int sender_traced=task==sheng_ipc_trace_task || task==sheng_ipc_trace_task2;
-  bl_ipc_sent(ipc_filter,(uintptr_t)cookie,id,sender_traced?(uintptr_t)reply:0,receiver!=3);
- }
- else if(phase==2 && !bl_ipc_received(ipc_filter,(uintptr_t)cookie,id,(uintptr_t)port,&request))return;
- void *p=task ? get_bsdtask_info((task_t)task):NULL;
- boot_latency_record(phase,(uintptr_t)cookie,id,receiver,p?(uint32_t)proc_pid(p):0,(uintptr_t)destination,(uintptr_t)port);
- if(phase==1 && reply)boot_latency_record(13,(uintptr_t)cookie,phase,(uintptr_t)task,(uintptr_t)destination,(uintptr_t)port,(uintptr_t)reply);
- if(phase==2 && request)boot_latency_record(33,request,(uintptr_t)cookie,(uintptr_t)port,id,0,0);
-}
 void boot_latency_waiter(int pid,uint64_t tid,unsigned state,uint64_t wait,unsigned switches,int peer,unsigned peer_code,unsigned error,const uint64_t frames[12],const uint64_t kernel[12]) {
  static uint64_t sequence;const uint64_t id=++sequence;
  record_as(28,(uint32_t)pid,tid,id,state,wait,frames[0],frames[1],switches);
@@ -62,8 +45,17 @@ void boot_latency_waiter(int pid,uint64_t tid,unsigned state,uint64_t wait,unsig
   record_as(32,(uint32_t)pid,tid,id,first,kernel[first],kernel[first+1],kernel[first+2],kernel[first+3]);
  }
 }
-static void dispatch_point(uint32_t pid,const uint64_t *v,uint32_t count) {
- if(count==6)record_as(20,pid,thread_tid(current_thread()),v[0],v[1],v[2],v[3],v[4],v[5]);
+/* Retain only the task here. Faultable stack reads run on the capture worker. */
+static void queue_user_stack(uint64_t id,uint64_t fp,uint64_t sp,uint64_t pc,uint64_t lr,uint64_t slide) {
+ for(unsigned i=0;faults && i<FaultSlots;++i) {
+  struct fault_slot *slot=&faults[i];uint32_t empty=0;
+  if(!__atomic_compare_exchange_n(&slot->state,&empty,1,0,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED))continue;
+  uint64_t ns=0;absolutetime_to_nanoseconds(mach_absolute_time(),&ns);
+  slot->id=id;slot->us=ns/1000;slot->pid=(uint32_t)proc_selfpid();slot->tid=thread_tid(current_thread());
+  slot->fp=fp;slot->sp=sp;slot->pc=pc;slot->lr=lr;slot->slide=slide;slot->task=current_task();task_reference(slot->task);
+  __atomic_store_n(&slot->state,2,__ATOMIC_RELEASE);return;
+ }
+ boot_latency_record(12,id,16,0,0,0,0); /* bounded queue full or unavailable */
 }
 static void user_fault(int exception,const int64_t *codes,unsigned count) {
  arm_saved_state_t *state=current_thread()->machine.upcb;
@@ -78,16 +70,24 @@ static void user_fault(int exception,const int64_t *codes,unsigned count) {
   uint64_t x[4]={0};for(unsigned n=0;n<4 && first+n<29;++n)x[n]=(uint64_t)get_saved_state_reg(state,first+n);
   boot_latency_record(7,id,first,x[0],x[1],x[2],x[3]);
  }
- /* Retain only the task here. Faultable stack reads run on the capture worker. */
- for(unsigned i=0;faults && i<FaultSlots;++i) {
-  struct fault_slot *slot=&faults[i];uint32_t empty=0;
-  if(!__atomic_compare_exchange_n(&slot->state,&empty,1,0,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED))continue;
-  uint64_t ns=0;absolutetime_to_nanoseconds(mach_absolute_time(),&ns);
-  slot->id=id;slot->us=ns/1000;slot->pid=(uint32_t)proc_selfpid();slot->tid=thread_tid(current_thread());
-  slot->fp=fp;slot->sp=sp;slot->pc=pc;slot->lr=lr;slot->slide=slide;slot->task=current_task();task_reference(slot->task);
-  __atomic_store_n(&slot->state,2,__ATOMIC_RELEASE);return;
+ queue_user_stack(id,fp,sp,pc,lr,slide);
+}
+/* A process unnested part of the shared region (the "triggered unnest" message), which STExtractionService
+ * did right before its PAC failure in libobjc: 35 the range and the user registers, 36 the kernel caller
+ * frames (raw, unslid by the export's reference address), then the user stack as for a fault (8, 9, 12). */
+static void user_unnest(uint64_t start,uint64_t end) {
+ arm_saved_state_t *state=current_thread()->machine.upcb;
+ const uint64_t id=__atomic_add_fetch(&fault_sequence,1,__ATOMIC_RELAXED);
+ uint64_t pc=0,lr=0,sp=0,fp=0;
+ if(state && is_saved_state64(state)) {
+  pc=(uint64_t)get_saved_state_pc(state);lr=(uint64_t)get_saved_state_lr(state);
+  sp=(uint64_t)get_saved_state_sp(state);fp=(uint64_t)get_saved_state_fp(state);
  }
- boot_latency_record(12,id,16,0,0,0,0); /* bounded queue full or unavailable */
+ boot_latency_record(35,id,start,end,pc,lr,sp);
+ uintptr_t kernel[12]={0};const unsigned depth=backtrace(kernel,12,NULL,NULL);
+ for(unsigned first=0;first<12;first+=4)
+  boot_latency_record(36,id,first|(uint64_t)depth<<8,kernel[first],kernel[first+1],kernel[first+2],kernel[first+3]);
+ if(state && is_saved_state64(state))queue_user_stack(id,fp,sp,pc,lr,current_task()->task_shared_region_slide);
 }
 static void user_exit(int pid,int status,uint32_t reason_namespace,uint64_t reason_code,const char *name,const char *description) {
  char text[96]={0};if(description)strlcpy(text,description,sizeof text);
@@ -144,17 +144,13 @@ void boot_latency_start(void) {
  struct bl_slot *slots=IOMallocAligned(sizeof(*slots)*BlCapacity,PAGE_SIZE);if(!slots)return;
  struct bl_slot *saved=IOMallocAligned(sizeof(*saved)*BlCriticalCapacity,PAGE_SIZE);
  if(!saved){IOFreeAligned(slots,sizeof(*slots)*BlCapacity);return;}
- struct bl_ipc_filter *filter=IOMallocAligned(sizeof(*filter),PAGE_SIZE);
- if(!filter){IOFreeAligned(saved,sizeof(*saved)*BlCriticalCapacity);IOFreeAligned(slots,sizeof(*slots)*BlCapacity);return;}
- memset(filter,0,sizeof(*filter));ipc_filter=filter;
  memset(slots,0,sizeof(*slots)*BlCapacity);store.capacity=BlCapacity;
  memset(saved,0,sizeof(*saved)*BlCriticalCapacity);critical.slots=saved;critical.capacity=BlCriticalCapacity;
  faults=IOMallocAligned(sizeof(*faults)*FaultSlots,PAGE_SIZE);if(faults)memset(faults,0,sizeof(*faults)*FaultSlots);
  __atomic_store_n(&store.slots,slots,__ATOMIC_RELEASE);
- if(&sheng_ipc_flow_hook)sheng_ipc_flow_hook=ipc_flow;
  if(&sheng_user_fault_hook)sheng_user_fault_hook=user_fault;
  if(&sheng_user_exit_hook)sheng_user_exit_hook=user_exit;
- if(&native_gpu_dispatch_hook)native_gpu_dispatch_hook=dispatch_point;
+ if(&sheng_unnest_hook)sheng_unnest_hook=user_unnest;
 }
 uint32_t boot_latency_snapshot(void *out,uint32_t bytes) {
  if(!store.slots || bytes<16+sizeof(struct bl_record))return 0;
@@ -167,8 +163,7 @@ uint32_t boot_latency_snapshot(void *out,uint32_t bytes) {
   for(uint64_t seq=first;seq<=issued && count+1<capacity;++seq)if(bl_read(s,seq,&rows[count])){++count;++kept[lane];}
  }
  uint64_t ns=0;absolutetime_to_nanoseconds(mach_absolute_time(),&ns);
- rows[count++]=(struct bl_record){ns/1000,0,34,0,{total[1],kept[1],total[0],kept[0],
-  __atomic_load_n(&ipc_filter->unpaired,__ATOMIC_RELAXED),__atomic_load_n(&ipc_filter->untracked,__ATOMIC_RELAXED)}};
+ rows[count++]=(struct bl_record){ns/1000,0,34,0,{total[1],kept[1],total[0],kept[0],0,0}};
  uint32_t head[4]={0x3154414c,(uint32_t)(total[0]+total[1]+1),count,
   (uint32_t)(__atomic_load_n(&store.dropped,__ATOMIC_RELAXED)+__atomic_load_n(&critical.dropped,__ATOMIC_RELAXED))};
  memcpy(out,head,16);return 16+count*sizeof(struct bl_record);

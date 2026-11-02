@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include "BootLatencyStore.h"
-#include "BootLatencyIpc.h"
 #include "BootLatencyFiles.h"
 #include <cassert>
 #include <thread>
@@ -20,20 +19,7 @@ int main() {
  assert(bl_push(bl_critical_kind(fault.kind)?&saved:&normal,&fault));
  for(unsigned i=0;i<100000;++i){bl_record v{};v.kind=5;bl_push(bl_critical_kind(v.kind)?&saved:&normal,&v);}
  assert(saved.issued==1 && bl_read(&saved,1,&fault) && fault.value[0]==0xfeed);
- bl_ipc_filter filter{};uint64_t request=0;
- for(unsigned i=0;i<100000;++i)assert(!bl_ipc_received(&filter,100+i,7,0,&request));
- assert(filter.unpaired==100000);
- bl_ipc_sent(&filter,100,7,0,1);assert(bl_ipc_received(&filter,100,7,0,&request));
- assert(!bl_ipc_received(&filter,100,7,0,&request));
- bl_ipc_sent(&filter,200,8,300,0);assert(bl_ipc_received(&filter,201,9,300,&request) && request==200);
- assert(!bl_ipc_received(&filter,201,9,300,&request));
- bl_ipc_sent(&filter,400,10,0,1);assert(!bl_ipc_received(&filter,400,11,0,&request));
- assert(bl_ipc_received(&filter,400,10,0,&request));
- bl_ipc_sent(&filter,700,1,900,0);bl_ipc_sent(&filter,701,2,900,0);
- assert(!bl_ipc_received(&filter,702,3,900,&request) && request==0);
- // Saturation is explicit and never evicts an unrelated pending request.
- for(unsigned i=0;i<9;++i)bl_ipc_sent(&filter,1+(uint64_t)i*((1u<<19)+16),1,0,1);
- assert(filter.untracked>0);
+ bl_record unnest{};unnest.kind=35;assert(bl_critical_kind(unnest.kind) && bl_critical_kind(36) && !bl_critical_kind(1) && !bl_critical_kind(5));
  assert(bl_latency_file("/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/frames.trace"));
  assert(bl_latency_file("/private/var/mobile/Library/Logs/CrashReporter/STExtractionService-now.ips"));
  assert(bl_latency_file("/private/var/mobile/Library/Logs/CrashReporter/CalendarWidgetExtension-now.ips"));

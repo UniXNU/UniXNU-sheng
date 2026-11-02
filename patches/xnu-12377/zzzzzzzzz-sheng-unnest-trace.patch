@@ -1,0 +1,24 @@
+diff --git a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
+index ab2489f..7c92b73 100644
+--- a/bsd/vm/vm_unix.c
++++ b/bsd/vm/vm_unix.c
+@@ -809,6 +809,8 @@ SYSCTL_PROC(_vm, OID_AUTO, enforce_shared_cache_dir, CTLTYPE_INT | CTLFLAG_RW |
+  */
+ static int64_t last_unnest_log_time = 0;
+ static int shared_region_unnest_log_count = 0;
++/* sheng: board diagnostics hook for each logged unnest, before the rate limit; unset unless the board installs it. */
++void (*sheng_unnest_hook)(uint64_t start, uint64_t end);
+ 
+ void
+ log_unnest_badness(
+@@ -833,6 +835,10 @@ log_unnest_badness(
+ 		return;
+ 	}
+ 
++	if (__improbable(sheng_unnest_hook != NULL)) {
++		sheng_unnest_hook((uint64_t)s, (uint64_t)e);
++	}
++
+ 	if (shared_region_unnest_logging <= 1) {
+ 		microtime(&tv);
+ 		if ((tv.tv_sec - last_unnest_log_time) <
