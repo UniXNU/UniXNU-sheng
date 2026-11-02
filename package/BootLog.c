@@ -9,6 +9,7 @@
 // reader fetches on its own. Its two halves alternate, so the header always names a blob that is wholly on the medium. (Version 2 kept a
 // 16 MiB area at the window's tail; the UI's pipeline caches outgrew it in int-148 and int-149.)
 // The header is written last in each round, so a reader never trusts a slot or an export the header does not count yet.
+#include "BootLatencyFiles.h"
 #include <kern/thread.h>
 #include <kern/clock.h>
 #include <string.h>
@@ -1753,9 +1754,13 @@ static void writer(void *arg, wait_result_t result) {
     int ok = 1;
     // Text slot, then the message buffer, then the header that makes both visible.
     memset(boot_log_buffer, 0, LogSlotBlocks * LogBlock);
-    log_groups_filter((char *)boot_log_buffer, compose((char *)boot_log_buffer, LogSlotBlocks * LogBlock, h.slots_written, now));
+    if(diag==1)snprintf((char *)boot_log_buffer,LogSlotBlocks*LogBlock,
+      "#slot %u t=%us tag=%s latency-issues=7 export-at=%us\n",h.slots_written,now,
+      &boot_progress_tag?boot_progress_tag():"",diag_at);
+    else log_groups_filter((char *)boot_log_buffer, compose((char *)boot_log_buffer, LogSlotBlocks * LogBlock, h.slots_written, now));
     ok &= native_ufs_log_write(LogSlotFirst + (uint64_t)(h.slots_written % slot_count) * LogSlotBlocks, LogSlotBlocks, boot_log_buffer);
     h.msg_bytes = copy_msgbuf(boot_log_buffer);
+    if(diag==1)h.msg_bytes=bl_latency_messages((char *)boot_log_buffer,h.msg_bytes);
     ok &= native_ufs_log_write(LogMsgFirst, LogMsgBlocks, boot_log_buffer);
     if (ok) ++h.slots_written;
     else ++h.write_errors;

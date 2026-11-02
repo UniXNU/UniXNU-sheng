@@ -14,6 +14,7 @@ struct proc;
 extern int proc_pid(struct proc *);
 #include <IOKit/IOLib.h>
 #include "BootLatencyStore.h"
+#include "BootLatencyIpc.h"
 #include "BootLatencyUnwind.h"
 #include "BootLatencyTrace.h"
 extern void *sheng_ipc_trace_task __attribute__((weak_import));
@@ -22,15 +23,17 @@ extern void (*sheng_ipc_flow_hook)(const void *,uint32_t,void *,uint32_t,uint32_
 extern void (*sheng_user_fault_hook)(int,const int64_t *,unsigned) __attribute__((weak_import));
 extern void (*native_gpu_dispatch_hook)(uint32_t,const uint64_t *,uint32_t) __attribute__((weak_import));
 extern void (*sheng_user_exit_hook)(int,int,uint32_t,uint64_t,const char *,const char *) __attribute__((weak_import));
-enum {BlCapacity=524288,FaultSlots=32};
+enum {BlCapacity=491519,BlCriticalCapacity=32768,FaultSlots=32};
 struct fault_slot {uint32_t state,pid;uint64_t id,us,tid,fp,sp,pc,lr,slide;task_t task;};
 static struct fault_slot *faults;
 static uint64_t fault_sequence;
-static struct bl_store store;
+static struct bl_store store,critical;
+static struct bl_ipc_filter ipc_filter;
 static void record_as(uint32_t kind,uint32_t pid,uint64_t tid,uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f) {
  if(!__atomic_load_n(&store.slots,__ATOMIC_ACQUIRE))return;
  uint64_t ns=0;absolutetime_to_nanoseconds(mach_absolute_time(),&ns);
- struct bl_record row={ns/1000,tid,kind,pid,{a,b,c,d,e,f}};bl_push(&store,&row);
+ struct bl_record row={ns/1000,tid,kind,pid,{a,b,c,d,e,f}};
+ bl_push(bl_critical_kind(kind)?&critical:&store,&row);
 }
 void boot_latency_record(uint32_t kind,uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f) {
  if(!__atomic_load_n(&store.slots,__ATOMIC_ACQUIRE))return;
@@ -39,9 +42,16 @@ void boot_latency_record(uint32_t kind,uint64_t a,uint64_t b,uint64_t c,uint64_t
 int boot_latency_enabled(void) {return __atomic_load_n(&store.slots,__ATOMIC_ACQUIRE)!=NULL;}
 static void ipc_flow(const void *cookie,uint32_t id,void *task,uint32_t receiver,uint32_t phase,
                      void *destination,void *port,void *reply) {
+ uint64_t request=0;
+ if(phase==1) {
+  int sender_traced=task==sheng_ipc_trace_task || task==sheng_ipc_trace_task2;
+  bl_ipc_sent(&ipc_filter,(uintptr_t)cookie,id,sender_traced?(uintptr_t)reply:0,receiver!=3);
+ }
+ else if(phase==2 && !bl_ipc_received(&ipc_filter,(uintptr_t)cookie,id,(uintptr_t)port,&request))return;
  void *p=task ? get_bsdtask_info((task_t)task):NULL;
  boot_latency_record(phase,(uintptr_t)cookie,id,receiver,p?(uint32_t)proc_pid(p):0,(uintptr_t)destination,(uintptr_t)port);
  if(phase==1 && reply)boot_latency_record(13,(uintptr_t)cookie,phase,(uintptr_t)task,(uintptr_t)destination,(uintptr_t)port,(uintptr_t)reply);
+ if(phase==2 && request)boot_latency_record(33,request,(uintptr_t)cookie,(uintptr_t)port,id,0,0);
 }
 void boot_latency_waiter(int pid,uint64_t tid,unsigned state,uint64_t wait,unsigned switches,int peer,unsigned peer_code,unsigned error,const uint64_t frames[12],const uint64_t kernel[12]) {
  static uint64_t sequence;const uint64_t id=++sequence;
@@ -132,7 +142,10 @@ void boot_latency_fault_drain(void) {
 void boot_latency_start(void) {
  if(store.slots)return;
  struct bl_slot *slots=IOMallocAligned(sizeof(*slots)*BlCapacity,PAGE_SIZE);if(!slots)return;
+ struct bl_slot *saved=IOMallocAligned(sizeof(*saved)*BlCriticalCapacity,PAGE_SIZE);
+ if(!saved){IOFreeAligned(slots,sizeof(*slots)*BlCapacity);return;}
  memset(slots,0,sizeof(*slots)*BlCapacity);store.capacity=BlCapacity;
+ memset(saved,0,sizeof(*saved)*BlCriticalCapacity);critical.slots=saved;critical.capacity=BlCriticalCapacity;
  faults=IOMallocAligned(sizeof(*faults)*FaultSlots,PAGE_SIZE);if(faults)memset(faults,0,sizeof(*faults)*FaultSlots);
  __atomic_store_n(&store.slots,slots,__ATOMIC_RELEASE);
  if(&sheng_ipc_flow_hook)sheng_ipc_flow_hook=ipc_flow;
@@ -141,12 +154,19 @@ void boot_latency_start(void) {
  if(&native_gpu_dispatch_hook)native_gpu_dispatch_hook=dispatch_point;
 }
 uint32_t boot_latency_snapshot(void *out,uint32_t bytes) {
- if(!store.slots || bytes<16)return 0;
- uint64_t issued=__atomic_load_n(&store.issued,__ATOMIC_ACQUIRE);
- uint64_t first=issued>BlCapacity?issued-BlCapacity+1:1;
- uint32_t count=0,capacity=(bytes-16)/sizeof(struct bl_record);
+ if(!store.slots || bytes<16+sizeof(struct bl_record))return 0;
  struct bl_record *rows=(struct bl_record *)((char *)out+16);
- for(uint64_t seq=first;seq<=issued && count<capacity;++seq)if(bl_read(&store,seq,&rows[count]))++count;
- uint32_t head[4]={0x3154414c,(uint32_t)issued,count,(uint32_t)__atomic_load_n(&store.dropped,__ATOMIC_RELAXED)};
+ uint32_t count=0,capacity=(bytes-16)/sizeof(struct bl_record),kept[2]={0};
+ uint64_t total[2]={0};struct bl_store *lanes[2]={&critical,&store};
+ for(unsigned lane=0;lane<2;++lane) {
+  struct bl_store *s=lanes[lane];uint64_t issued=__atomic_load_n(&s->issued,__ATOMIC_ACQUIRE);total[lane]=issued;
+  uint64_t first=issued>s->capacity?issued-s->capacity+1:1;
+  for(uint64_t seq=first;seq<=issued && count+1<capacity;++seq)if(bl_read(s,seq,&rows[count])){++count;++kept[lane];}
+ }
+ uint64_t ns=0;absolutetime_to_nanoseconds(mach_absolute_time(),&ns);
+ rows[count++]=(struct bl_record){ns/1000,0,34,0,{total[1],kept[1],total[0],kept[0],
+  __atomic_load_n(&ipc_filter.unpaired,__ATOMIC_RELAXED),__atomic_load_n(&ipc_filter.untracked,__ATOMIC_RELAXED)}};
+ uint32_t head[4]={0x3154414c,(uint32_t)(total[0]+total[1]+1),count,
+  (uint32_t)(__atomic_load_n(&store.dropped,__ATOMIC_RELAXED)+__atomic_load_n(&critical.dropped,__ATOMIC_RELAXED))};
  memcpy(out,head,16);return 16+count*sizeof(struct bl_record);
 }

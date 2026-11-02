@@ -26,7 +26,7 @@ FIELDS = {
  15: ('import', 'live address bytes handle physical'),
  20: ('display', 'request phase pointer surface_object physical slot shown pending queued'),
  21: ('display_surface', 'request physical width height stride format allocation mapped_bytes'),
- 22: ('display_fence', 'request reason target submitted retired elapsed_ns ring0 ring1 query_reason'),
+ 22: ('display_fence', 'request reason target submitted retired elapsed_ns ring0 ring1 query_reason repeated_queries'),
  23: ('display_latch', 'request flush elapsed_ns shown pending'),
  24: ('display_pixel', 'request result physical format bytes fence gpu_complete latched'),
  30: ('command', 'command runtime phase status passes commit handle'),
@@ -95,6 +95,8 @@ LATENCY_FIELDS = {
  30: ('thread_wait_peer','capture peer_pid peer_status stack_error unused0 unused1'),
  31: ('thread_wait_coverage','subject_pid visited recorded omitted lock_busy capacity'),
  32: ('thread_wait_kernel','capture first pc0 pc1 pc2 pc3'),
+ 33: ('ipc_reply_receive','request_cookie reply_cookie reply_port message unused0 unused1'),
+ 34: ('capture_budget','normal_total normal_kept critical_total critical_kept unmatched_ipc tracking_failures'),
 }
 RUNTIME_STAGES = {40:'memory_begin',41:'memory_pool',42:'memory_kib',43:'available_kib',
  44:'allocated',45:'reused',46:'memory_low',47:'memory_high',48:'cached_kib',49:'deferred_kib',
@@ -108,7 +110,23 @@ def frontend_details(blob):
     rows=[]
     for at in range(0,len(blob),FRAME_RECORD.size):
         kind,seq,t0,t1,t2,t3,a,b,c,d,tid,cpu0,cpu1,tid2=FRAME_RECORD.unpack_from(blob,at)
-        if kind==17:
+        if kind==1:
+            rows.append(dict(name='command_summary',sequence=seq,created_us=t0,committed_us=t1,scheduled_us=t2,completed_us=t3,
+                             passes=a,draws=b,kpx=c,blits=d,creator_thread=tid,creator_cpu_begin=cpu0,creator_cpu_commit=cpu1,commit_thread=tid2))
+        elif kind==7:
+            rows.append(dict(name='gpu_pass',us=t0,sequence=t1,width=a&65535,height=a>>16,mode=b&255,
+                             colors=(b>>8)&255,flags=(b>>16)&255,draws=c&65535,format=c>>16,kpx=d,
+                             gpu_begin_us=t2,gpu_end_us=t3,gpu_elapsed_us=t3-t2 if t3>=t2 and t2 else None,
+                             gpu_clock='hardware counter; CPU alignment requires calibration'))
+        elif kind==8:
+            rows.append(dict(name='kernel_submit',us=t0,sequence=t1,fence=a,sync_wait_us=b,call_us=c,space_wait_us=d,busy=cpu0&65535))
+        elif kind==12:
+            rows.append(dict(name='runtime_stage',us=t0,runtime=t1,stage=a,argument=b,stage_sequence=c))
+        elif kind==14:
+            rows.append(dict(name='encode_batch',us=t0,batch=t1,queued_us=t2,phase=a,tasks=b,depth=c,thread=tid))
+        elif kind==15:
+            rows.append(dict(name='frontend_stage',us=t0,command=t1,commit=t2,batch=t3,phase=a,thread=b,surfaces=c,kib=d))
+        elif kind==17:
             rows.append(dict(name='cpu_detail',sequence=seq,us=t0,operation=t1,command=t2,object=t3,
                              kind=a&65535,detail_name=CPU_DETAIL_KINDS.get(a&65535,'unknown'),phase=a>>16,thread=b,function=c|(d<<32),elapsed_us=cpu0,line=cpu1))
         elif kind==18:rows.append(dict(name='cpu_detail_link',us=t0,operation=t1,parent=t2,queued_us=t3,began_us=a|(b<<32)))
@@ -141,6 +159,8 @@ def latency_analysis(rows):
             request=reply_ports.pop(f['destination_port'],None)
             if request:ipc.append(dict(reply_cookie=f['cookie'],request_cookie=request,reply_port=f['destination_port']))
             if f['reply_port']:reply_ports[f['reply_port']]=f['cookie']
+        elif kind==33:
+            ipc.append(dict(request_cookie=f['request_cookie'],reply_cookie=f['reply_cookie'],reply_port=f['reply_port'],receive_us=us))
         elif kind==20:
             phase=f['phase']&255;key=pid,f['item']
             if phase==1:
@@ -211,7 +231,13 @@ def latency_records(blob):
             row['flags']=values[1]>>8
         rows.append(row)
     rows.sort(key=lambda r:r['us'])
-    return dict(total=total,kept=kept,dropped=dropped,overwritten=max(0,total-524288)),rows
+    result=dict(total=total,kept=kept,dropped=dropped,overwritten=max(0,total-524288))
+    summary=next((r['fields'] for r in reversed(rows) if r['kind']==34),None)
+    if summary:
+        result.update(capture_budget=summary,
+                      overwritten=max(0,summary['normal_total']-491519)+max(0,summary['critical_total']-32768),
+                      not_retained=summary['normal_total']+summary['critical_total']-summary['normal_kept']-summary['critical_kept'])
+    return result,rows
 
 PIXEL_FIELDS = 'magic version pid stage capture us command surface physical width height format colour_space source_stride grid_width grid_height row_bytes bytes_per_pixel flags bytes fence'.split()
 
