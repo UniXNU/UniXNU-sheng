@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: UniXNU/UniXNU
-          ref: 474cfeeb4e35b3fc91ec98cd2bb54e1ab25389b8 # startup pipeline repair
+          ref: 82b77cf775d52a0e52ea157939e6e18ddc088e29 # GPU and display integration
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4
