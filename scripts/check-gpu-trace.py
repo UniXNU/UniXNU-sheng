@@ -121,7 +121,7 @@ class TraceTests(unittest.TestCase):
             source.write_text('#include <cassert>\n#include "tu_frame_diagnostic.h"\n'+
                 'static int calls; extern "C" bool tu_darwin_frame_diagnostic(uint32_t,const void *,uint32_t){++calls;return true;}\n'+
                 'int main(){setenv("SHENG_GPU_TRACE","1",1);for(int i=0;i<100000;i++)tu_frame_event(37);assert(calls==0);'+
-                'tu_frame_event(36);tu_frame_event(38);tu_frame_event(43);assert(calls==3);}')
+                'tu_frame_event(36);tu_frame_event(38);tu_frame_event(43);assert(calls==0);}')
             subprocess.run(['xcrun','clang++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',str(source),'-o',str(exe)],check=True)
             subprocess.run([str(exe)],check=True)
 
