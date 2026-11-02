@@ -385,8 +385,8 @@ int proc_rele(proc_t);
 task_t proc_task(proc_t);
 void proc_iterate(unsigned,int (*)(proc_t,void *),void *,int (*)(proc_t,void *),void *);
 void *IOMallocAligned(vm_size_t,vm_offset_t);
-#define CS_TARGETS 7
-#define CS_RING 131072
+#define CS_TARGETS 2
+#define CS_RING 262144   // BootDiagExport.c ClientRing
 struct cs_rec {uint64_t abs;int32_t pid;uint16_t state;int16_t pri;uint32_t cs;int32_t peer;uint64_t cpu,wait,frames[11];};
 _Static_assert(sizeof(struct cs_rec)==128,"client sample");
 struct cs_target {int pid;unsigned slide;uint64_t image,seen;char name[32];};   // seen: when the sampler first found it (mach units)
@@ -401,7 +401,7 @@ volatile uint32_t boot_cpu_count;
 // ran, with its base priority. kernel.ptime.bin; the export names the pids.
 struct cs_ptime {uint64_t abs;int32_t pid;uint32_t user_us,system_us;int16_t priority;uint16_t reserved;};
 _Static_assert(sizeof(struct cs_ptime)==24,"process time");
-#define CS_PTIME_RING 131072
+#define CS_PTIME_RING 131072   // BootDiagExport.c PtimeRing
 struct cs_ptime *boot_ptime_ring;
 volatile uint32_t boot_ptime_count;
 #include <kern/recount.h>
@@ -468,13 +468,16 @@ struct cs_rec *boot_client_ring;
 volatile uint32_t boot_client_count;
 struct cs_target boot_client_targets[32];
 volatile unsigned boot_client_target_count;
-static const char *const cs_names[CS_TARGETS]={"backboardd","SpringBoard","WidgetRenderer_","InputUI","Preferences","MobileSafari","PosterBoard"};
+// The render server and its main client. In backboardd the sampled threads are the Metal frontend's render (1), encode (2) and
+// completion (3) threads (NativeGpuThreadTargets); state carries the role in bits 12-13. Other processes are seen through the CPU time pass.
+static const char *const cs_names[CS_TARGETS]={"backboardd","SpringBoard"};
+#define CS_ROLES 3
 static task_t cs_task[CS_TARGETS],cs_found_task[CS_TARGETS];
 static int cs_pid[CS_TARGETS],cs_found_pid[CS_TARGETS];
 // A blocked thread that did not switch since the last record of its slot is not recorded again (at most once a second, as a heartbeat):
 // the reader treats a record as lasting until the next one of the same pid.
-static uint32_t cs_last_cs[CS_TARGETS],cs_last_tick[CS_TARGETS],cs_tick;
-static uint16_t cs_last_state[CS_TARGETS];
+static uint32_t cs_last_cs[CS_TARGETS][CS_ROLES],cs_last_tick[CS_TARGETS][CS_ROLES],cs_tick;
+static uint16_t cs_last_state[CS_TARGETS][CS_ROLES];
 static unsigned cs_started;
 
 static int cs_select(proc_t p,void *arg) {
@@ -519,8 +522,8 @@ static void cs_refresh(void) {
   if(cs_task[i])cs_note_target(cs_task[i],cs_pid[i],cs_names[i]);
  }
 }
-extern uint64_t native_gpu_render_thread(uint32_t) __attribute__((weak_import));
-static void cs_sample(unsigned slot) {
+extern uint64_t native_gpu_role_thread(uint32_t,uint32_t) __attribute__((weak_import));
+static void cs_sample(unsigned slot,unsigned role) {
  task_t task=cs_task[slot];
  if(!task || !task_lock_try(task))return;
  vm_map_t map=task->active?task->map:NULL;
@@ -531,15 +534,18 @@ static void cs_sample(unsigned slot) {
  struct bt_entry e;memset(&e,0,sizeof(e));
  bool got=false;
  thread_t thread=(thread_t)queue_first(&task->threads);
- const uint64_t render=!strcmp(cs_names[slot],"backboardd") && &native_gpu_render_thread?native_gpu_render_thread((uint32_t)cs_pid[slot]):0;
+ const bool server=!strcmp(cs_names[slot],"backboardd");
+ const uint64_t render=server && &native_gpu_role_thread?native_gpu_role_thread((uint32_t)cs_pid[slot],role):0;
+ if(server && role>1 && !render){task_unlock(task);vm_map_deallocate(map);if(space)is_release(space);return;}
  if(render) {
   thread_t candidate;
   queue_iterate(&task->threads,candidate,thread_t,task_threads)if(candidate->thread_id==render){thread=candidate;break;}
+  if(role>1 && (queue_end(&task->threads,(queue_entry_t)thread) || thread->thread_id!=render)){task_unlock(task);vm_map_deallocate(map);if(space)is_release(space);return;}
  }
  if(!queue_end(&task->threads,(queue_entry_t)thread)) {
   bool irq=ml_set_interrupts_enabled(false);
   if(simple_lock_try(&thread->sched_lock,&thread_lck_grp)) {
-   r.state=(uint16_t)thread->state;if(render && thread->thread_id==render)r.state|=0x1000;if(thread_get_runq(thread)!=PROCESSOR_NULL)r.state|=0x8000;
+   r.state=(uint16_t)thread->state;if(render && thread->thread_id==render)r.state|=(uint16_t)(role<<12);if(thread_get_runq(thread)!=PROCESSOR_NULL)r.state|=0x8000;
    r.pri=(int16_t)thread->sched_pri;r.cs=thread->c_switch;r.wait=(uint64_t)thread->wait_event;r.cpu=recount_thread_time_mach(thread);
    arm_saved_state_t *state=thread->machine.upcb;
    if(state && is_saved_state64(state)) {
@@ -561,8 +567,9 @@ static void cs_sample(unsigned slot) {
  }
  if(space)is_release(space);
  vm_map_deallocate(map);
- if((r.state&1) && !(r.state&0x8000) && r.cs==cs_last_cs[slot] && r.state==cs_last_state[slot] && cs_tick-cs_last_tick[slot]<250)return;
- cs_last_cs[slot]=r.cs;cs_last_state[slot]=r.state;cs_last_tick[slot]=cs_tick;
+ const unsigned k=role-1;
+ if((r.state&1) && !(r.state&0x8000) && r.cs==cs_last_cs[slot][k] && r.state==cs_last_state[slot][k] && cs_tick-cs_last_tick[slot][k]<250)return;
+ cs_last_cs[slot][k]=r.cs;cs_last_state[slot][k]=r.state;cs_last_tick[slot][k]=cs_tick;
  const uint32_t n=boot_client_count;
  boot_client_ring[n&(CS_RING-1)]=r;
  boot_client_count=n+1;
@@ -710,7 +717,7 @@ static void cs_thread(void *arg,wait_result_t result) {
   boot_latency_fault_drain();
   if(tick%25==0){cs_refresh();cs_ptime_pass();cs_hot_samples();cs_waiters();}   // every 100 ms: an app's launch shows within that
   cs_tick=tick;
-  for(unsigned i=0;i<CS_TARGETS;++i)cs_sample(i);
+  for(unsigned i=0;i<CS_TARGETS;++i)for(unsigned role=1;role<=(strcmp(cs_names[i],"backboardd")?1u:CS_ROLES);++role)cs_sample(i,role);
   if(boot_cpu_ring) {
    struct cs_cpu c;memset(&c,0,sizeof(c));c.abs=mach_absolute_time();
    for(int cpu=0;cpu<8;++cpu) {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Seven-issue latency export: command/pass phases, allocation/release, CPU,
-// blocked peers and fault evidence. No screenshots, pixel grids, shader-cache
-// inventories, framework files or general unified-log scans.
+// render thread waits, display arrival, fault and unnest evidence, and the
+// touch report times that bound the analysed windows. Nothing else.
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
@@ -42,22 +42,8 @@ extern volatile uint64_t native_legacy_snap[64][2] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_snap_count __attribute__((weak_import));
 extern volatile uint32_t native_legacy_swapstat[16] __attribute__((weak_import));
 extern volatile uint64_t (*native_adreno_tl)[8] __attribute__((weak_import));
-extern volatile uint32_t native_adreno_switch_log[16][34] __attribute__((weak_import));
-extern volatile uint32_t native_adreno_switch_count __attribute__((weak_import));
-extern volatile uint32_t native_adreno_recover_log[8][12] __attribute__((weak_import));
-extern volatile uint32_t native_adreno_recover_log_count __attribute__((weak_import));
-extern volatile uint32_t native_adreno_prio_log[32][6] __attribute__((weak_import));
-extern volatile uint32_t native_adreno_prio_count __attribute__((weak_import));
-extern volatile uint32_t *native_adreno_pass_log __attribute__((weak_import));
-extern volatile uint32_t native_adreno_pass_count __attribute__((weak_import));
-extern volatile uint32_t *native_adreno_pipe_log __attribute__((weak_import));
-extern volatile uint32_t native_adreno_pipe_count __attribute__((weak_import));
 extern volatile uint32_t native_adreno_tl_cap __attribute__((weak_import));
 extern volatile uint32_t native_adreno_tl_count __attribute__((weak_import));
-extern volatile uint64_t native_adreno_stall_log[32][8] __attribute__((weak_import));
-extern volatile uint32_t native_adreno_stall_log_count __attribute__((weak_import));
-extern volatile uint64_t native_gpu_dcvs_log[256][2] __attribute__((weak_import));
-extern volatile uint32_t native_gpu_dcvs_log_count __attribute__((weak_import));
 extern volatile uint32_t native_gop_wait_ring_count __attribute__((weak_import));
 extern volatile uint64_t native_gop_wait_ring[64][3] __attribute__((weak_import));
 extern volatile uint32_t native_gop_wait_reasons[4] __attribute__((weak_import));
@@ -71,7 +57,7 @@ extern uint32_t native_gpu_trace_snapshot(void *,uint32_t) __attribute__((weak_i
 static void *gpu_trace_data[1];
 static uint32_t gpu_trace_size[1];
 static const char *gpu_trace_name[1]={"gpu.trace.bin"};
-static const uint32_t gpu_trace_capacity[1]={32+(16384+4096)*120};
+static const uint32_t gpu_trace_capacity[1]={32+(65536+4096)*120};
 
 
 static void note(const char *text, const char *path, int error) {
@@ -147,23 +133,12 @@ static int worth(const void *a, const void *b) {
   return -strcmp(x->path, y->path);
 }
 
-// IPC trace: every message sent to a port of backboardd (the render server's process) or of SpringBoard (which gets the touch events
-// from backboardd), the question being what wakes the render thread and the client before a slow frame. The kernel calls
-// sheng_ipc_send_hook (the xnu patch) with the destination port locked for the messages to the two traced tasks; this records the time,
-// the message id, the sender's pid and the receiver in a ring. kernel.ipc.bin is the ring in time order (16-byte header "IPC2", u32 total,
-// u32 kept, u32 0; then {u64 microseconds, u32 message id, u32 receiver << 24 | sender pid (24 bits, 0 kernel, 0xffffff unknown)};
-// receiver 1 backboardd, 2 SpringBoard), and kernel.rings.txt names the pids. The hook goes in only once the home screen draws (50
-// flips), so it cannot touch the boot's startup (the first run with it, i7d94e5078, stopped at the logo; the cause is not known).
 // Touch reports: kernel.touch.bin, the time of every report the touch driver handed to the HID event driver (HidInputProbe.cpp).
 extern uint64_t mach_absolute_time(void);
 extern void absolutetime_to_nanoseconds(uint64_t, uint64_t *);
-extern void *sheng_ipc_trace_task __attribute__((weak_import));
-extern void *sheng_ipc_trace_task2 __attribute__((weak_import));
-extern void (*sheng_ipc_send_hook)(uint32_t, void *, uint32_t) __attribute__((weak_import));
-extern struct task *proc_task(proc_t);
 extern volatile uint64_t *native_touch_report_ring __attribute__((weak_import));
 extern volatile uint32_t native_touch_report_count __attribute__((weak_import));
-enum {IpcRing = 524288, TouchRing = 65536};
+enum {TouchRing = 65536};
 // The client sampler (BootUiTraceProbe.c): kernel.client.bin is its ring in time order (16-byte header "CLI1", u32 total, u32 kept, u32 0;
 // then 128-byte records {u64 microseconds, i32 pid, u16 state, i16 priority, u32 context switches, i32 mach_msg peer pid, u64 CPU time
 // (mach units), u64 wait event, u64 frames[11] (pc, lr, nine callers)}); kernel.rings.txt has a C row per target (pid, shared cache
@@ -183,41 +158,8 @@ struct cs_ptime {uint64_t abs; int32_t pid; uint32_t user_us, system_us; int16_t
 extern struct cs_ptime *boot_ptime_ring __attribute__((weak_import));
 extern const char *boot_ptime_name(int) __attribute__((weak_import));   // the name the CPU time pass saw: a process gone by the export has none
 extern volatile uint32_t boot_ptime_count __attribute__((weak_import));
-enum {PtimeRing = 524288};
+enum {PtimeRing = 131072};   // BootUiTraceProbe.c CS_PTIME_RING
 static uint32_t ptime_kept, ptime_keep;
-// User client calls (HidInputProbe.cpp), kernel.ioc.bin: header "IOC1", total, kept, 0; then 32-byte records {u64 microseconds entered,
-// u32 microseconds waiting for the client's lock, u32 microseconds in the method, u32 selector, i32 pid, u64 class name address}; the
-// class names are the K rows of kernel.rings.txt.
-struct ioc_rec {uint64_t entered; uint32_t lock_us, call_us, selector; int32_t pid; uint64_t class_name;};
-extern struct ioc_rec *native_ioc_ring __attribute__((weak_import));
-extern volatile uint32_t native_ioc_count __attribute__((weak_import));
-extern void native_ioc_trace_start(const int *, unsigned) __attribute__((weak_import));
-enum {IocRing = 262144};
-static uint32_t ioc_kept;
-// The GPU driver's calls (NativeAdrenoPublish.cpp), kernel.gpucalls.bin: header "GPU1", total, kept, 0; then 32-byte records {u64
-// microseconds entered, u32 microseconds in the driver, u32 of those waiting for the device lock, u16 ABI method, u16 0, i32 pid, u32
-// status, u32 KiB of an allocation}.
-struct gpu_call_rec {uint64_t entered; uint32_t us, lock_us; uint16_t method, flags; int32_t pid; uint32_t status, kib;};
-extern struct gpu_call_rec *native_adreno_call_ring __attribute__((weak_import));
-extern volatile uint32_t native_adreno_call_count __attribute__((weak_import));
-enum {GpuCallRing = 262144};
-static uint32_t gpucall_kept;
-// Physically contiguous allocations (the xnu hook in cpm_allocate), kernel.contig.bin: header "CTG1", total, kept, 0; then 72-byte records
-// {u64 microseconds began, u32 microseconds searching, u32 pages | found << 31, i32 pid, u32 frames, u64 kernel return addresses[6]};
-// kernel.rings.txt has the running address of boot_diag_shot_tick for the slide.
-struct contig_rec {uint64_t began; uint32_t us, pages; int32_t pid; uint32_t count; uint64_t frames[6];};
-extern void (*sheng_contig_hook)(unsigned int, int, uint64_t, uint64_t, const uintptr_t *, unsigned int) __attribute__((weak_import));
-enum {ContigRing = 8192};
-static struct contig_rec *contig_ring;
-static volatile uint32_t contig_count;
-static uint32_t contig_kept, contig_keep;
-static void contig_hook(unsigned int pages, int found, uint64_t began, uint64_t ended, const uintptr_t *frames, unsigned int count) {
-  const uint32_t n = __atomic_fetch_add(&contig_count, 1, __ATOMIC_RELAXED);
-  struct contig_rec *r = &contig_ring[n & (ContigRing - 1)];
-  r->began = began; r->us = (uint32_t)(ended - began); r->pages = pages | (found ? 0x80000000u : 0); r->pid = proc_selfpid();
-  r->count = count;
-  for (unsigned i = 0; i < 6; ++i) r->frames[i] = i < count ? (uint64_t)frames[i] : 0;
-}
 // Large GPU allocations (the driver's BoAlloc hook, NativeAdrenoPublish.cpp), kernel.boalloc.bin: header "BOA1", total, kept, 0; then
 // 256-byte records {the driver's 56-byte phase record (u64 microseconds entered; u32 KiB, flags, then microseconds: limit lock, create,
 // wire, clean, lock, dispatch, discard; u32 spans, i32 status, u32 0), i32 pid, u32 0, then the caller's user stack: u64 shared cache
@@ -247,36 +189,15 @@ extern struct cs_rec *boot_client_ring __attribute__((weak_import));
 extern volatile uint32_t boot_client_count __attribute__((weak_import));
 extern struct cs_target boot_client_targets[32] __attribute__((weak_import));
 extern volatile unsigned boot_client_target_count __attribute__((weak_import));
-enum {ClientRing = 524288};
+enum {ClientRing = 262144};   // BootUiTraceProbe.c CS_RING
 static uint32_t client_kept, client_keep;
 static uint32_t touch_kept,touch_keep;
-static int ipc_pid[2];
-static unsigned ipc_scans;
 
-static void *ipc_task_of(const char *want, int *pid_out) {
-  for (int pid = 1; pid < 512; ++pid) {
-    char name[32] = {0};
-    proc_name(pid, name, sizeof name);
-    if (strcmp(name, want)) continue;
-    proc_t proc = proc_find(pid);
-    if (!proc) return NULL;
-    void *task = proc_task(proc);
-    proc_rele(proc);
-    *pid_out = pid;
-    return task;   // only compared, never followed
-  }
-  return NULL;
-}
-
-static void ipc_trace_tick(void) {
+static void latency_tick(void) {
   if (!&native_legacy_swapstat || native_legacy_swapstat[9] < 50) return;   // the home screen draws
   boot_latency_start();
   if (&boot_client_sampler_start) boot_client_sampler_start();
   // Everything below allocates only now, once the home screen draws: nothing of this trace runs during startup.
-  if (&sheng_contig_hook && !contig_ring) {
-    contig_ring = IOMallocAligned(sizeof(struct contig_rec) * ContigRing, PAGE_SIZE);
-    if (contig_ring) {memset(contig_ring, 0, sizeof(struct contig_rec) * ContigRing); sheng_contig_hook = contig_hook;}
-  }
   if (&native_adreno_bo_hook && !boalloc_ring) {
     boalloc_ring = IOMallocAligned(sizeof(struct boalloc_rec) * BoAllocRing, PAGE_SIZE);
     if (boalloc_ring) {memset(boalloc_ring, 0, sizeof(struct boalloc_rec) * BoAllocRing); native_adreno_bo_hook = boalloc_hook;}
@@ -285,17 +206,10 @@ static void ipc_trace_tick(void) {
     uint64_t *touches = IOMallocAligned(sizeof(uint64_t) * TouchRing, PAGE_SIZE);
     if (touches) {memset(touches, 0, sizeof(uint64_t) * TouchRing); native_touch_report_ring = touches;}
   }
-  if (!&sheng_ipc_trace_task || !&sheng_ipc_trace_task2) return;
-  if (ipc_pid[0] > 0 && ipc_pid[1] > 0 && (++ipc_scans % 8) != 0) return;   // a restarted process has a new pid and task
-  int pid = 0;
-  void *task = ipc_task_of("backboardd", &pid);
-  if (task) {ipc_pid[0] = pid; if (sheng_ipc_trace_task != task) sheng_ipc_trace_task = task;}
-  task = ipc_task_of("SpringBoard", &pid);
-  if (task) {ipc_pid[1] = pid; if (sheng_ipc_trace_task2 != task) sheng_ipc_trace_task2 = task;}
 }
 
 // Called once per diagnostic log round; starts the latency collectors.
-void boot_diag_shot_tick(unsigned now) {(void)now;ipc_trace_tick();}
+void boot_diag_shot_tick(unsigned now) {(void)now;latency_tick();}
 
 #define RT(...) do {if (rings_len + 160 < DiagRings) {int n_ = snprintf(rings_text + rings_len, DiagRings - rings_len, __VA_ARGS__); if (n_ > 0) rings_len += (size_t)n_;}} while (0)
 // One text file with every kernel ring of the batch: lines are "<tag> fields", 64-bit microseconds on the uptime clock the render
@@ -339,78 +253,6 @@ static void rings_build(void) {
          (unsigned)((r[6] >> 16) & 15), (unsigned)((r[6] >> 20) & 15), (unsigned)((r[6] >> 24) & 255), r[7]);
     }
   }
-  // The processes' queue priorities and GPU roles as they told the driver (the newest 32), the CP's switches between the two rings (the newest 16)
-  // and the GPU restarts (the newest 8): rows Q, R and V, joined with the T rows by time and pid.
-  if (&native_adreno_prio_count) {
-    const uint32_t n = native_adreno_prio_count;
-    RT("# queue priorities: Q <pid> <foreground> <background> <gpu role then> <ms> <calls before from this connection> (total %u)\n", n);
-    for (uint32_t i = n > 32 ? n - 32 : 0; i < n; ++i) {
-      const volatile uint32_t *r = native_adreno_prio_log[i & 31];
-      RT("Q %u %u %u %u %u %u\n", r[0], r[1], r[2], r[3], r[4], r[5]);
-    }
-  }
-  if (&native_adreno_switch_count) {
-    const uint32_t n = native_adreno_switch_count;
-    RT("# ring switches: R <seq> <trigger us> <end us> <from> <to> <outcome 0 pending 1 done 2 timed out 3 refused> <cntl after trigger> <cntl at end> <rbbm status> <rbbm int status> <cp hw fault> <rb rptr> <rb wptr> | records (rptr wptr errno info) ring0 ring1 before | ring0 ring1 after | cp ib1 base lo hi, ib2 base lo hi, ib1 rem, ib2 rem at a timeout (total %u)\n", n);
-    for (uint32_t i = n > 16 ? n - 16 : 0; i < n; ++i) {
-      const volatile uint32_t *r = native_adreno_switch_log[i & 15];
-      RT("R %u %llu %llu %u %u %u %x %x %x %x %x %x %x | %x %x %x %x %x %x %x %x | %x %x %x %x %x %x %x %x | %x %x %x %x %x %x\n", r[0],
-         (unsigned long long)r[1] | (unsigned long long)r[2] << 32, (unsigned long long)r[3] | (unsigned long long)r[4] << 32, r[5] & 255, (r[5] >> 8) & 255, r[5] >> 16,
-         r[6], r[7], r[8], r[9], r[10], r[11] & 0xffff, r[11] >> 16, r[12], r[13], r[14], r[15], r[16], r[17], r[18], r[19], r[20], r[21], r[22], r[23], r[24], r[25], r[26], r[27],
-         r[28], r[29], r[30], r[31], r[32], r[33]);
-    }
-  }
-  if (&native_adreno_recover_log_count) {
-    const uint32_t n = native_adreno_recover_log_count;
-    RT("# GPU restarts: V <seq> <us> <hung fence> <status> <jobs replayed> <stranded 1 guilty 2> <why the second ring was given up> <ring of the hung job, 9 none> <ring 0 newest fence> <ring 1 newest fence> <ring the CP ran> (total %u)\n", n);
-    for (uint32_t i = n > 8 ? n - 8 : 0; i < n; ++i) {
-      const volatile uint32_t *r = native_adreno_recover_log[i & 7];
-      RT("V %u %llu %u %x %u %u %u %u %u %u %u\n", r[0], (unsigned long long)r[1] | (unsigned long long)r[2] << 32, r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11]);
-    }
-  }
-  // What processes noted in the driver (NativeAdrenoMethodNote), the newest 512 of each: G rows are render passes of 3 ms or more on the GPU
-  // from processes with no trace file of their own (the poster extension), L rows the pipelines they made or were refused. The fragment
-  // shader hash (tu_hash32) joins a G row to the L row that made it; times are microseconds on the stack's clock (the kernel's uptime).
-  if (&native_adreno_pass_count && native_adreno_pass_log) {
-    const uint32_t n = native_adreno_pass_count;
-    RT("# process passes: G <pid> <seq> <recorded us> <gpu start us> <gpu us> <w> <h> <mode 0 gmem 1 sysmem 2 sysmem other> <colors> <flags 1 mutable 2 linear 4 unpadded 8 loaded 16 stored 32 fdm> <swap> <draws> <vkformat> <kpx> <fs instrs> <fs tex> <sy> <ss> <waves> <gpr> <samples> <ds> <bandwidth> <verts> <fs hash> (total %u)\n", n);
-    for (uint32_t i = n > 512 ? n - 512 : 0; i < n; ++i) {
-      const volatile uint32_t *r = native_adreno_pass_log + (i & 511) * 32;
-      if (r[0] < 16) continue;
-      RT("G %u %u %llu %llu %u %u %u %u %u %u %u %u %u %u %u %u %u %u %d %d %u %u %u %u %x\n", r[1], r[2], (unsigned long long)r[3] | (unsigned long long)r[4] << 32,
-         (unsigned long long)r[5] | (unsigned long long)r[6] << 32, r[7], r[8] & 0xffff, r[8] >> 16, r[9] & 255, (r[9] >> 8) & 255, (r[9] >> 16) & 255, r[9] >> 24,
-         r[10] & 0xffff, r[10] >> 16, r[11], r[12] & 0xffff, r[12] >> 16, r[13] & 0xffff, r[13] >> 16, (int)(int8_t)(r[14] & 255), (int)(int8_t)((r[14] >> 8) & 255),
-         (r[14] >> 16) & 255, r[14] >> 24, r[15], r[16], r[17]);
-    }
-  }
-  if (&native_adreno_pipe_count && native_adreno_pipe_log) {
-    const uint32_t n = native_adreno_pipe_count;
-    RT("# process pipelines: L <pid> <made 1 | compute 2> <us it took> <when us (low 32 bits)> <vertex hash> <fragment hash> <colour pixel format> <fragment|vertex|why refused> (total %u)\n", n);
-    for (uint32_t i = n > 512 ? n - 512 : 0; i < n; ++i) {
-      const volatile uint32_t *r = native_adreno_pipe_log + (i & 511) * 32;
-      if (r[0] < 30) continue;
-      char text[97];
-      for (unsigned k = 0; k < 96; ++k) {const char c = (char)(r[8 + k / 4] >> (8 * (k & 3))); text[k] = c >= 32 && c < 127 ? c : (c ? '?' : 0);}
-      text[96] = 0;
-      RT("L %u %u %u %u %x %x %u %s\n", r[1], r[2] & 3, r[3], r[4], r[5], r[6], r[7], text);
-    }
-  }
-  if (&native_adreno_stall_log_count) {
-    const uint32_t n = native_adreno_stall_log_count;
-    RT("# gpu stall ring: X <us> <fence> <event 0 ended 1 kick 3 drain 4 snapshot> <timed-out waits> <pending us> <rptr w before, rptr w after (hex)> <client queue> <first handle> <buffers> (total %u)\n", n);
-    for (uint32_t i = n > 32 ? n - 32 : 0; i < n; ++i) {
-      const volatile uint64_t *r = native_adreno_stall_log[i & 31];
-      RT("X %llu %u %u %u %llu %llx %llx %llx %u\n", r[0], (unsigned)r[1], (unsigned)(r[2] & 0xff), (unsigned)(r[2] >> 8), r[3], r[4], r[5], r[6] & 0xffffffffffffull, (unsigned)(r[6] >> 48));
-    }
-  }
-  if (&native_gpu_dcvs_log_count) {
-    const uint32_t n = native_gpu_dcvs_log_count;
-    RT("# gpu dcvs ring: D <us> <from level> <to level> <reason 1 busy 2 need 3 down 4 idle 5 touch 6 wake 7 floor 8 vote failed> <window busy %%> <needed MHz> (total %u)\n", n);
-    for (uint32_t i = n > 256 ? n - 256 : 0; i < n; ++i) {
-      const uint64_t t = native_gpu_dcvs_log[i & 255][0], v = native_gpu_dcvs_log[i & 255][1];
-      RT("D %llu %u %u %u %u %u\n", t, (unsigned)(v >> 56), (unsigned)((v >> 48) & 0xff), (unsigned)((v >> 40) & 0xff), (unsigned)((v >> 32) & 0xff), (unsigned)(v & 0xffffffffu));
-    }
-  }
   if (&boot_client_target_count && boot_client_target_count) {
     RT("# client sampler targets: C <pid> <shared cache slide hex> <main image address hex> <name> <first seen us> (samples %u, kernel.client.bin)\n", client_kept);
     for (unsigned i = 0; i < boot_client_target_count && i < 32; ++i) {
@@ -419,34 +261,16 @@ static void rings_build(void) {
       RT("C %d %x %llx %s %llu\n", boot_client_targets[i].pid, boot_client_targets[i].slide, boot_client_targets[i].image, boot_client_targets[i].name, seen / 1000);
     }
   }
-  if (ioc_kept) {
-    const uint32_t kept = ioc_kept > IocRing ? IocRing : ioc_kept;
-    RT("# user client calls: %u (kernel.ioc.bin); K <class name address hex> <class>\n", ioc_kept);
-    uint64_t seen[48]; unsigned seen_n = 0;
-    for (uint32_t i = 0; i < kept && seen_n < 48; ++i) {
-      const uint64_t name = native_ioc_ring[(ioc_kept - kept + i) & (IocRing - 1)].class_name;
-      unsigned k = 0;
-      while (k < seen_n && seen[k] != name) ++k;
-      if (k < seen_n || !name) continue;
-      seen[seen_n++] = name;
-      RT("K %llx %.60s\n", name, (const char *)(uintptr_t)name);
-    }
-  }
   {
-    // Names of every pid in the user client, GPU call and contiguous allocation rings: N <pid> <name>.
+    // Names of every pid in the allocation and CPU time rings: N <pid> <name>.
     int seen[512]; unsigned seen_n = 0;   // every process that ran: the CPU time ring names them all
     #define NOTE_PID(p_) do {const int p__ = (p_); unsigned k_ = 0; while (k_ < seen_n && seen[k_] != p__) ++k_; \
       if (k_ == seen_n && seen_n < 512 && p__ > 0) {seen[seen_n++] = p__; char nm_[32] = {0}; proc_name(p__, nm_, sizeof nm_); \
         if (!nm_[0] && &boot_ptime_name && boot_ptime_name(p__)) strlcpy(nm_, boot_ptime_name(p__), sizeof nm_); RT("N %d %s\n", p__, nm_);}} while (0)
-    RT("# pid names (user client, GPU call and contiguous allocation rings): N <pid> <name>; kernel reference boot_diag_shot_tick=%llx\n",
+    RT("# pid names (allocation and CPU time rings): N <pid> <name>; kernel reference boot_diag_shot_tick=%llx (unslides unnest frames)\n",
        (unsigned long long)(uintptr_t)&boot_diag_shot_tick);
-    if (ioc_kept) {const uint32_t kept = ioc_kept > IocRing ? IocRing : ioc_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(native_ioc_ring[(ioc_kept - kept + i) & (IocRing - 1)].pid);}
-    if (gpucall_kept) {const uint32_t kept = gpucall_kept > GpuCallRing ? GpuCallRing : gpucall_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(native_adreno_call_ring[(gpucall_kept - kept + i) & (GpuCallRing - 1)].pid);}
-    if (contig_kept) {const uint32_t kept = contig_kept > ContigRing ? ContigRing : contig_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(contig_ring[(contig_kept - kept + i) & (ContigRing - 1)].pid);}
     if (boalloc_kept) {const uint32_t kept = boalloc_kept > BoAllocRing ? BoAllocRing : boalloc_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(boalloc_ring[(boalloc_kept - kept + i) & (BoAllocRing - 1)].pid);}
     if (ptime_kept) {const uint32_t kept = ptime_kept > PtimeRing ? PtimeRing : ptime_kept; for (uint32_t i = 0; i < kept; ++i) NOTE_PID(boot_ptime_ring[(ptime_kept - kept + i) & (PtimeRing - 1)].pid);}
-    if (&native_adreno_pass_count && native_adreno_pass_log) {const uint32_t n = native_adreno_pass_count; for (uint32_t i = n > 512 ? n - 512 : 0; i < n; ++i) NOTE_PID((int)native_adreno_pass_log[(i & 511) * 32 + 1]);}
-    if (&native_adreno_pipe_count && native_adreno_pipe_log) {const uint32_t n = native_adreno_pipe_count; for (uint32_t i = n > 512 ? n - 512 : 0; i < n; ++i) NOTE_PID((int)native_adreno_pipe_log[(i & 511) * 32 + 1]);}
     #undef NOTE_PID
   }
   if (&native_gop_wait_ring_count) {
@@ -494,6 +318,13 @@ uint64_t boot_diag_scan(uint64_t budget) {
   // Files are scanned before optional exports. Frame records have first claim
   // on the budget, so fast IPC and scene data cannot displace the causal trace.
   vfs_context_t ctx = vfs_context_kernel();
+  // dasd aborts on a nil path for this bundle resource: whether the kernel sees it (diag-skipped.txt "resource <path> <errno>").
+  {
+    static const char dasd_model[]="/usr/libexec/freezer_app_ranking_model.mlmodelc";
+    vnode_t model=NULLVP;const int error=vnode_lookup(dasd_model,0,&model,ctx);
+    if(!error)vnode_put(model);
+    note("resource",dasd_model,error);
+  }
   for(unsigned i=0;i<sizeof diag_roots/sizeof diag_roots[0];++i)scan(diag_roots[i],0,i,ctx);
   qsort(diag_files,diag_count,sizeof diag_files[0],worth);
   unsigned crash_count[5]={0};uint64_t crash_bytes=0;uint32_t files_kept=0;
@@ -509,9 +340,6 @@ uint64_t boot_diag_scan(uint64_t budget) {
   client_kept = (&boot_client_count && &boot_client_ring && boot_client_ring) ? boot_client_count : 0;
   cpu_kept = (&boot_cpu_count && &boot_cpu_ring && boot_cpu_ring) ? boot_cpu_count : 0;
   ptime_kept = (&boot_ptime_count && &boot_ptime_ring && boot_ptime_ring) ? boot_ptime_count : 0;
-  ioc_kept = 0;
-  gpucall_kept = 0;
-  contig_kept = contig_ring ? contig_count : 0;
   boalloc_kept = boalloc_ring ? boalloc_count : 0;
   rings_build();
   if (rings_text && rings_len) {
@@ -537,12 +365,6 @@ uint64_t boot_diag_scan(uint64_t budget) {
     const uint32_t kept = boalloc_kept > BoAllocRing ? BoAllocRing : boalloc_kept;
     const uint64_t cost = 24 + strlen("kernel.boalloc.bin") + 16 + (uint64_t)kept * sizeof(struct boalloc_rec);
     if (used + cost <= budget) {boalloc_keep = 1; used += cost;}
-  }
-  contig_keep = 0;
-  if (contig_kept) {
-    const uint32_t kept = contig_kept > ContigRing ? ContigRing : contig_kept;
-    const uint64_t cost = 24 + strlen("kernel.contig.bin") + 16 + (uint64_t)kept * sizeof(struct contig_rec);
-    if (used + cost <= budget) {contig_keep = 1; used += cost;}
   }
   touch_kept = (&native_touch_report_count && &native_touch_report_ring && native_touch_report_ring) ? native_touch_report_count : 0;
   if (touch_kept) {
@@ -574,7 +396,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   if (!chunk) return -1;
   vfs_context_t ctx = vfs_context_kernel();
   int rc = emit("M2VCACH1", 8, arg);
-  const uint32_t root_len = 1, count = boot_diag_files + 1 + rings_keep + client_keep + touch_keep + cpu_keep + contig_keep + boalloc_keep + ptime_keep + !!gpu_trace_size[0] + !!latency_size;
+  const uint32_t root_len = 1, count = boot_diag_files + 1 + rings_keep + client_keep + touch_keep + cpu_keep + boalloc_keep + ptime_keep + !!gpu_trace_size[0] + !!latency_size;
   if (!rc) rc = emit(&root_len, 4, arg);
   if (!rc) rc = emit("/", 1, arg);
   if (!rc) rc = emit(&count, 4, arg);
@@ -615,26 +437,6 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
         memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
       }
       rc = emit(chunk, n * sizeof(struct boalloc_rec), arg);
-      at += n;
-    }
-  }
-  if (!rc && contig_keep) {
-    const uint32_t total = contig_kept, kept = total > ContigRing ? ContigRing : total;
-    const uint32_t head[4] = {'C' | 'T' << 8 | 'G' << 16 | (uint32_t)'1' << 24, total, kept, 0};
-    rc = put_head(emit, arg, "kernel.contig.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct contig_rec));
-    if (!rc) rc = emit(head, sizeof head, arg);
-    for (uint32_t at = 0; !rc && at < kept;) {
-      const uint32_t n = kept - at < 2048 ? kept - at : 2048;
-      for (uint32_t k = 0; k < n; ++k) {
-        struct contig_rec out = contig_ring[(total - kept + at + k) & (ContigRing - 1)];
-        uint64_t ns = 0;
-        absolutetime_to_nanoseconds(out.began, &ns);
-        out.began = ns / 1000;
-        absolutetime_to_nanoseconds(out.us, &ns);
-        out.us = (uint32_t)(ns / 1000);
-        memcpy(chunk + (size_t)k * sizeof out, &out, sizeof out);
-      }
-      rc = emit(chunk, n * sizeof(struct contig_rec), arg);
       at += n;
     }
   }

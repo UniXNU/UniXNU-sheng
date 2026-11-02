@@ -83,6 +83,7 @@ def unpack_export(blob, run, name='export'):
         for home in ('mobile','root'):
             frames=out/f'files/private/var/{home}/Library/Caches/com.apple.backboardd/m2v/frames.trace'
             if frames.exists():command+=['--frames',str(frames)];break
+        if (out/'files/kernel.touch.bin').exists():command+=['--touch',str(out/'files/kernel.touch.bin')]
         subprocess.run(command,check=True)
 
 

@@ -7,7 +7,7 @@ struct bl_record {uint64_t us,tid;uint32_t kind,pid;uint64_t value[6];};
 struct bl_slot {uint32_t busy;uint64_t sequence;struct bl_record row;};
 struct bl_store {struct bl_slot *slots;uint32_t capacity;uint64_t issued,dropped;};
 static inline int bl_critical_kind(uint32_t kind) {
- return kind==3 || (kind>=6 && kind<=12) || kind==14 || (kind>=22 && kind<=27);
+ return kind==3 || (kind>=6 && kind<=12) || kind==14 || (kind>=22 && kind<=27) || kind==35 || kind==36;
 }
 static inline int bl_push(struct bl_store *s,const struct bl_record *r) {
  if(!s->slots)return 0;
