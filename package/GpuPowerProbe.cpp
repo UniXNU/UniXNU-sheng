@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
+#include "BootLatencyTrace.h"
 // Default-off, staged read-only observation of the Adreno power and clock state. `sheng-gpu-power=<n>`:
 //   1  read GCC GPU branches, GPUCC gdscr/branches, GPU SMMU global space 0 and RBBM_STATUS, each only when the previous stage
 //      showed its prerequisite on (GpuPowerBoard.h); no register is written
@@ -69,6 +70,8 @@ extern "C" {
 #include "NativeAdrenoCpInit.h"
 #include "NativeAdrenoPwrup.h"
 #include "NativeAdrenoA740HwInit.h"
+#include "NativeGpuPerfCounters.h"
+extern "C" bool native_adreno_preempt_stats(uint32_t *) __attribute__((weak_import));
 #include "AdrenoPM4.h"
 // Weak: an image that does not link NativeAdreno reports "nolink" instead of failing to link.
 extern "C" IOReturn NativeAdrenoGmuContextBringup(volatile uint8_t *smmu, size_t bytes, unsigned bank, unsigned asid,
@@ -356,6 +359,19 @@ int ringBarrier(void *) {__asm__ volatile("dsb sy" ::: "memory"); return 0;}
 // started (i-run 2eae28775: 1092 triggers refused).
 int gmuWrAt(void *, uint32_t dword, uint32_t value) {
     return gColdDevice.io.write32(gColdDevice.io.cookie, ShengGmuCore, size_t(kGmuReg(dword)), value);
+}
+// AHB fence bit 1 reports dropped context-switch register writes. The keepalive
+// vote is already held; retry for at most 2 ms while the GPU domain wakes.
+int preemptWrite(void *, uint32_t reg, uint32_t value) {
+    for (unsigned attempt = 0; attempt < 200; ++attempt) {
+        if (ringWrite(nullptr, reg, value)) return 1;
+        ringBarrier(nullptr);
+        uint32_t status = 0;
+        if (gColdDevice.io.read32(gColdDevice.io.cookie, ShengGmuCore, kGmuReg(0x23b13), &status)) return 1;
+        if (!(status & 2)) return 0;
+        IODelay(10);
+    }
+    return 1;
 }
 // The CP's preemption, as the board sees it: [0] set up (0 yes), [1] CP_SW interrupts seen, [2] the last such RBBM_INT_0_STATUS word.
 extern "C" {volatile uint32_t native_gpu_preempt[8];}
@@ -1283,7 +1299,7 @@ void publishAndWrapperTest(bool rounds) {
     // timed with.
     if (vm && gPreemptWanted) {
         NativeAdrenoSubmit::PreemptSetup setup{};
-        setup.io = NativeAdrenoPreemptIo{nullptr, ringWrite, ringRead, ringBarrier, nullptr, gmuWrAt};
+        setup.io = NativeAdrenoPreemptIo{nullptr, preemptWrite, ringRead, ringBarrier, nullptr, gmuWrAt};
         setup.pages.record[0] = gGpuBuffers[5].iova; setup.pages.record[1] = gGpuBuffers[6].iova;
         setup.pages.smmu_info[0] = gGpuBuffers[7].iova; setup.pages.smmu_info[1] = gGpuBuffers[8].iova;
         setup.pages.record_cpu[0] = const_cast<uint8_t *>(gGpuCpu[5]); setup.pages.record_cpu[1] = const_cast<uint8_t *>(gGpuCpu[6]);
@@ -1688,10 +1704,9 @@ void gpuStart() {
      if (!PE_parse_boot_argn("sheng-gpu-timeline", &timeline, sizeof timeline)) timeline = diag == 1;
      gRing.setTimeline(timeline != 0); gTimelineWanted = timeline != 0;}
     gpuWr64(A740_CP_BV_RB_RPTR_ADDR, gGpuBuffers[2].iova + 8);   // rbmemptr(bv_rptr)
-    // The second ring and the CP's switch between them (NativeAdrenoPreempt): sheng-gpu-preempt=1 turns it on (off: one ring, as
-    // before). The second ring writes no CP_RB_* register; its base, read-pointer shadow and control word reach the CP through its
-    // preemption record on each switch, and its bus read pointer is the one register it needs.
-    {unsigned preempt = 0; PE_parse_boot_argn("sheng-gpu-preempt", &preempt, sizeof preempt); gPreemptWanted = preempt == 1 || preempt == 2; gPreemptMode = preempt == 2 ? 2 : 1;}
+    // Normal/low work uses ring 1; requested high priorities use ring 0.
+    // Boot overrides: 0 one ring, 1 only low/background on ring 1, 2 normal work too.
+    {unsigned preempt = 2; PE_parse_boot_argn("sheng-gpu-preempt", &preempt, sizeof preempt); gPreemptWanted = preempt == 1 || preempt == 2; gPreemptMode = preempt == 2 ? 2 : 1;}
     if (gPreemptWanted) {
         const IOReturn second = gRing1.attachSecondary(&rio, &cache, const_cast<uint8_t *>(gGpuCpu[9]), gGpuBuffers[9].bytes,
             gGpuBuffers[9].iova, const_cast<uint8_t *>(gGpuCpu[10]), gGpuBuffers[10].bytes, gGpuBuffers[10].iova);
@@ -1800,6 +1815,38 @@ unsigned gpuLevelFor(uint64_t mhz) {
     while (l < kGpuTop && kGpuMHz[l] < mhz) ++l;
     return l;
 }
+void gpuPerfTick(uint64_t busyTicks) {
+ static NativeGpuPerfCounters counters;static bool configured=false;
+ static uint64_t sample=0,lastBusy=0;
+ if(!boot_latency_enabled())return;
+ if(!configured) {
+  counters.configure([](uint32_t reg,uint32_t value){gpuWr(reg,value);});
+  __asm__ volatile("dsb sy" ::: "memory");configured=true;
+  for(unsigned i=0;i<NativeGpuPerfCount;++i) {
+   const auto &c=NativeGpuPerfPlan[i];boot_latency_record(16,i,c.select,c.value,c.low,7,gpuRd(c.select));
+  }
+ }
+ uint32_t before[26]={},after[26]={};
+ const bool preempt=bootArg("sheng-gpu-preempt",2)!=0;
+ const bool gotBefore=!preempt || (&native_adreno_preempt_stats && native_adreno_preempt_stats(before));
+ uint64_t began=0;absolutetime_to_nanoseconds(mach_absolute_time(),&began);
+ const auto values=counters.capture([](uint32_t reg){return gpuRd(reg);});
+ uint64_t ended=0;absolutetime_to_nanoseconds(mach_absolute_time(),&ended);
+ const bool gotAfter=!preempt || (&native_adreno_preempt_stats && native_adreno_preempt_stats(after));
+ uint32_t flags=values.first?1u:0u;
+ if(before[0]!=after[0] || before[1]!=after[1])flags|=2;
+ if(before[8] || after[8])flags|=4;
+ if(!gotBefore || !gotAfter)flags|=8;
+ if(values.reset)flags|=16;if(values.mismatch)flags|=32;if(values.unstable)flags|=64;
+ const uint64_t id=++sample;
+ for(unsigned first=0;first<NativeGpuPerfCount;first+=4) {
+  uint64_t v[4]={};for(unsigned n=0;n<4 && first+n<NativeGpuPerfCount;++n)v[n]=values.values[first+n];
+  boot_latency_record(17,id,first,v[0],v[1],v[2],v[3]);
+ }
+ boot_latency_record(18,id,began/1000,ended/1000,busyTicks-lastBusy,flags,(uint64_t)after[0]<<32|after[1]);
+ boot_latency_record(19,id,values.mismatch,values.unstable,values.reset,(uint64_t)before[0]<<32|before[1],(uint64_t)after[0]<<32|after[1]);
+ lastBusy=busyTicks;
+}
 void gpuDcvsThread(void *, wait_result_t) {
     ShengGmuIo &io = gColdDevice.io;
     unsigned floor = bootArg("sheng-gpu-dcvs-min", 3);
@@ -1821,9 +1868,11 @@ void gpuDcvsThread(void *, wait_result_t) {
     nanoseconds_to_absolutetime(50000000ull, &wakeAbs);
     uint32_t touches = &native_hid_input_events ? native_hid_input_events[6] : 0;
     bool idle = false;
+    const bool tracePerf=bootArg("sheng-gpu-perf",0)==1;unsigned perfTick=0;
     for (;;) {
         IOSleep(16);
         const uint64_t busy = gpuBusyTicks(), t = mach_absolute_time();
+        if(tracePerf && !(++perfTick&1))gpuPerfTick(busy);
         uint64_t ns = 0;
         absolutetime_to_nanoseconds(t - lastT, &ns);
         uint64_t busyNs = (busy - lastBusy) * 625 / 12;   // 52.083 ns per XO tick
@@ -1874,6 +1923,7 @@ void gpuDcvsThread(void *, wait_result_t) {
             native_gpu_dcvs_log[slot][0] = tns / 1000;
             native_gpu_dcvs_log[slot][1] = (uint64_t)cur << 56 | (uint64_t)want << 48 | (uint64_t)(voted ? reason : 8) << 40 |
                                            (uint64_t)(busyNs * 100 / ns) << 32 | (uint32_t)need;
+            boot_latency_record(4,cur,want,voted?reason:8,busyNs*100/ns,need,voted?want:cur);
             native_gpu_dcvs_log_count = native_gpu_dcvs_log_count + 1;
             if (voted) {hold = want > cur; cur = want; native_gpu_dcvs[1] = cur; native_gpu_dcvs[2] = native_gpu_dcvs[2] + 1;}
             else native_gpu_dcvs[3] = native_gpu_dcvs[3] + 1;

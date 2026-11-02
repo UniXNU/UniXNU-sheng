@@ -24,6 +24,7 @@
 #define BT_STRIP_USER_PC(value) ((uint64_t)ptrauth_strip((void *)(uintptr_t)(value), ptrauth_key_return_address))
 #endif
 #include "BootUiTraceCore.h"
+#include "BootLatencyTrace.h"
 extern void proc_name(int pid, char *buf, int size);   // bsd/sys/proc.h; the header itself clashes with the Mach types used here
 extern int proc_selfpid(void);
 #include "BootUiTraceDetails.h"
@@ -379,10 +380,12 @@ unsigned boot_cpu_kick(char *out,unsigned size) {
 // and held by a task reference; no lock is held while user memory is read.
 struct proc;typedef struct proc *proc_t;   // proc_best_name comes from vm/vm_protos.h
 int proc_pid(proc_t);
+proc_t proc_find(int);
+int proc_rele(proc_t);
 task_t proc_task(proc_t);
 void proc_iterate(unsigned,int (*)(proc_t,void *),void *,int (*)(proc_t,void *),void *);
 void *IOMallocAligned(vm_size_t,vm_offset_t);
-#define CS_TARGETS 6
+#define CS_TARGETS 7
 #define CS_RING 131072
 struct cs_rec {uint64_t abs;int32_t pid;uint16_t state;int16_t pri;uint32_t cs;int32_t peer;uint64_t cpu,wait,frames[11];};
 _Static_assert(sizeof(struct cs_rec)==128,"client sample");
@@ -438,7 +441,10 @@ static int cs_ptime_one(proc_t p,void *arg) {
  // A pid used again starts from zero.
  const uint64_t du=user>=slot->user?user-slot->user:user,ds=system>=slot->system?system-slot->system:system;
  slot->pid=pid+1;slot->user=user;slot->system=system;
- if(!known)strlcpy(slot->name,proc_best_name(p),sizeof(slot->name));
+ if(!known || !strcmp(slot->name,"xpcproxy")) {
+  strlcpy(slot->name,proc_best_name(p),sizeof(slot->name));uint64_t words[4]={0};memcpy(words,slot->name,sizeof slot->name);
+  boot_latency_record(14,(uintptr_t)proc_task(p),(uint32_t)pid,words[0],words[1],words[2],words[3]);
+ }
  if(!known || (!du && !ds) || !boot_ptime_ring)return 0;
  // The pass's three busiest processes, for their busiest thread's stack (cs_hot_samples).
  const uint64_t used=du+ds;
@@ -462,7 +468,7 @@ struct cs_rec *boot_client_ring;
 volatile uint32_t boot_client_count;
 struct cs_target boot_client_targets[32];
 volatile unsigned boot_client_target_count;
-static const char *const cs_names[CS_TARGETS]={"SpringBoard","WidgetRenderer_","InputUI","Preferences","MobileSafari","PosterBoard"};
+static const char *const cs_names[CS_TARGETS]={"backboardd","SpringBoard","WidgetRenderer_","InputUI","Preferences","MobileSafari","PosterBoard"};
 static task_t cs_task[CS_TARGETS],cs_found_task[CS_TARGETS];
 static int cs_pid[CS_TARGETS],cs_found_pid[CS_TARGETS];
 // A blocked thread that did not switch since the last record of its slot is not recorded again (at most once a second, as a heartbeat):
@@ -513,6 +519,7 @@ static void cs_refresh(void) {
   if(cs_task[i])cs_note_target(cs_task[i],cs_pid[i],cs_names[i]);
  }
 }
+extern uint64_t native_gpu_render_thread(uint32_t) __attribute__((weak_import));
 static void cs_sample(unsigned slot) {
  task_t task=cs_task[slot];
  if(!task || !task_lock_try(task))return;
@@ -524,10 +531,15 @@ static void cs_sample(unsigned slot) {
  struct bt_entry e;memset(&e,0,sizeof(e));
  bool got=false;
  thread_t thread=(thread_t)queue_first(&task->threads);
+ const uint64_t render=!strcmp(cs_names[slot],"backboardd") && &native_gpu_render_thread?native_gpu_render_thread((uint32_t)cs_pid[slot]):0;
+ if(render) {
+  thread_t candidate;
+  queue_iterate(&task->threads,candidate,thread_t,task_threads)if(candidate->thread_id==render){thread=candidate;break;}
+ }
  if(!queue_end(&task->threads,(queue_entry_t)thread)) {
   bool irq=ml_set_interrupts_enabled(false);
   if(simple_lock_try(&thread->sched_lock,&thread_lck_grp)) {
-   r.state=(uint16_t)thread->state;if(thread_get_runq(thread)!=PROCESSOR_NULL)r.state|=0x8000;
+   r.state=(uint16_t)thread->state;if(render && thread->thread_id==render)r.state|=0x1000;if(thread_get_runq(thread)!=PROCESSOR_NULL)r.state|=0x8000;
    r.pri=(int16_t)thread->sched_pri;r.cs=thread->c_switch;r.wait=(uint64_t)thread->wait_event;r.cpu=recount_thread_time_mach(thread);
    arm_saved_state_t *state=thread->machine.upcb;
    if(state && is_saved_state64(state)) {
@@ -633,10 +645,70 @@ static void cs_hot_samples(void) {
   boot_client_count=n+1;
  }
 }
+enum {CS_WAITER_CAP=6,CS_WAITER_SEEN=512};
+struct cs_waiter {struct bt_entry entry;uint64_t tid,wait,kernel[BT_KFRAMES];unsigned state,switches;};
+struct cs_wait_seen {uint64_t tid;unsigned switches,state,tick;};
+static struct cs_waiter *cs_wait_draft;
+static struct cs_wait_seen *cs_wait_seen;
+static int cs_wait_peers[2];static unsigned cs_wait_peer_next;
+static void cs_wait_task(task_t task,int pid) {
+ if(!cs_wait_draft || !cs_wait_seen){boot_latency_record(31,(uint32_t)pid,0,0,0,0,0);return;}
+ if(!task_lock_try(task)){boot_latency_record(31,(uint32_t)pid,0,0,0,1,CS_WAITER_CAP);return;}
+ vm_map_t map=task->active?task->map:NULL;
+ if(!map){task_unlock(task);return;}
+ vm_map_reference(map);ipc_space_t space=task->itk_space;if(space)is_reference(space);
+ unsigned count=0,visited=0,omitted=0,busy=0;thread_t thread;
+ queue_iterate(&task->threads,thread,thread_t,task_threads) {
+  if(++visited>128){++omitted;break;}
+  bool irq=ml_set_interrupts_enabled(false);
+  if(!simple_lock_try(&thread->sched_lock,&thread_lck_grp)){++busy;ml_set_interrupts_enabled(irq);continue;}
+  const uint64_t tid=thread->thread_id;const unsigned state=(unsigned)thread->state;
+  const unsigned switches=thread->c_switch;struct cs_wait_seen *seen=&cs_wait_seen[tid&(CS_WAITER_SEEN-1)];
+  const bool changed=seen->tid!=tid || seen->switches!=switches || seen->state!=state || cs_tick-seen->tick>=250;
+  arm_saved_state_t *saved=thread->machine.upcb;
+  if((state&TH_WAIT) && changed && saved && is_saved_state64(saved)) {
+   if(count>=CS_WAITER_CAP)++omitted;
+   else {
+    *seen=(struct cs_wait_seen){tid,switches,state,cs_tick};
+    struct cs_waiter *r=&cs_wait_draft[count++];memset(r,0,sizeof(*r));
+    r->tid=tid;r->wait=(uint64_t)thread->wait_event;r->state=state|((unsigned)thread->block_hint<<16);r->switches=switches;
+    struct bt_entry *e=&r->entry;e->pc=BT_STRIP_USER_PC((uint64_t)get_saved_state_pc(saved));e->lr=BT_STRIP_USER_PC((uint64_t)get_saved_state_lr(saved));
+    e->fp=(uint64_t)get_saved_state_fp(saved);e->trap=(uint64_t)get_saved_state_reg(saved,16);
+    for(unsigned reg=0;reg<8;++reg)e->regs[reg]=(uint64_t)get_saved_state_reg(saved,reg);
+    bt_kernel_stack(thread,r->kernel);
+   }
+  }
+  thread_unlock(thread);ml_set_interrupts_enabled(irq);
+ }
+ task_unlock(task);
+ for(unsigned i=0;i<count;++i) {
+  struct cs_waiter *r=&cs_wait_draft[i];struct bt_entry *e=&r->entry;uint64_t frames[12]={e->pc,e->lr};e->peer=-1;
+  if(bt_user(e->pc,4) && (!e->lr || bt_user(e->lr,4)))bt_walk_n(e,read_user,map,&frames[2],10);
+  if(e->trap==UINT64_MAX-46)lookup_peer(e,space);
+  boot_latency_waiter(pid,r->tid,r->state,r->wait,r->switches,e->peer,e->peer_code,e->error,frames,r->kernel);
+  if(e->peer>0 && e->peer!=pid) {
+   bool known=false;for(unsigned n=0;n<CS_TARGETS;++n)if(cs_pid[n]==e->peer)known=true;
+   if(!known && cs_wait_peers[0]!=e->peer && cs_wait_peers[1]!=e->peer)cs_wait_peers[cs_wait_peer_next++&1]=e->peer;
+  }
+ }
+ boot_latency_record(31,(uint32_t)pid,visited,count,omitted,busy,CS_WAITER_CAP);
+ if(space)is_release(space);vm_map_deallocate(map);
+}
+static void cs_waiters(void) {
+ for(unsigned i=0;i<CS_TARGETS;++i)if(cs_task[i] && (!strcmp(cs_names[i],"backboardd") || !strcmp(cs_names[i],"SpringBoard")))cs_wait_task(cs_task[i],cs_pid[i]);
+ int peers[2]={cs_wait_peers[0],cs_wait_peers[1]};
+ for(unsigned i=0;i<2;++i)if(peers[i]>0) {
+  proc_t proc=proc_find(peers[i]);if(!proc)continue;
+  task_t task=proc_task(proc);if(task)task_reference(task);proc_rele(proc);if(!task)continue;
+  char name[32]={0};proc_name(peers[i],name,sizeof name);cs_note_target(task,peers[i],name);
+  cs_wait_task(task,peers[i]);task_deallocate(task);
+ }
+}
 static void cs_thread(void *arg,wait_result_t result) {
  (void)arg;(void)result;
  for(unsigned tick=0;;++tick) {
-  if(tick%25==0){cs_refresh();cs_ptime_pass();cs_hot_samples();}   // every 100 ms: an app's launch shows within that
+  boot_latency_fault_drain();
+  if(tick%25==0){cs_refresh();cs_ptime_pass();cs_hot_samples();cs_waiters();}   // every 100 ms: an app's launch shows within that
   cs_tick=tick;
   for(unsigned i=0;i<CS_TARGETS;++i)cs_sample(i);
   if(boot_cpu_ring) {
@@ -665,6 +737,9 @@ void boot_client_sampler_start(void) {
  struct cs_tprev *tprev=(struct cs_tprev *)IOMallocAligned(sizeof(struct cs_tprev)*CS_TPREV,4096);
  if(tprev){memset(tprev,0,sizeof(struct cs_tprev)*CS_TPREV);cs_tprev=tprev;}
  if(times && prev){memset(prev,0,sizeof(struct cs_prev)*CS_PREV);cs_prev=prev;memset(times,0,sizeof(struct cs_ptime)*CS_PTIME_RING);boot_ptime_ring=times;}
+ cs_wait_draft=(struct cs_waiter *)IOMallocAligned(sizeof(struct cs_waiter)*CS_WAITER_CAP,4096);
+ cs_wait_seen=(struct cs_wait_seen *)IOMallocAligned(sizeof(struct cs_wait_seen)*CS_WAITER_SEEN,4096);
+ if(cs_wait_seen)memset(cs_wait_seen,0,sizeof(struct cs_wait_seen)*CS_WAITER_SEEN);
  thread_t thread=THREAD_NULL;
  if(kernel_thread_start_priority(cs_thread,NULL,BASEPRI_KERNEL,&thread)==KERN_SUCCESS)thread_deallocate(thread);
 }

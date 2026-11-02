@@ -7,3 +7,6 @@ zzzz-sheng-ipados27-bringup.patch
 zzzzz-sheng-ipc-trace.patch
 zzzzz-sheng-ioconnect-trace.patch
 zzzzz-sheng-contig-trace.patch
+zzzzzz-sheng-latency-trace.patch
+zzzzzzz-sheng-latency-detail.patch
+zzzzzzzz-sheng-exit-latency.patch

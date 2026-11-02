@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
+#include "BootLatencyTrace.h"
 // Default-off staged bring-up of the NT36532E touch controller. `sheng-touch=<n>`:
 //   1  read-only snapshot of the GCC branches, the S4 DFS levels and the touch pins
 //   2  vote the QUP clocks, wait for them, configure the pins, read the GENI engine identity
@@ -342,6 +343,11 @@ void publish(unsigned count, const nvt_contact *c) {
     for (unsigned i = 0; i < count && i < NVT_SLOTS; ++i) {
         ids[i] = c[i].tracking_id; xs[i] = c[i].x; ys[i] = c[i].y < 0 ? c[i].y : (20319 - (c[i].y > 20319 ? 20319 : c[i].y));
     }
+    static uint64_t report;
+    ++report;
+    if(!count)boot_latency_record(5,report,0,0,0,0,0);
+    for(unsigned i=0;i<count && i<NVT_SLOTS;++i)
+        boot_latency_record(5,report,count,i,(uint32_t)ids[i],(uint32_t)xs[i],(uint32_t)ys[i]);
     trackStrokes(count < NVT_SLOTS ? count : NVT_SLOTS, ids, xs, ys);
     native_touch_seq = native_touch_seq + 1;
     __asm__ volatile("dmb ish" ::: "memory");
