@@ -357,6 +357,19 @@ int ringBarrier(void *) {__asm__ volatile("dsb sy" ::: "memory"); return 0;}
 int gmuWrAt(void *, uint32_t dword, uint32_t value) {
     return gColdDevice.io.write32(gColdDevice.io.cookie, ShengGmuCore, size_t(kGmuReg(dword)), value);
 }
+// AHB fence bit 1 reports dropped context-switch register writes. The keepalive
+// vote is already held; retry for at most 2 ms while the GPU domain wakes.
+int preemptWrite(void *, uint32_t reg, uint32_t value) {
+    for (unsigned attempt = 0; attempt < 200; ++attempt) {
+        if (ringWrite(nullptr, reg, value)) return 1;
+        ringBarrier(nullptr);
+        uint32_t status = 0;
+        if (gColdDevice.io.read32(gColdDevice.io.cookie, ShengGmuCore, kGmuReg(0x23b13), &status)) return 1;
+        if (!(status & 2)) return 0;
+        IODelay(10);
+    }
+    return 1;
+}
 // The CP's preemption, as the board sees it: [0] set up (0 yes), [1] CP_SW interrupts seen, [2] the last such RBBM_INT_0_STATUS word.
 extern "C" {volatile uint32_t native_gpu_preempt[8];}
 extern "C" bool native_adreno_preempt_irq() __attribute__((weak));   // NativeAdrenoPublish.cpp
@@ -1283,7 +1296,7 @@ void publishAndWrapperTest(bool rounds) {
     // timed with.
     if (vm && gPreemptWanted) {
         NativeAdrenoSubmit::PreemptSetup setup{};
-        setup.io = NativeAdrenoPreemptIo{nullptr, ringWrite, ringRead, ringBarrier, nullptr, gmuWrAt};
+        setup.io = NativeAdrenoPreemptIo{nullptr, preemptWrite, ringRead, ringBarrier, nullptr, gmuWrAt};
         setup.pages.record[0] = gGpuBuffers[5].iova; setup.pages.record[1] = gGpuBuffers[6].iova;
         setup.pages.smmu_info[0] = gGpuBuffers[7].iova; setup.pages.smmu_info[1] = gGpuBuffers[8].iova;
         setup.pages.record_cpu[0] = const_cast<uint8_t *>(gGpuCpu[5]); setup.pages.record_cpu[1] = const_cast<uint8_t *>(gGpuCpu[6]);
@@ -1688,10 +1701,9 @@ void gpuStart() {
      if (!PE_parse_boot_argn("sheng-gpu-timeline", &timeline, sizeof timeline)) timeline = diag == 1;
      gRing.setTimeline(timeline != 0); gTimelineWanted = timeline != 0;}
     gpuWr64(A740_CP_BV_RB_RPTR_ADDR, gGpuBuffers[2].iova + 8);   // rbmemptr(bv_rptr)
-    // The second ring and the CP's switch between them (NativeAdrenoPreempt): sheng-gpu-preempt=1 turns it on (off: one ring, as
-    // before). The second ring writes no CP_RB_* register; its base, read-pointer shadow and control word reach the CP through its
-    // preemption record on each switch, and its bus read pointer is the one register it needs.
-    {unsigned preempt = 0; PE_parse_boot_argn("sheng-gpu-preempt", &preempt, sizeof preempt); gPreemptWanted = preempt == 1 || preempt == 2; gPreemptMode = preempt == 2 ? 2 : 1;}
+    // Normal/low work uses ring 1; requested high priorities use ring 0.
+    // Boot overrides: 0 one ring, 1 only low/background on ring 1, 2 normal work too.
+    {unsigned preempt = 2; PE_parse_boot_argn("sheng-gpu-preempt", &preempt, sizeof preempt); gPreemptWanted = preempt == 1 || preempt == 2; gPreemptMode = preempt == 2 ? 2 : 1;}
     if (gPreemptWanted) {
         const IOReturn second = gRing1.attachSecondary(&rio, &cache, const_cast<uint8_t *>(gGpuCpu[9]), gGpuBuffers[9].bytes,
             gGpuBuffers[9].iova, const_cast<uint8_t *>(gGpuCpu[10]), gGpuBuffers[10].bytes, gGpuBuffers[10].iova);
