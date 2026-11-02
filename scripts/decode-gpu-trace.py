@@ -112,6 +112,7 @@ def frontend_details(blob):
             rows.append(dict(name='cpu_detail',sequence=seq,us=t0,operation=t1,command=t2,object=t3,
                              kind=a&65535,detail_name=CPU_DETAIL_KINDS.get(a&65535,'unknown'),phase=a>>16,thread=b,function=c|(d<<32),elapsed_us=cpu0,line=cpu1))
         elif kind==18:rows.append(dict(name='cpu_detail_link',us=t0,operation=t1,parent=t2,queued_us=t3,began_us=a|(b<<32)))
+        elif kind==22:rows.append(dict(name='runtime_stage_wide',us=t0,runtime=t1,stage=a,argument=b))
         elif kind==19:
             raw=struct.pack('<3Q2I',t1,t2,t3,b,c)
             rows.append(dict(name='cpu_definition',key=t0,part=a,text=raw.split(b'\0')[0].decode('utf-8',errors='replace')))
