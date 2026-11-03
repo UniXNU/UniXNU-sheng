@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: UniXNU/UniXNU
-          ref: f61fd6c1be8a18ec83c4a80bd7355cbf5d435d63 # GPU and display integration
+          ref: 3733d9bc9835ce8bf9a8202561693198d1f886b3 # Wi-Fi runtime and Data firmware integration
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4
