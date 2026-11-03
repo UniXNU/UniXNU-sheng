@@ -21,6 +21,9 @@ FIELDS = {
  21: ('display_surface', 'request physical width height stride format allocation mapped_bytes'),
  22: ('display_fence', 'request reason target submitted retired elapsed_ns ring0 ring1 query_reason repeated_queries'),
  23: ('display_latch', 'request flush elapsed_ns shown pending'),
+ 36: ('turnip_pass', 'command pass mode width height colors samples flags format swap draws ns'),
+ 37: ('turnip_gmem_side', 'count site image format linear mutableen tile_swap view_swap view_mutable mrt_buf_info a2d_dest_info resolve_dest_info'),
+ 44: ('turnip_attachment', 'pass index mode image format view_swap view_mutable tile_mode load_store_unpadded samples mrt_buf_info'),
  63: ('thread', 'thread role name0 name1 name2 name3'),
  65: ('problem', 'part'),
 }
