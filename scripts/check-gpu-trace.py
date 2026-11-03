@@ -132,6 +132,29 @@ class TraceTests(unittest.TestCase):
             subprocess.run(['xcrun','clang++','-std=c++17','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',str(source),'-o',str(exe)],check=True)
             subprocess.run([str(exe)],check=True)
 
+    def test_turnip_swap_trace_transport(self):
+        # The GMEM swap trace patch: only the render server sends, and only passes (36), transfers (37) and attachments (44).
+        root=Path(__file__).resolve().parents[1]
+        if not (root/'patches/mesa').exists():root=root.parent/'UniXNU'
+        patch=(root/'patches/mesa/turnip-gmem-swap-trace.patch').read_text()
+        part=[p for p in patch.split('diff --git') if p.strip() and 'tu_frame_diagnostic.h b/' in p.splitlines()[0]][0]
+        base=(root/'patches/mesa/turnip-frame-diagnostics.patch').read_text().split('diff --git')[1]
+        header='\n'.join(line[1:] for line in base.splitlines() if line.startswith('+') and not line.startswith('+++'))
+        with tempfile.TemporaryDirectory() as directory:
+            work=Path(directory);(work/'src/freedreno/vulkan').mkdir(parents=True)
+            (work/'src/freedreno/vulkan/tu_frame_diagnostic.h').write_text(header+'\n')
+            (work/'swap.patch').write_text('diff --git'+part)
+            subprocess.run(['git','apply','swap.patch'],cwd=work,check=True)
+            source=work/'transport.cpp';exe=work/'transport'
+            source.write_text('#include <cassert>\n#include "src/freedreno/vulkan/tu_frame_diagnostic.h"\n'+
+                'static int calls; extern "C" bool tu_darwin_frame_diagnostic(uint32_t,const void *,uint32_t){++calls;return true;}\n'+
+                'int main(int argc,char **){setenv("SHENG_GPU_TRACE","1",1);if(argc>1)setprogname("backboardd");'+
+                'tu_frame_event(38);tu_frame_event(43);tu_frame_event(42);int before=calls;'+
+                'tu_frame_event(36);tu_frame_event(37);tu_frame_event(44);assert(before==0);return calls;}')
+            subprocess.run(['xcrun','clang++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-fsanitize=address,undefined',str(source),'-o',str(exe)],check=True)
+            self.assertEqual(subprocess.run([str(exe)]).returncode,0)
+            self.assertEqual(subprocess.run([str(exe),'server']).returncode,3)
+
     def test_runtime_idle_stage_filter(self):
         import shutil
         root=Path(__file__).resolve().parents[1]

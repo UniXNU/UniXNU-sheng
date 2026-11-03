@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Seven-issue latency export: command/pass phases, allocation/release, CPU,
 // render thread waits, display arrival, fault and unnest evidence, and the
-// touch report times that bound the analysed windows. Nothing else.
+// touch report times that bound the analysed windows; with sheng-shots=<s>,
+// scene screenshots for the colour checks.
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
@@ -208,8 +209,43 @@ static void latency_tick(void) {
   }
 }
 
-// Called once per diagnostic log round; starts the latency collectors.
-void boot_diag_shot_tick(unsigned now) {(void)now;latency_tick();}
+// Scene screenshots (boot-arg sheng-shots=<first second of log time>, absent or 0: none): bursts of DiagBurst shots 50 ms apart (about six
+// frames at 120 Hz), one burst every DiagBurstEvery seconds from that second on, up to DiagShots, of the panel at quarter resolution (every
+// fourth pixel of every fourth row), kept in memory and exported as screen-<seconds>-<index in the burst>.bgrx (16-byte header "SHOT", u32
+// width, height, stride, then BGRX rows). Shots of one burst show a picture that alternates between frames; a static scene repeats. They are
+// analysed by code only.
+enum {DiagShots = 24, DiagBurst = 6, DiagBurstEvery = 10};
+extern volatile uint64_t native_gop_virtual __attribute__((weak_import));
+extern void native_legacy_direct_snapshot(void) __attribute__((weak_import));   // direct scanout: the surface on screen into the boot memory
+static uint8_t *shot_data[DiagShots];
+static uint32_t shot_time[DiagShots], shot_index[DiagShots], shot_w, shot_h, shot_taken, shot_first, shot_first_read, shots_kept;
+static void shot_tick(unsigned now) {
+  if (!shot_first_read) {shot_first_read = 1; if (!PE_parse_boot_argn("sheng-shots", &shot_first, sizeof shot_first)) shot_first = 0;}
+  if (!shot_first || shot_taken >= DiagShots || now < shot_first + (shot_taken / DiagBurst) * DiagBurstEvery) return;
+  for (unsigned k = 0; k < DiagBurst && shot_taken < DiagShots; ++k) {
+    if (k) IOSleep(50);
+    PE_Video video = {};
+    if (!(&native_gop_virtual && native_gop_virtual && !PE_current_console(&video) && video.v_depth == 32 && video.v_width >= 4 &&
+          video.v_height >= 4 && video.v_width <= 16384 && video.v_height <= 16384 && video.v_rowBytes >= video.v_width * 4)) {
+      ++shot_taken;
+      continue;
+    }
+    const uint32_t w = (uint32_t)video.v_width / 4, h = (uint32_t)video.v_height / 4;
+    const unsigned n = shot_taken++;
+    shot_data[n] = IOMallocAligned((size_t)w * h * 4, PAGE_SIZE);
+    if (!shot_data[n]) continue;
+    if (&native_legacy_direct_snapshot) native_legacy_direct_snapshot();
+    for (uint32_t y = 0; y < h; ++y) {
+      uint32_t *out = (uint32_t *)(shot_data[n] + (size_t)y * w * 4);
+      const uint32_t *in = (const uint32_t *)(uintptr_t)(native_gop_virtual + (uint64_t)y * 4 * video.v_rowBytes);
+      for (uint32_t x = 0; x < w; ++x) out[x] = in[x * 4];
+    }
+    shot_w = w; shot_h = h; shot_time[n] = now; shot_index[n] = k;
+  }
+}
+
+// Called once per diagnostic log round; starts the latency collectors and takes the scene screenshots.
+void boot_diag_shot_tick(unsigned now) {latency_tick();shot_tick(now);}
 
 #define RT(...) do {if (rings_len + 160 < DiagRings) {int n_ = snprintf(rings_text + rings_len, DiagRings - rings_len, __VA_ARGS__); if (n_ > 0) rings_len += (size_t)n_;}} while (0)
 // One text file with every kernel ring of the batch: lines are "<tag> fields", 64-bit microseconds on the uptime clock the render
@@ -314,6 +350,13 @@ uint64_t boot_diag_scan(uint64_t budget) {
     if(n && used+24+strlen(gpu_trace_name[i])+n<=budget){gpu_trace_size[i]=n;used+=24+strlen(gpu_trace_name[i])+n;}
     else if(n)note("gpu-budget",gpu_trace_name[i],(int)n);
   }
+  // The scene screenshots, which a run asks for by sheng-shots, come before the files: they are what such a run is for.
+  shots_kept = 0;
+  for (unsigned i = 0; i < DiagShots; ++i) {
+    if (!shot_data[i]) continue;
+    const uint64_t cost = 24 + strlen("screen-000-0.bgrx") + 16 + (uint64_t)shot_w * shot_h * 4;
+    if (used + cost <= budget) {++shots_kept; used += cost;} else shot_time[i] = 0xffffffffu;
+  }
   rings_keep=0;
   // Files are scanned before optional exports. Frame records have first claim
   // on the budget, so fast IPC and scene data cannot displace the causal trace.
@@ -396,7 +439,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   if (!chunk) return -1;
   vfs_context_t ctx = vfs_context_kernel();
   int rc = emit("M2VCACH1", 8, arg);
-  const uint32_t root_len = 1, count = boot_diag_files + 1 + rings_keep + client_keep + touch_keep + cpu_keep + boalloc_keep + ptime_keep + !!gpu_trace_size[0] + !!latency_size;
+  const uint32_t root_len = 1, count = boot_diag_files + 1 + rings_keep + client_keep + touch_keep + cpu_keep + boalloc_keep + ptime_keep + !!gpu_trace_size[0] + !!latency_size + shots_kept;
   if (!rc) rc = emit(&root_len, 4, arg);
   if (!rc) rc = emit("/", 1, arg);
   if (!rc) rc = emit(&count, 4, arg);
@@ -421,6 +464,15 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
       rc = emit(rings_text + at, n, arg);
       at += n;
     }
+  }
+  for (unsigned i = 0; !rc && i < DiagShots; ++i) {
+    if (!shot_data[i] || shot_time[i] == 0xffffffffu) continue;
+    char name[24];
+    snprintf(name, sizeof name, "screen-%03u-%u.bgrx", shot_time[i] % 1000, shot_index[i] % 10);
+    const uint32_t row = shot_w * 4, head[4] = {'S' | 'H' << 8 | 'O' << 16 | (uint32_t)'T' << 24, shot_w, shot_h, row};
+    rc = put_head(emit, arg, name, 0100644, 0, 0, 16 + (uint64_t)row * shot_h);
+    if (!rc) rc = emit(head, sizeof head, arg);
+    for (uint32_t y = 0; !rc && y < shot_h; ++y) rc = emit(shot_data[i] + (size_t)y * row, row, arg);
   }
   if (!rc && boalloc_keep) {
     const uint32_t total = boalloc_kept, kept = total > BoAllocRing ? BoAllocRing : total;
