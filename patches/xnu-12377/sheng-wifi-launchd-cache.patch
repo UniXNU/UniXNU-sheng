@@ -1,0 +1,23 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8675,3 +8675,19 @@ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
++	/* iPadOS 27 imports jobs from this precompiled dictionary. The owner
++	 * overlay adds its Wi-Fi job while retaining every original entry. */
++	static const char wifi_xpc_source[] = "/private/var/ngpu/xpc";
++	static const char wifi_xpc_point[] = "/System/Library/xpc";
++	static volatile int wifi_cache_stage, wifi_cache_status;
++	native_gpu_addon_mount(p, scratch, 0x600, wifi_xpc_source, sizeof(wifi_xpc_source),
++	    wifi_xpc_point, sizeof(wifi_xpc_point), "/System/Library/xpc/foreground_user_endpoints.plist",
++	    "/System/Library/xpc/launchd.plist", &wifi_cache_stage, &wifi_cache_status);
++	printf("wifi: launchd cache mount stage %d status %d\n", wifi_cache_stage, wifi_cache_status);
++	/* xpcproxy's system policy requires a system executable entry point. */
++	static const char wifi_bin_source[] = "/private/var/ngpu/wifi-bin", wifi_bin_point[] = "/usr/libexec";
++	static volatile int wifi_bin_stage, wifi_bin_status;
++	native_gpu_addon_mount(p, scratch, 0x600, wifi_bin_source, sizeof(wifi_bin_source),
++	    wifi_bin_point, sizeof(wifi_bin_point), "/usr/libexec/launchd_cache_loader",
++	    "/usr/libexec/unixnu-wpa_supplicant", &wifi_bin_stage, &wifi_bin_status);
++	printf("wifi: service executable mount stage %d status %d\n", wifi_bin_stage, wifi_bin_status);
+ 	native_cryptex_os_view(p, scratch);
+ 	native_gestalt_cache_drop(p, scratch);
+ 	native_ls_store_drop(p, scratch);

@@ -14,6 +14,59 @@
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
 
+extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
+/* Opt-in capture of the cache loader's own error log. Runs on the log writer,
+ * reads one fixed file and stops after two minutes; ordinary boots do no I/O. */
+void boot_cache_loader_log_capture(unsigned now) {
+  static int enabled = -1, last_error = -1;
+  static unsigned next_read;
+  static uint64_t last_size = UINT64_MAX;
+  static struct timespec last_modified;
+  static char *buffer;
+  enum {capacity = 8192};
+  if (enabled < 0) {
+    uint32_t value = 0;
+    enabled = PE_parse_boot_argn("sheng-cache-log", &value, sizeof value) && value == 1;
+  }
+  if (!enabled || !&native_wifi_logf) return;
+  if (now > 120) { if (buffer) {IOFreeData(buffer, capacity); buffer = NULL;} return; }
+  if (now < 10 || now < next_read) return;
+  next_read = now + 4;
+  vfs_context_t ctx = vfs_context_kernel();
+  vnode_t vp = NULLVP;
+  const char *path = "/private/var/log/com.apple.xpc.launchd/launchd_cache_loader.log";
+  int error = vnode_open(path, FREAD, 0, 0, &vp, ctx);
+  struct vnode_attr va;
+  VATTR_INIT(&va); VATTR_WANTED(&va, va_data_size); VATTR_WANTED(&va, va_modify_time);
+  if (!error) error = vnode_getattr(vp, &va, ctx);
+  if (!error && (va.va_data_size != last_size ||
+      va.va_modify_time.tv_sec != last_modified.tv_sec || va.va_modify_time.tv_nsec != last_modified.tv_nsec)) {
+    if (!buffer) buffer = IOMallocData(capacity);
+    if (!buffer) error = ENOMEM;
+    else {
+      uint64_t offset = va.va_data_size > capacity ? va.va_data_size - capacity : 0;
+      int length = (int)(va.va_data_size - offset), resid = length;
+      error = vn_rdwr(UIO_READ, vp, buffer, length, (off_t)offset, UIO_SYSSPACE,
+          IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
+      if (!error && resid >= 0 && resid <= length) {
+        length -= resid; last_size = va.va_data_size; last_modified = va.va_modify_time;
+        native_wifi_logf(6, "cache-loader-file: size %llu offset %llu bytes %d mtime %llu.%09u", last_size, offset, length,
+            (unsigned long long)last_modified.tv_sec, (unsigned)last_modified.tv_nsec);
+        for (int at = 0; at < length;) {
+          int n = 0;
+          while (at + n < length && n < 76 && buffer[at + n] != '\n') ++n;
+          if (n) native_wifi_logf(6, "cache-loader-file %u: %.*s", (unsigned)(offset + at), n, buffer + at);
+          at += n;
+          if (at < length && buffer[at] == '\n') ++at;
+        }
+      } else if (!error) error = EIO;
+    }
+  }
+  if (vp) vnode_close(vp, FREAD, ctx);
+  if (error != last_error) {last_error = error; native_wifi_logf(6, "cache-loader-file: read status %d", error);}
+}
+
+
 enum {DiagMaxFiles = 128, DiagPath = 192, DiagDepth = 0, DiagChunk = 256 * 1024, DiagNote = 32768};
 struct diag_file {char path[DiagPath]; uint64_t size; uint32_t mode, uid, gid, root, keep;};
 static struct diag_file *diag_files;

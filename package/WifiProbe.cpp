@@ -14,6 +14,7 @@
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IODeviceMemory.h>
 #include <kern/thread.h>
+#include <kern/cpu_data.h>
 #include <pexpert/pexpert.h>
 #include "WifiPcieTables.h"
 #include <string.h>
@@ -21,6 +22,13 @@
 #include "BootResetCore.h"
 #include "MhiBoot.h"
 #include "nw_abi.h"
+#include "WifiFirmware.h"
+#include "nw_control_endpoint.h"
+#include <IOKit/IOLocks.h>
+#include <sys/kern_control.h>
+#include <sys/kern_control_private.h>
+#include <sys/kpi_mbuf.h>
+#include <sys/errno.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <libkern/c++/OSData.h>
@@ -29,6 +37,8 @@
 #include <stdarg.h>
 #include <kern/task.h>
 #include <stdint.h>
+
+extern "C" void native_wifi_logf(int level, const char *fmt, ...);
 
 // [0] stage (1 mapped, 2 clocks read, 3 controller read; negative: the step that failed), [1] vote 0x52008, [2] vote 0x52000,
 // [3] GDSC, [4] halt bits (bit i set: branch i of kBranches is off), [5] GPIO 80 | 82 << 8 | 94 << 16 (bit 0 input level, bit 1 output),
@@ -43,8 +53,6 @@ extern "C" volatile uint32_t native_ufs_extra_uncached __attribute__((weak_impor
 extern "C" int native_ufs_extra_fault(uint32_t *) __attribute__((weak_import));
 extern "C" volatile uint32_t native_ufs_extra_atos[8] __attribute__((weak_import));
 extern "C" volatile uint32_t native_ufs_extra_iova __attribute__((weak_import)), native_ufs_extra_bytes __attribute__((weak_import));
-extern "C" int native_ufs_part_find(const char *, uint32_t *, uint64_t *, uint64_t *) __attribute__((weak_import));
-extern "C" int native_ufs_part_read(uint32_t, uint64_t, uint32_t, void *) __attribute__((weak_import));
 extern "C" {volatile uint32_t native_wifi_stats[29]; volatile uint32_t native_wifi_dump[6 * 18];
 // PMIC state read through the SPMI arbiter, which does not depend on RPMh answering. [0] arbiter version, [1] APIDs, [2] regulators found before | after << 16,
 // [3] PMK8550 gpio3 (the sleep clock pin) APID | owner << 16 (0xffff: none), [4..6] its registers 04 05 40 41 | 42 43 44 45 | 46 4a before, [7..9] after,
@@ -62,12 +70,12 @@ volatile uint32_t native_wifi_cfg[32];
 volatile uint32_t native_wifi_chip[16];
 volatile uint32_t native_wifi_ev[48];
 volatile uint32_t native_wifi_ldo[24];
-// The firmware download (stage 5): [0] step (1 firmware container found, 2 amss.bin read, 3 DMA buffers, 4 SMMU stream mapped, 5 MHI opened and SBL started,
+// The firmware download (stage 5): [0] step (1 Data firmware found, 2 amss.bin read, 3 DMA buffers, 4 SMMU stream mapped, 5 MHI opened and SBL started,
 // 6 contexts programmed, 7 mission mode), negative: the step that failed; [1] SMMU slot | bank << 16 (or the planner's error index); [2] partition LUN | first block << 8;
 // [3] amss.bin size; [4] segments; [5] MhiBoot phase | error << 8 | failed phase << 16; [6] execution environment; [7] MHI state; [8] BHI status; [9] BHI error code;
 // [10..12] BHI debug words; [13] MHI status register; [14] ms spent; [15] BHIe status.
 volatile uint32_t native_wifi_mhi[16];
-// Milliseconds since the download started when: [0] the buffers were ready, [1] the container was found, [2] the image was read, [3] the SMMU stream was mapped,
+// Milliseconds since the download started when: [0] the buffers were ready, [1] Data firmware was found, [2] the image was read, [3] the SMMU stream was mapped,
 // [4] the boot loader was started, [5] the contexts were programmed, [6] the run ended.
 volatile uint32_t native_wifi_mhi_ms[8];
 // The WiFi module's messages: a ring of 512 lines, newest at native_wifi_text_n - 1.
@@ -390,33 +398,17 @@ bool dmaAlloc(Dma &b, size_t bytes) {
     return true;
 }
 
-struct Fw {uint32_t lun; uint64_t first; uint32_t amssOffset, amssSize;};
-// The container (local-tools/make-wifi-fw.py) in the partition named oops: 'WFW1', count, then name[24] offset size.
+int pFwGet(const char *path, const uint8_t **data, size_t *size);
+struct Fw {const uint8_t *image; uint32_t amssSize;};
 bool findFirmware(Fw &f) {
-    if (&native_ufs_part_find == nullptr || &native_ufs_part_read == nullptr || &native_ufs_extra_stream == nullptr) return false;
-    uint64_t blocks = 0;
-    for (unsigned i = 0; i < 240; ++i) {   // the storage driver comes up a while into the boot
-        if (native_ufs_part_find("oops", &f.lun, &f.first, &blocks)) break;
+    for (unsigned i = 0; i < 240; ++i) {
+        size_t size = 0;
+        if (!pFwGet("amss.bin", &f.image, &size) && size <= UINT32_MAX) {
+            f.amssSize = static_cast<uint32_t>(size); return size != 0;
+        }
         IOSleep(500);
     }
-    if (!blocks) return false;
-    native_wifi_mhi[2] = f.lun | (uint32_t)f.first << 8;
-    uint32_t which = 1;
-    PE_parse_boot_argn("sheng-wifi-fw", &which, sizeof which);   // 2: the second image of the container (amss2.bin)
-    const char *wanted = which == 2 ? "amss2.bin" : "amss.bin";
-    uint8_t *header = static_cast<uint8_t *>(IOMallocData(4096));
-    if (!header) return false;
-    bool found = false;
-    if (native_ufs_part_read(f.lun, f.first, 1, header) && !memcmp(header, "WFW1", 4)) {
-        uint32_t count;
-        memcpy(&count, header + 4, 4);
-        for (uint32_t i = 0; i < count && i < 100; ++i) {
-            const uint8_t *e = header + 8 + 32 * i;
-            if (!strncmp((const char *)e, wanted, 24)) {memcpy(&f.amssOffset, e + 24, 4); memcpy(&f.amssSize, e + 28, 4); found = true;}
-        }
-    }
-    IOFreeData(header, 4096);
-    return found && f.amssSize && !(f.amssOffset & 4095);
+    return false;
 }
 
 struct BarIo {volatile uint32_t *m;};
@@ -583,16 +575,17 @@ void endpointLinkSetup(uint64_t sinkAddress) {
 
 
 // ---- Stage 6: the WiFi module (Ath12kWifi) on this board. It does its own chip power-up, MHI boot, QRTR/QMI and driver start; the board provides
-// register access, configuration space, DMA memory from the endpoint's SMMU window, firmware files from the container, a clock and a log.
+// register access, configuration space, DMA memory from the endpoint's SMMU window, Data firmware files, a clock and a log.
 // The block table is allocated once, at the first start (a static table would sit in the kernel's __DATA).
 constexpr unsigned kArenaBlocks = 16384;
-struct Arena {uint8_t *va; uint64_t iova; size_t bytes; struct Block {uint32_t off, size; bool used;} *blocks; unsigned count;} gArena;
+struct Arena {uint8_t *va; uint64_t iova; size_t bytes; struct Block {uint32_t off, size; bool used;} *blocks; unsigned count; size_t used, peak; unsigned failures;} gArena;
 bool arenaInit() {
     if (&native_ufs_extra_va == nullptr || !native_ufs_extra_va || !native_ufs_extra_bytes) return false;
     if (!gArena.blocks) gArena.blocks = static_cast<Arena::Block *>(IOMallocData(kArenaBlocks * sizeof(Arena::Block)));
     if (!gArena.blocks) return false;
     gArena.va = native_ufs_extra_va; gArena.iova = native_ufs_extra_iova; gArena.bytes = native_ufs_extra_bytes;
     gArena.blocks[0] = {4096, (uint32_t)(gArena.bytes - 4096), false}; gArena.count = 1;   // the first page is the interrupt sink
+    gArena.used = gArena.peak = 4096; gArena.failures = 0;
     bzero(gArena.va, gArena.bytes);
     return true;
 }
@@ -622,10 +615,12 @@ void *arenaAlloc(size_t n, uint64_t *bus) {
         gArena.blocks[at] = {start, (uint32_t)n, true};
         if (tail) gArena.blocks[at + 1] = {start + (uint32_t)n, whole.size - pad - (uint32_t)n, false};
         uint8_t *p = gArena.va + start;
+        gArena.used += n; if (gArena.used > gArena.peak) gArena.peak = gArena.used;
         bzero(p, n);
         if (bus) *bus = gArena.iova + start;
         return p;
     }
+    ++gArena.failures;
     uint32_t freeTotal = 0, freeMax = 0;
     for (unsigned i = 0; i < gArena.count; ++i) if (!gArena.blocks[i].used) {freeTotal += gArena.blocks[i].size; if (gArena.blocks[i].size > freeMax) freeMax = gArena.blocks[i].size;}
     char line[96];
@@ -650,6 +645,7 @@ void arenaFree(void *p) {
     const uint32_t off = (uint32_t)((uint8_t *)p - gArena.va);
     for (unsigned i = 0; i < gArena.count; ++i) {
         if (gArena.blocks[i].off != off || !gArena.blocks[i].used) continue;
+        gArena.used -= gArena.blocks[i].size;
         gArena.blocks[i].used = false;
         if (i + 1 < gArena.count && !gArena.blocks[i + 1].used) {gArena.blocks[i].size += gArena.blocks[i + 1].size; memmove(&gArena.blocks[i + 1], &gArena.blocks[i + 2], (gArena.count - i - 2) * sizeof(Arena::Block)); --gArena.count;}
         if (i > 0 && !gArena.blocks[i - 1].used) {gArena.blocks[i - 1].size += gArena.blocks[i].size; memmove(&gArena.blocks[i], &gArena.blocks[i + 1], (gArena.count - i - 1) * sizeof(Arena::Block)); --gArena.count;}
@@ -657,9 +653,19 @@ void arenaFree(void *p) {
     }
 }
 
-uint64_t pNow() {uint64_t ns = 0; absolutetime_to_nanoseconds(mach_absolute_time(), &ns); return ns / 1000000;}
+uint64_t pNowNs() {uint64_t ns = 0; absolutetime_to_nanoseconds(mach_absolute_time(), &ns); return ns;}
+uint64_t pBootNs() {uint64_t ns = 0; absolutetime_to_nanoseconds(mach_continuous_time(), &ns); return ns;}
+void pBusyDelayUs(unsigned int us) { IODelay(us); }
+uint64_t pNow() {return pNowNs() / 1000000;}
 void pSleep(unsigned ms) {IOSleep(ms);}
-void pPoll() {}
+volatile uint32_t gMsiPending;
+bool gMsiAttached;
+void pPoll() {
+    nw_wifi_irq_mode(gMsiAttached);
+    const uint32_t pending = __atomic_exchange_n(&gMsiPending, 0u, __ATOMIC_ACQ_REL);
+    if (pending) nw_wifi_irq_pending(pending);
+    nw_wifi_poll();
+}
 // Each line carries the milliseconds since the first one; a line equal to one of the last sixteen is only counted, so that the messages the driver
 // repeats every round (the seven interrupt groups it polls each millisecond, a send that waits for credits) cannot push the history out of the ring.
 uint32_t gLogRepeats;
@@ -888,7 +894,7 @@ uint64_t pDmaMap(void *p, size_t, int) {
 }
 void pDmaSync(uint64_t, size_t, int) {}
 
-// Firmware files: the container in the partition named oops ('WFW1', count, then name[24] offset size), each file read once and kept.
+// Data-backed firmware files, each read once and kept for the boot.
 struct FwCache {char name[24]; uint8_t *data; size_t size; bool tried;} gFw[8];
 // The radio's address (wlan_mac.bin): this board's firmware reports none, so a locally administered address is made from /chosen/unique-chip-id,
 // the same on every boot of the same image.
@@ -943,25 +949,9 @@ int pFwGet(const char *path, const uint8_t **data, size_t *size) {
     if (!slot) for (auto &f : gFw) if (!f.tried) {slot = &f; strlcpy(f.name, want, sizeof f.name); f.tried = true; break;}
     if (!slot) return -1;
     if (!slot->data && slot->size == 0) {
-        uint32_t lun = 0; uint64_t first = 0, blocks = 0;
-        if (&native_ufs_part_find == nullptr || !native_ufs_part_find("oops", &lun, &first, &blocks)) return -1;
-        uint8_t *header = static_cast<uint8_t *>(IOMallocData(4096));
-        if (!header) return -1;
-        uint32_t offset = 0, bytes = 0;
-        if (native_ufs_part_read(lun, first, 1, header) && !memcmp(header, "WFW1", 4)) {
-            uint32_t count; memcpy(&count, header + 4, 4);
-            for (uint32_t i = 0; i < count && i < 100; ++i) {
-                const uint8_t *e = header + 8 + 32 * i;
-                if (!strncmp((const char *)e, want, 24)) {memcpy(&offset, e + 24, 4); memcpy(&bytes, e + 28, 4);}
-            }
-        }
-        IOFreeData(header, 4096);
-        if (!bytes || (offset & 4095)) return -1;
-        const size_t rounded = (bytes + 4095) & ~(size_t)4095;
-        uint8_t *buf = static_cast<uint8_t *>(IOMallocData(rounded));
-        if (!buf) return -1;
-        if (!native_ufs_part_read(lun, first + offset / 4096, (uint32_t)(rounded / 4096), buf)) {IOFreeData(buf, rounded); return -1;}
-        slot->data = buf; slot->size = bytes;
+        const int error = sheng_wifi_firmware_read(want, &slot->data, &slot->size);
+        if (error) return -1;
+        native_wifi_logf(6, "wifi: Data firmware %s bytes %zu", want, slot->size);
     }
     if (!slot->data) return -1;
     *data = slot->data; *size = slot->size;
@@ -1021,17 +1011,17 @@ void netStart() {
 constexpr uint32_t kMsiAddrLo = 0x820, kMsiAddrHi = 0x824, kMsiEnable0 = 0x828, kMsiMask0 = 0x82c, kMsiStatus0 = 0x830, kMsiSpi = 141;
 Window gMsiDbi;
 volatile uint32_t gMsiCount, gMsiBits, gMsiWake;
-bool gMsiAttached;
 void msiIrq(void *) {
     const uint32_t status = gMsiDbi.va[kMsiStatus0 / 4];
     if (status) gMsiDbi.va[kMsiStatus0 / 4] = status;   // write-one-to-clear: the level line drops before the end of interrupt
     gMsiCount = gMsiCount + 1;
     gMsiBits = gMsiBits | status;
+    __atomic_fetch_or(&gMsiPending, status, __ATOMIC_RELEASE);
     // a line with nothing to clear would storm: turn the receiver off and let the loop poll again
     static uint32_t empty;
     empty = status ? 0 : empty + 1;
     if (empty > 100000) {gMsiDbi.va[kMsiEnable0 / 4] = 0; gMsiAttached = false;}
-    gMsiWake = 1;
+    __atomic_store_n(&gMsiWake, 1u, __ATOMIC_RELEASE);
     thread_wakeup(event_t(&gMsiWake));
 }
 int msiAttach() {
@@ -1051,25 +1041,118 @@ void msiWait(unsigned ms) {
     assert_wait_timeout(event_t(&gMsiWake), THREAD_UNINT, ms, NSEC_PER_MSEC);
     if (__atomic_exchange_n(&gMsiWake, 0u, __ATOMIC_ACQ_REL)) {clear_wait(current_thread(), THREAD_AWAKENED); return;}
     thread_block(THREAD_CONTINUE_NULL);
-    gMsiWake = 0;
+    __atomic_store_n(&gMsiWake, 0u, __ATOMIC_RELEASE);
 }
 }  // namespace
 // The network side calls this after it queued a frame: the WiFi thread sends it now instead of at its next wake.
-extern "C" void sheng_wifi_wake(void) {gMsiWake = 1; thread_wakeup(event_t(&gMsiWake));}
+extern "C" void sheng_wifi_wake(void) {__atomic_store_n(&gMsiWake, 1u, __ATOMIC_RELEASE); thread_wakeup(event_t(&gMsiWake));}
 namespace {
+
+struct ControlClient {uint64_t session; uint32_t unit;};
+kern_ctl_ref gControlRef;
+IOLock *gControlLock;
+ControlClient *gControlClient;
+errno_t controlError(int status) {
+    switch (status) {
+        case NW_CONTROL_OK: return 0;
+        case NW_CONTROL_INVALID: return EINVAL;
+        case NW_CONTROL_BUSY: return EWOULDBLOCK;
+        case NW_CONTROL_NOT_READY: return ENXIO;
+        case NW_CONTROL_AUTH_FAILED: return EACCES;
+        case NW_CONTROL_TIMED_OUT: return ETIMEDOUT;
+        case NW_CONTROL_UNSUPPORTED: return EOPNOTSUPP;
+        case NW_CONTROL_NO_MEMORY: return ENOBUFS;
+        case NW_CONTROL_NOT_FOUND: return ENOENT;
+        case NW_CONTROL_STALE: return ESTALE;
+        default: return EIO;
+    }
+}
+errno_t controlConnect(kern_ctl_ref, sockaddr_ctl *address, void **information) {
+    auto *owner = static_cast<ControlClient *>(IOMalloc(sizeof(ControlClient)));
+    if (!owner) return ENOMEM;
+    const int status = nw_wifi_control_attach(&owner->session);
+    if (status) {IOFree(owner, sizeof(*owner)); return controlError(status);}
+    owner->unit = address->sc_unit;
+    IOLockLock(gControlLock); gControlClient = owner; IOLockUnlock(gControlLock);
+    *information = owner; return 0;
+}
+errno_t controlDisconnect(kern_ctl_ref, uint32_t, void *information) {
+    // XNU invokes disconnect after a failed connect, with no client context.
+    if (!information) return 0;
+    auto *owner = static_cast<ControlClient *>(information);
+    nw_wifi_control_detach(owner->session);
+    IOLockLock(gControlLock); if (gControlClient == owner) gControlClient = nullptr; IOLockUnlock(gControlLock);
+    IOFree(owner, sizeof(*owner)); return 0;
+}
+int controlReadMbuf(void *source, void *destination, size_t length) {
+    return mbuf_copydata(static_cast<mbuf_t>(source), 0, length, destination);
+}
+errno_t controlReceive(kern_ctl_ref, uint32_t, void *information, mbuf_t packet, int) {
+    auto *owner = static_cast<ControlClient *>(information);
+    const int status = nw_wifi_control_receive(owner->session, mbuf_pkthdr_len(packet), controlReadMbuf, packet);
+    mbuf_freem(packet); return controlError(status);
+}
+void controlReceived(kern_ctl_ref, uint32_t, void *information, int) {
+    nw_wifi_control_writable(static_cast<ControlClient *>(information)->session);
+}
+errno_t controlGetOption(kern_ctl_ref, uint32_t, void *information, int option, void *bytes, size_t *length) {
+    if (option != NW_CONTROL_GET_SESSION) return ENOPROTOOPT;
+    if (!length) return EINVAL;
+    if (!bytes || *length < sizeof(uint64_t)) {*length = sizeof(uint64_t); return EMSGSIZE;}
+    const uint64_t session = static_cast<ControlClient *>(information)->session;
+    memcpy(bytes, &session, sizeof(session)); *length = sizeof(session); return 0;
+}
+int controlSend(void *, uint64_t session, const void *bytes, size_t length) {
+    IOLockLock(gControlLock);
+    const bool active = gControlClient && gControlClient->session == session;
+    const uint32_t unit = active ? gControlClient->unit : 0;
+    IOLockUnlock(gControlLock);
+    if (!active) return NW_CONTROL_SEND_CLOSED;
+    // No adapter lock is held while the socket layer takes its own locks.
+    const errno_t result = ctl_enqueuedata(gControlRef, unit, const_cast<void *>(bytes), length, CTL_DATA_EOR);
+    if (!result) return NW_CONTROL_SEND_OK;
+    if (result == ENOBUFS || result == EWOULDBLOCK) return NW_CONTROL_SEND_AGAIN;
+    return NW_CONTROL_SEND_CLOSED;
+}
+void controlWake(void *) {sheng_wifi_wake();}
+int controlStart() {
+    if (gControlRef) return 0;
+    if (!gControlLock) gControlLock = IOLockAlloc();
+    if (!gControlLock) return ENOMEM;
+    kern_ctl_reg registration{};
+    snprintf(registration.ctl_name, sizeof(registration.ctl_name), "%s", NW_CONTROL_NAME);
+    registration.ctl_flags = CTL_FLAG_PRIVILEGED | CTL_FLAG_REG_EXTENDED;
+    registration.ctl_sendsize = 256 * 1024; registration.ctl_recvsize = 512 * 1024;
+    registration.ctl_connect = controlConnect; registration.ctl_disconnect = controlDisconnect;
+    registration.ctl_send = controlReceive; registration.ctl_getopt = controlGetOption; registration.ctl_rcvd = controlReceived;
+    const errno_t result = ctl_register(&registration, &gControlRef);
+    if (result) return result;
+    const nw_control_transport transport{nullptr, controlSend, controlWake};
+    const int status = nw_wifi_control_transport_set(&transport);
+    if (status) {ctl_deregister(gControlRef); gControlRef = nullptr; return controlError(status);}
+    return 0;
+}
 
 void wifiStack(volatile uint32_t *m, uint64_t barBytes) {
     volatile uint32_t *st = native_wifi_mhi;
     if (!arenaInit()) {st[0] = (uint32_t)-11; return;}
     pLog(6, native_ufs_extra_uncached ? "wifi: DMA window mapped uncached" : "wifi: DMA window mapped cached (no second mapping)");
     if (!findCaps()) {st[0] = (uint32_t)-12; return;}
-    static const struct lx_platform plat = {pNow, pSleep, pPoll, pLog, pHalt, hAlloc, hFree, pDmaAlloc, pDmaFree, pDmaMap, pDmaSync, pFwGet};
+    static const struct lx_platform plat = {pNow, pSleep, pPoll, pLog, pHalt, hAlloc, hFree, pDmaAlloc, pDmaFree, pDmaMap, pDmaSync, pFwGet, pNowNs, pBootNs, pBusyDelayUs, _disable_preemption, _enable_preemption};
+    nw_wifi_set_platform(&plat);
     static struct nw_board board;
     gNwBar = m;
     board.bar = const_cast<uint32_t *>(m); board.bar_len = barBytes; board.device_id = (uint16_t)(gCfg[0] >> 16); board.msi_cap = (uint16_t)gMsiCap; board.irq_base = 1000;
     board.cfg_read = pCfgRead; board.cfg_write = pCfgWrite; board.msi_target = pMsiTarget; board.map_phys = nullptr;
     // the board's address window for the endpoint to reach sleep clock and sibling blocks is already set up by the earlier stages
     st[0] = 20;
+    Fw firmware{};
+    if (!findFirmware(firmware)) {
+        native_wifi_logf(3, "wifi: Data firmware unavailable at %s", SHENG_WIFI_FIRMWARE_ROOT);
+        st[0] = (uint32_t)-2; return;
+    }
+    const int control = controlStart();
+    if (control) native_wifi_logf(3, "wifi: control endpoint registration failed: %d", control);
     const int r = nw_wifi_start(&plat, &board);
     st[0] = r ? (uint32_t)(0x80000000u | (uint32_t)(-r & 0xffff)) : 21;
     bool netDone = false;
@@ -1077,15 +1160,41 @@ void wifiStack(volatile uint32_t *m, uint64_t barBytes) {
     // module's next timer may be due (10 ms), and goes round again at once while frames move. Without the line it falls back to polling
     // every millisecond.
     const int msi = msiAttach();
+    nw_wifi_irq_mode(gMsiAttached);
     pLog(6, msi ? "wifi: MSI line not attached, polling" : "wifi: MSI line attached (SPI 141), sleeping between interrupts");
     if (msi) native_wifi_logf(4, "wifi: MSI attach result %d", msi);
-    uint64_t nextReport = 0;
+    uint64_t nextReport = 0, sliceStarted = pNowNs(), reportStarted = sliceStarted;
+    uint64_t activeNs = 0, longestStep = 0, rounds = 0, yields = 0;
     for (uint64_t n = 0;; ++n) {
+        const uint64_t began = pNowNs();
         const int busy = nw_wifi_step();
+        const uint64_t stepNs = pNowNs() - began;
+        activeNs += stepNs; rounds++;
+        if (stepNs > longestStep) longestStep = stepNs;
         if (!netDone && nw_wifi_stats.stage >= 4) {netDone = true; netStart();}
-        if (!busy) {if (gMsiAttached) msiWait(10); else IOSleep(1);}
+        if (!busy) {
+            if (gMsiAttached) {const unsigned wait = nw_wifi_wait_ms(1000); if (wait) msiWait(wait);}
+            else IOSleep(1);
+            sliceStarted = pNowNs();
+        } else if (pNowNs() - sliceStarted >= 2000000) {
+            // Let ready network/input threads run between sustained batches.
+            // This checks pending preemption without adding a fixed sleep.
+            thread_yield_to_preemption(); yields++; sliceStarted = pNowNs();
+        }
         const uint64_t now = pNow();
-        if (gMsiAttached && now >= nextReport) {nextReport = now + 30000; native_wifi_logf(6, "wifi: %u MSIs so far, vectors seen %08x", gMsiCount, gMsiBits);}
+        if (now >= nextReport) {
+            nextReport = now + 30000;
+            native_wifi_logf(6, "wifi: %u MSIs so far, vectors seen %08x", gMsiCount, gMsiBits);
+            native_wifi_logf(6, "wifi: DMA used %zu peak %zu total %zu failures %u", gArena.used, gArena.peak, gArena.bytes, gArena.failures);
+            nw_control_stats cs{}; nw_wifi_control_stats_get(&cs);
+            native_wifi_logf(6, "wifi: control owner %llu opens %llu closes %llu last %u status %u", cs.active_session, cs.connections, cs.disconnections, cs.last_operation, cs.last_status);
+            char link[128]; nw_wifi_link_state(link, sizeof(link));
+            if (link[0]) native_wifi_logf(6, "wifi: link %s", link);
+            const uint64_t end = pNowNs(), elapsed = end - reportStarted;
+            native_wifi_logf(6, "wifi: worker rounds %llu active-permille %llu max-step-us %llu yields %llu",
+                            rounds, elapsed ? activeNs * 1000 / elapsed : 0, longestStep / 1000, yields);
+            activeNs = longestStep = rounds = yields = 0; reportStarted = end;
+        }
         if ((n & 63) == 0) st[1] = nw_wifi_stats.stage | nw_wifi_stats.scans << 8 | nw_wifi_stats.bss_seen << 16;
     }
 }
@@ -1156,7 +1265,7 @@ void mhiBring(volatile uint32_t *m, uint64_t barBytes) {
     if (!bounce) {st[0] = (uint32_t)-3; st[10] = 2; return;}
     for (uint32_t done = 0; done < fw.amssSize; done += kChunk) {
         const uint32_t left = fw.amssSize - done, bytes = left < kChunk ? left : kChunk;
-        if (!native_ufs_part_read(fw.lun, fw.first + (fw.amssOffset + done) / 4096, (bytes + 4095) / 4096, bounce)) {IOFreeData(bounce, kChunk); st[0] = (uint32_t)-2; return;}
+        memcpy(bounce, fw.image + done, bytes);
         for (uint32_t off = 0; off < bytes; off += kSegment) memcpy(seg[(done + off) / kSegment].va, bounce + off, bytes - off < kSegment ? bytes - off : kSegment);
     }
     IOFreeData(bounce, kChunk);
@@ -1499,7 +1608,7 @@ void wifiThread(void *arg, wait_result_t) {
 }
 }  // namespace
 
-// A file of the firmware container by name, for the board's own test hooks (not the driver).
+// A cached Data firmware file by name, for the board's own test hooks.
 extern "C" int sheng_wifi_file(const char *name, const uint8_t **data, size_t *size) {return pFwGet(name, data, size);}
 
 extern "C" void sheng_wifi_probe(void) {

@@ -39,6 +39,7 @@ __pycache__/
 *.bin
 !policies/**/*.bin
 !firmware/**/*.bin
+firmware/wcn7850/*.bin
 *.mbn
 *.fw
 *.pem
