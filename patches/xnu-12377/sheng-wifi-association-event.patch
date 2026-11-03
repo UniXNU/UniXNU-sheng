@@ -1,0 +1,33 @@
+--- a/bsd/kern/kern_event.c
++++ b/bsd/kern/kern_event.c
+@@ -8912,22 +8912,21 @@
+ 	}
+ #endif /* SKYWALK && XNU_TARGET_OS_OSX */
+ 
+-	/* Verify the message is small enough to fit in one mbuf w/o cluster */
++	/* iPadOS 27 association events carry a 540-byte result structure. */
++	u_int32_t maximum = event_msg->vendor_code == KEV_VENDOR_APPLE &&
++	    event_msg->kev_class == KEV_IEEE80211_CLASS ? MCLBYTES : MLEN;
+ 	total_size = KEV_MSG_HEADER_SIZE;
+-
+ 	for (i = 0; i < 5; i++) {
+ 		if (event_msg->dv[i].data_length == 0) {
+ 			break;
+ 		}
++		if (event_msg->dv[i].data_length > maximum - total_size) {
++			os_atomic_inc(&kevtstat.kes_toobig, relaxed);
++			return EMSGSIZE;
++		}
+ 		total_size += event_msg->dv[i].data_length;
+ 	}
+-
+-	if (total_size > MLEN) {
+-		os_atomic_inc(&kevtstat.kes_toobig, relaxed);
+-		return EMSGSIZE;
+-	}
+-
+-	m = m_get(wait, MT_DATA);
++	m = total_size > MLEN ? m_getcl(wait, MT_DATA, 0) : m_get(wait, MT_DATA);
+ 	if (m == 0) {
+ 		os_atomic_inc(&kevtstat.kes_nomem, relaxed);
+ 		return ENOMEM;

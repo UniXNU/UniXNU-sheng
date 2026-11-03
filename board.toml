@@ -69,6 +69,10 @@ trust_components = ["StaticTrustCache", "Cryptex1,SystemTrustCache", "Cryptex1,A
 wallpapers = ["ipados27", "ipados27-floating"]
 audio_tool = "scripts/build-sheng-audio-hal.py"
 audio_target = "arm64e-apple-ios27.0"
+wifi_tool = "scripts/build-wifi-userspace.py"
+wifi_target = "ios27"
+wifi_launchd_cache = true
+wifi_bin_prefix = "wifi-bin"
 
 ["payload"."install"]
 "title" = "Install and boot"

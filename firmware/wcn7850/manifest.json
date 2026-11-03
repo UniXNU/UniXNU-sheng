@@ -1,0 +1,17 @@
+{
+  "files": {
+    "amss.bin": {
+      "sha256": "43aadfd3df887f27de74020273aee484bac6a31dd53068f91baf2a9b094d6a68",
+      "bytes": 6090816
+    },
+    "m3.bin": {
+      "sha256": "0e72f44df7defc269fe92dcea25d4d409046c04b77d41c510c52879b3dfc1055",
+      "bytes": 299660
+    },
+    "board-2.bin": {
+      "sha256": "6a98237c743d864773a547e81e23f0c6dc721dcd7331926bee7381e2152e00fd",
+      "bytes": 2431968
+    }
+  },
+  "provenance": "Matches installed sheng WFW1 firmware, verified by read-only SHA-256 comparison on 2026-11-04."
+}

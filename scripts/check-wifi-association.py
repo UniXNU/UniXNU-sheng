@@ -25,6 +25,8 @@ link_type = 'struct link_event {' + section('struct link_event {', 'static_asser
 notifications = 'void post_event(' + section('void post_event(', '// ---- what the module tells us ----')
 callbacks = 'void on_connect_done(' + section('void on_connect_done(', '// What the address configuration exchanges')
 power = 'int power(apple80211req &rq) {' + section('case kPower: {', 'case kScanReq:')
+power_get = 'int power_get(apple80211req &rq) { nw_wifi_status st; visible_status(st); uint32_t w[6]{}; w[0]' + section('case kPower: w[0]', 'case kState:') + '}\n'
+scan = 'int scan(apple80211req &rq) { nw_wifi_status st; visible_status(st);' + section('case kScanReq: case kScanReqMultiple: {', 'case kAssociate:')
 auth = 'int auth(apple80211req &rq) { uint32_t w[4]{}; w[0]' + section('case kAuthType: w[0]', 'case kPowerSave:') + '}\n'
 
 prefix = r'''
@@ -39,7 +41,7 @@ using test_user_addr_t = uintptr_t;
 #define user_addr_t test_user_addr_t
 struct apple80211req { uint32_t req_len; user_addr_t req_data; };
 static bool copy_fault, gUserJoin, gKeyed, had_bssid, had_key;
-static bool gPower = true, gLinkSuppressed;
+static bool gPower = true, gLinkSuppressed, gAssocModern, gJoinPending;
 static int gAssocResult, calls, connect_error;
 static int disconnects;
 static bool disconnect_queued, hold_disconnect;
@@ -47,13 +49,28 @@ static unsigned sleep_ms;
 static nw_wifi_status physical;
 static void nw_wifi_status_get_mock(nw_wifi_status *st) { *st = physical; }
 static void nw_wifi_disconnect_mock() { ++disconnects; disconnect_queued = true; }
+static int power_calls, last_power;
+static void nw_wifi_power_mock(int enabled) { power_calls++; last_power = enabled; }
 static void sheng_wifi_wake() {}
+static unsigned gScanning, gScanCursor, gResultsShown, scan_calls;
+static int scan_error;
+static void *gCachedScan;
+static constexpr int kMillisecondScale = 1;
+static void cached_scan_done(void *, void *) {}
+static void *thread_call_allocate(void (*)(void *, void *), void *) { return reinterpret_cast<void *>(1); }
+static void clock_interval_to_deadline(unsigned, int, uint64_t *value) { *value = 1; }
+static void thread_call_enter_delayed(void *, uint64_t) {}
+static int nw_wifi_bss_count_mock() { return 0; }
+static int nw_wifi_scan_mock(const uint8_t *, size_t length) { assert(length <= 32); scan_calls++; return scan_error; }
+#define nw_wifi_bss_count nw_wifi_bss_count_mock
+#define nw_wifi_scan nw_wifi_scan_mock
 static void IOSleep(unsigned ms) {
     sleep_ms += ms;
     if (disconnect_queued && !hold_disconnect) { physical.state = NW_STA_IDLE; disconnect_queued = false; }
 }
 #define nw_wifi_status_get nw_wifi_status_get_mock
 #define nw_wifi_disconnect nw_wifi_disconnect_mock
+#define nw_wifi_power nw_wifi_power_mock
 // Stand-ins for the BSD event sink; production event serialization runs below.
 static int gIf = 1;
 static constexpr unsigned IFF_RUNNING = 0x40;
@@ -71,8 +88,12 @@ static int ifnet_set_flags(int, unsigned flags, unsigned mask) {
     if_flags = (if_flags & ~mask) | (flags & mask); return 0;
 }
 static int sheng_kev_post(kev_msg *msg) {
-    auto p = static_cast<uint8_t *>(msg->dv[0].data_ptr);
-    sent.push_back({msg->kev_class, msg->event_code, {p, p + msg->dv[0].data_length}}); return 0;
+    Event event{msg->kev_class, msg->event_code, {}};
+    for (auto &v : msg->dv) {
+      if (!v.data_length) break;
+      auto p = static_cast<uint8_t *>(v.data_ptr); event.data.insert(event.data.end(), p, p + v.data_length);
+    }
+    sent.push_back(event); return 0;
 }
 static uint8_t seen_ssid[32], seen_bssid[6];
 static char seen_key[64];
@@ -92,6 +113,7 @@ static int nw_wifi_connect_mock(const uint8_t *ssid, size_t length, const uint8_
     memcpy(seen_ssid, ssid, length); had_bssid = bssid != nullptr; had_key = key != nullptr;
     if (bssid) memcpy(seen_bssid, bssid, 6);
     if (key) memcpy(seen_key, key, key_length);
+    if (!connect_error) physical.state = NW_STA_AUTH;
     return connect_error;
 }
 #define nw_wifi_connect nw_wifi_connect_mock
@@ -101,7 +123,7 @@ static uint8_t wire[656];
 static void put32(unsigned offset, uint32_t value) { memcpy(wire + offset, &value, 4); }
 static apple80211req fixture(unsigned length, unsigned key_length, unsigned cipher) {
     memset(wire, 0, sizeof wire); calls = 0; copy_fault = false; connect_error = 0;
-    gUserJoin = false; gKeyed = false; gPower = true; gLinkSuppressed = false;
+    gUserJoin = false; gKeyed = false; gPower = true; gLinkSuppressed = false; gJoinPending = false;
     physical = {}; physical.state = NW_STA_IDLE; sent.clear(); disconnects = 0; if_flags = 0;
     disconnect_queued = hold_disconnect = false; sleep_ms = 0;
     // Fixed offsets from the legacy wire contract and 24A446 IO80211 disassembly.
@@ -163,38 +185,47 @@ int main() {
     on_connect_done(NW_RES_OK);
     assert(gAssocResult == 1 && (if_flags & IFF_RUNNING));
     assert(sent.size() == 5 && sent[1].cls == 6 && sent[1].code == 9);
-    assert(sent[1].data.size() == 16 && !memcmp(sent[1].data.data(), "en0\0", 4));
+    assert(sent[1].data.size() == 556 && !memcmp(sent[1].data.data(), "en0\0", 4));
+    // Offsets and result mapping are from the actual 24A446 IO80211 consumer.
+    uint32_t actual, valid;
+    memcpy(&actual, sent[1].data.data() + 16 + 0x214, 4);
+    memcpy(&valid, sent[1].data.data() + 16 + 0x218, 4);
+    assert(actual == 1 && valid == 1);
     int32_t result = -1;
-    // Repeating the completed join must signal completion without queueing radio work.
+    // Even a same-name request must authenticate; never synthesize success.
     sent.clear(); const int queued = calls;
-    assert(associate(rq) == 0 && calls == queued && gAssocResult == 1);
-    assert(sent.size() == 5 && sent[1].code == 9 && sent[1].data.size() == 16);
+    assert(associate(rq) == 0 && calls == queued + 1 && gAssocResult == 0);
+    for (const auto &event : sent) assert(event.code != 9 || event.cls != 6);
     // Switching targets drains the previous connection before queuing another join.
     wire[0x14] = 'X'; sent.clear();
-    assert(associate(rq) == 0 && calls == queued + 1 && disconnects == 1 && sleep_ms == 10);
-    assert(physical.state == NW_STA_IDLE && !gLinkSuppressed && seen_ssid[0] == 'X');
+    assert(associate(rq) == 0 && calls == queued + 2 && disconnects == 2 && sleep_ms == 20);
+    assert(physical.state == NW_STA_AUTH && !gLinkSuppressed && seen_ssid[0] == 'X');
     wire[0x14] = 't'; physical.state = NW_STA_UP; wire[0x34] ^= 1; hold_disconnect = true;
     const unsigned before_sleep = sleep_ms;
-    assert(associate(rq) == ETIMEDOUT && calls == queued + 1 && sleep_ms - before_sleep == 2000);
+    assert(associate(rq) == ETIMEDOUT && calls == queued + 2 && sleep_ms - before_sleep == 2000);
     wire[0x34] ^= 1; hold_disconnect = false; disconnect_queued = false;
     gLinkSuppressed = false; calls = queued; sent.clear(); disconnects = 0;
     physical.state = NW_STA_KEYS; gAssocResult = 2;
-    assert(associate(rq) == 0 && calls == queued && sent.empty() && gAssocResult == 2);
+    assert(associate(rq) == 0 && calls == queued + 1 && gAssocResult == 0);
+    for (const auto &event : sent) assert(event.code != 9 || event.cls != 6);
+    calls = queued; sent.clear(); disconnects = 0;
     // Power-off publishes a voluntary link-down and hides the asynchronous old snapshot.
     physical.state = NW_STA_UP;
     uint32_t off[6] = {1, 1, 0}; apple80211req pr = {sizeof off, reinterpret_cast<user_addr_t>(off)};
     assert(power(pr) == 0 && disconnects == 1 && !gPower && gLinkSuppressed);
-    assert(!(if_flags & IFF_RUNNING) && sent.size() == 5);
+    assert(power_calls == 1 && last_power == 0);
+    assert(!(if_flags & IFF_RUNNING) && sent.size() == 6);
     assert(sent[0].cls == 1 && sent[0].code == KEV_DL_LINK_OFF);
     assert(sent[1].cls == 6 && sent[1].code == 4 && sent[1].data.size() == 48);
     assert(sent[1].data[16] == 1 && sent[1].data[32] == 0);
-    assert(sent[2].code == 2 && sent[3].code == 3 && sent[4].code == 1);
+    assert(sent[2].code == 2 && sent[3].code == 3 && sent[4].code == 9 && sent[5].code == 1);
     nw_wifi_status visible; visible_status(visible);
     assert(visible.state == NW_STA_IDLE && !visible.ssid_len && !visible.bssid[0]);
     sent.clear(); on_connect_done(NW_RES_OK);
     assert(sent.empty() && !(if_flags & IFF_RUNNING));
     assert(associate(rq) == ENETDOWN && calls == queued);
     off[2] = 1; assert(power(pr) == 0 && gPower);
+    assert(power_calls == 2 && last_power == 1);
     visible_status(visible); assert(visible.state == NW_STA_IDLE);
     assert(associate(rq) == 0 && calls == queued + 1 && !gLinkSuppressed); // drain, then rejoin
     physical.state = NW_STA_UP; on_connect_done(NW_RES_OK);
@@ -207,10 +238,26 @@ int main() {
     assert(authentication[0] == 1 && authentication[1] == 1 && authentication[2] == 0x10 && authentication[3] == 0);
     ar.req_len = 12; authentication[3] = 123; gKeyed = false;
     assert(auth(ar) == 0 && authentication[2] == 0 && authentication[3] == 123);
-    puts("PASS: wire layouts, credentials, duplicate/switch joins, teardown timeout, completion and power-off/leave");
+    gPower = true; gLinkSuppressed = false; physical.state = NW_STA_OFF;
+    uint32_t radio[6]{}; apple80211req rr = {sizeof radio, reinterpret_cast<user_addr_t>(radio)};
+    assert(power_get(rr) == 0 && radio[2] == 0);
+    physical.state = NW_STA_IDLE; assert(power_get(rr) == 0 && radio[2] == 1);
+    uint8_t scan_wire[128]{}; apple80211req sr = {sizeof scan_wire, reinterpret_cast<user_addr_t>(scan_wire)};
+    scan_error = -1; assert(scan(sr) == ENETDOWN && scan_calls == 1 && !gScanning);
+    scan_error = 0; assert(scan(sr) == 0 && scan_calls == 2 && gScanning);
+    gPower = false; assert(scan(sr) == ENETDOWN && scan_calls == 2);
+    gPower = true; gLinkSuppressed = false; gAssocModern = true; physical.state = NW_STA_IDLE;
+    sent.clear(); on_connect_done(NW_RES_OK);
+    assert(sent.empty()); // A callback cannot manufacture authorization from an idle snapshot.
+    gJoinPending = true; on_connect_done(NW_RES_BAD_KEY);
+    assert(!(if_flags & IFF_RUNNING) && gAssocResult == 21 && sent.size() == 2);
+    assert(sent[1].code == 9 && sent[1].data.size() == 556);
+    memcpy(&actual, sent[1].data.data() + 16 + 0x214, 4);
+    memcpy(&valid, sent[1].data.data() + 16 + 0x218, 4); assert(actual == 21 && valid == 1);
+    puts("PASS: wire layouts, credentials, real duplicate/switch joins, pending result, full async success/failure events, unauthorized callback rejection and power-off/leave");
 }
 '''
-unit = prefix + '#include <initializer_list>\n' + events + types + link_type + assertions + decoder + notifications + callbacks + power + auth + join + fixtures
+unit = prefix + '#include <initializer_list>\n' + events + types + link_type + assertions + decoder + notifications + callbacks + power + power_get + scan + auth + join + fixtures
 (out / 'test.cpp').write_text(unit)
 subprocess.run(['clang++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-O1', '-g',
                 '-fsanitize=address,undefined', '-I', str(root / 'drivers/Ath12kWifi/include'),
