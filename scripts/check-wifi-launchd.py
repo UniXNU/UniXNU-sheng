@@ -9,6 +9,7 @@ from pathlib import Path
 import plistlib
 import subprocess
 import tempfile
+import tomllib
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -80,6 +81,25 @@ with tempfile.TemporaryDirectory() as td:
         pass
     else:
         raise AssertionError('existing job accepted')
+    # Verify the board's iPadOS 27 per-job settings against the actual OS cache.
+    with (root / 'board.toml').open('rb') as stream:
+        overrides = tomllib.load(stream)['payload']['runtime']['launchd_job_environment']
+    icon_label = 'com.apple.iconservices.iconservicesagent'
+    assert overrides == {icon_label: {'FORCE_SOFTWARE_RENDERER': '1', 'CI_ENABLE_METAL_GPU': '0'}}
+    profile_cache = work / 'icon.plist'
+    module.merge_launchd_cache(source, daemons, profile_cache, overrides)
+    profile = plistlib.loads(profile_cache.read_bytes())
+    assert profile['LaunchDaemons'].pop(key) == job
+    icon_key = '/System/Library/LaunchDaemons/' + icon_label + '.plist'
+    for name, value in overrides[icon_label].items():
+        assert profile['LaunchDaemons'][icon_key]['EnvironmentVariables'].pop(name) == value
+    assert profile == original
+    try:
+        module.merge_launchd_cache(source, daemons, work / 'bad.plist', {'missing.job': {'MODE': '1'}})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('missing OS job accepted')
     job['Label'] = 'com.apple.wifid'
     plist.write_bytes(plistlib.dumps(job))
     try:

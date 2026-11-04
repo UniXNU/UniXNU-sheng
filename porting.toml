@@ -37,6 +37,11 @@ command = "fastboot boot sch4.img"
 revision = "fe636ce2c24b5f5ef406e2dc70504d2573f00092"
 result = "Boot 50d4021e7 with sheng-lite=2 recorded no iconservicesagent PID or associated main-thread wait. Settings opened. All app icon artwork was missing from the photographed Home Screen and Dock. The continuous-HID flip median changed from 15.358 to 9.631 ms and P99 from 43.232 to 46.384 ms."
 
+[[area.evidence]]
+kind = "source"
+reference = "board.toml"
+result = "For iPadOS 27.0.1 build 24A446 the runtime launchd cache configures only com.apple.iconservices.iconservicesagent with FORCE_SOFTWARE_RENDERER=1 and CI_ENABLE_METAL_GPU=0. The agent retains its original executable, Mach service, user and on-demand launch rules."
+
 [[area]]
 id = "firmware"
 status = "implemented"
