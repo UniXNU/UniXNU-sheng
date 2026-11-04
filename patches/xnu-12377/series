@@ -8,5 +8,6 @@ zzzzzz-sheng-latency-trace.patch
 zzzzzzzz-sheng-exit-latency.patch
 zzzzzzzzz-sheng-unnest-trace.patch
 sheng-wifi-launchd-cache.patch
+sheng-bluetooth-runtime.patch
 sheng-wifi-association-event.patch
 sheng-main-thread-profile.patch

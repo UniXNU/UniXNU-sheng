@@ -1,0 +1,25 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 119275e..6321d34 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8711,6 +8711,20 @@ native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
+ 	    wifi_bin_point, sizeof(wifi_bin_point), "/usr/libexec/launchd_cache_loader",
+ 	    "/usr/libexec/unixnu-wpa_supplicant", &wifi_bin_stage, &wifi_bin_status);
+ 	printf("wifi: service executable mount stage %d status %d\n", wifi_bin_stage, wifi_bin_status);
++	/* Standard system paths retain launchd policy and dyld library lookup. */
++	uint32_t bluetooth_enabled = 0;
++	if (PE_parse_boot_argn("sheng-bluetooth", &bluetooth_enabled, sizeof(bluetooth_enabled)) && bluetooth_enabled == 1) {
++		static const char bt_lib_source[] = "/private/var/ngpu/bluetooth-lib", bt_lib_point[] = "/usr/lib";
++		static const char bt_bin_source[] = "/private/var/ngpu/bluetooth-bin", bt_bin_point[] = "/usr/sbin";
++		static volatile int bt_lib_stage, bt_lib_status, bt_bin_stage, bt_bin_status;
++		native_gpu_addon_mount(p, scratch, 0x600, bt_lib_source, sizeof(bt_lib_source),
++		    bt_lib_point, sizeof(bt_lib_point), "/usr/lib/dyld", "/usr/lib/QcaBTType0.dylib", &bt_lib_stage, &bt_lib_status);
++		if (bt_lib_stage == 5 && !bt_lib_status) {
++			native_gpu_addon_mount(p, scratch, 0x600, bt_bin_source, sizeof(bt_bin_source),
++			    bt_bin_point, sizeof(bt_bin_point), "/usr/sbin/notifyd", "/usr/sbin/QcaBluetooth.runtime", &bt_bin_stage, &bt_bin_status);
++		}
++		printf("[bluetooth-runtime] library=%d/%d executables=%d/%d\n", bt_lib_stage, bt_lib_status, bt_bin_stage, bt_bin_status);
++	}
+ 	native_cryptex_os_view(p, scratch);
+ 	native_gestalt_cache_drop(p, scratch);
+ 	native_ls_store_drop(p, scratch);
