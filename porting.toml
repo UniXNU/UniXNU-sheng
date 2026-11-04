@@ -268,14 +268,14 @@ result = "Boot 5cfa7b18a recorded a responsive desktop through 360 s with deferr
 id = "bluetooth"
 status = "planned"
 components = []
-paths = ["package/BluetoothFirmware.*", "package/WcnPower.h", "scripts/check-bluetooth-board.py", "scripts/check-wcn-power.py", "scripts/stage-bluetooth-firmware.py", "firmware/bluetooth/**"]
+paths = ["package/BluetoothFirmware.*", "package/BluetoothProbe.cpp", "package/AppsSmmuLock.h", "package/WcnPower.h", "package/tests/bluetooth_platform.c", "scripts/build-qca-bluetooth.py", "scripts/check-bluetooth-*.py", "scripts/check-wcn-power.py", "scripts/stage-bluetooth-firmware.py", "firmware/bluetooth/**"]
 inputs = ["WCN7850 firmware and NVM pinned by firmware/bluetooth/manifest.json.", "Linux reference https://github.com/ianchb/sm8550-mainline at 1fb56e66091e71160d7c7f8e13b065d5b6ab8b8c and https://github.com/ianchb/debian-sheng.", "Original iPadOS 27 build 24A446 bluetoothd and BlueTool for native ABI adaptation."]
-configuration = ["UART14 is QUP2 SE6 at 0x898000, GIC INTID 493, wrapper 0x8c0000 and apps-SMMU stream 0x423; CTS/RTS/TX/RX use GPIO 76/77/78/79 and BT_EN uses GPIO 81.", "The board's 3.2 Mbaud operating rate uses a 51.2 MHz serial source and 16x oversampling.", "package/BluetoothFirmware.h and stage-bluetooth-firmware.py share firmware/qca under the Data addon.", "The development QcaBluetooth checkout is on feat/bluetooth-integration; component registration and board runtime binding are pending."]
+configuration = ["UART14 is QUP2 SE6 at 0x898000, GIC INTID 493, wrapper 0x8c0000 and apps-SMMU stream 0x423; CTS/RTS/TX/RX use GPIO 76/77/78/79 and BT_EN uses GPIO 81.", "The board's 3.2 Mbaud operating rate uses a 51.2 MHz serial source and 16x oversampling.", "package/BluetoothFirmware.h and stage-bluetooth-firmware.py share firmware/qca under the Data addon.", "sheng-bluetooth=1 starts the bound UART14 worker after Data addon installation; log-bluetooth=1 enables initialization messages. Component registration and runtime payload installation are pending."]
 procedure = ["Stage firmware with scripts/stage-bluetooth-firmware.py OUTPUT --source FIRMWARE_QCA_DIRECTORY.", "Run scripts/check-wcn-power.py and scripts/check-bluetooth-board.py ASSEMBLED_TREE after changing shared power.", "Build the protocol, GENI DMA and Skywalk sources with the selected arm64e kernel command, then package BlueTool and the native controller adapter.", "Boot the integrated image and measure native scanning, pairing, audio, sleep, recovery and Wi-Fi coexistence."]
-findings = ["WcnPower records independent WLAN and Bluetooth ownership of the six shared supplies; the last owner releases them. Bluetooth-only startup omits the PCIe NoC vote. Wi-Fi startup uses this ownership interface.", "The firmware VFS reader waits for Data addon installation, accepts controller firmware names, bounds file size and rejects short reads.", "The protocol core uses the byte-identical Linux btqca.c initialization through namespaced host services. H4 backpressure retains input, and IBS control bytes enter only between TX packets.", "The GENI engine provides bounded DMA buffers, deferred IRQ work, wire drain checks, quiesce/resume and error reporting. UART.SK and BlueTool sources compile for the 27 target."]
+findings = ["WcnPower records independent WLAN and Bluetooth ownership of the six shared supplies; the last owner releases them. Bluetooth-only startup omits the PCIe NoC vote. Wi-Fi startup uses this ownership interface.", "The firmware VFS reader waits for Data addon installation, accepts controller firmware names, bounds file size and rejects short reads.", "The protocol core uses the byte-identical Linux btqca.c initialization through namespaced host services. H4 backpressure retains input, and IBS control bytes enter only between TX packets.", "The GENI engine provides bounded DMA buffers, deferred IRQ work, wire drain checks, quiesce/resume and error reporting. UART.SK and BlueTool sources compile for the 27 target.", "BluetoothProbe binds UART14 clocks, an isolated 32 KiB DMA aperture, IRQ 493 and GPIO79 wake. Shared configuration locks preserve touch and audio resources; GIC routes dispatch directly to registered handlers. Hardware faults abort command waiters immediately."]
 completion = ["The integrated kernel and payload boot with independent Bluetooth power and live UART DMA/IRQ.", "The native stack scans, pairs, reconnects, stores keys, supports BLE and plays Bluetooth audio.", "Idle power, audio continuity, recovery and Wi-Fi coexistence have device measurements tied to the image revision."]
-limits = ["Board UART clocks, pins, SMMU binding, hardware wake and worker startup remain unbound.", "Runtime packaging and the iPadOS 27 native controller capability adapter remain in development.", "Host simulation and source compilation cover the implemented cores; Bluetooth device operation is pending."]
-next_action = ["Bind the shared board power provider, UART14 resources, DMA stream and IRQ to the Bluetooth worker, then integrate the 27 native adapter and runtime payload."]
+limits = ["The UART requires protocol-2 microcode from the boot firmware; device microcode and wake behavior are pending verification.", "Runtime packaging and the iPadOS 27 native controller capability adapter remain in development.", "Host simulation and source compilation cover the implemented cores; Bluetooth device operation is pending."]
+next_action = ["Integrate the 27 native capability adapter, publish component source pins and install the runtime payload, then boot the complete image."]
 
 [[area.evidence]]
 kind = "host"
@@ -287,15 +287,29 @@ result = "Production ownership code passes ASan/UBSan for both startup orders, i
 [[area.evidence]]
 kind = "host"
 reference = "scripts/check-bluetooth-board.py"
-command = "python3 scripts/check-bluetooth-board.py ASSEMBLED_TREE"
-revision = "bea420e4520654670b95549fb4d3ecb6511ae8e1"
-result = "WifiProbe.cpp with the shared WCN ownership path compiles using the selected iPadOS 27 arm64e IOPlatformExpert command."
+command = "python3 scripts/check-bluetooth-board.py ASSEMBLED_TREE --extra-source ../UniXNU/drivers/ArmCpu/ArmCpu.cpp --extra-source package/TouchProbe.cpp --extra-source package/AudioProbe.cpp --extra-source package/BootLog.c"
+revision = "d846103b491c082ebf3f7928e5d8de12f7f1c343"
+result = "WifiProbe, BluetoothProbe, ArmCpu, touch, audio and boot-log sources compile using the selected iPadOS 27 arm64e kernel commands. The Bluetooth builder compiles eight protocol and SM8550 objects."
 
 [[area.evidence]]
 kind = "source"
 reference = "package/BluetoothFirmware.h"
 revision = "bea420e4520654670b95549fb4d3ecb6511ae8e1"
 result = "Data firmware prefix shared by the VFS reader and staging tool; firmware/bluetooth/manifest.json pins both WCN7850 firmware inputs."
+
+[[area.evidence]]
+kind = "host"
+reference = "scripts/check-bluetooth-platform.py"
+command = "python3 scripts/check-bluetooth-platform.py"
+revision = "d846103b491c082ebf3f7928e5d8de12f7f1c343"
+result = "ASan/UBSan register models pass exact rate ratios, DFS handoff, native DMA page translation, ASID conflicts, bounded timeouts and preserved storage/touch routes."
+
+[[area.evidence]]
+kind = "host"
+reference = "scripts/check-bluetooth-shared.py"
+command = "python3 scripts/check-bluetooth-shared.py"
+revision = "d846103b491c082ebf3f7928e5d8de12f7f1c343"
+result = "Production GIC/GCC code passes ASan/UBSan for shared level IRQs, edge/exclusive checks, direct dispatch, masking, concurrent registration and shared clock lifetime."
 
 [[area]]
 id = "network"
