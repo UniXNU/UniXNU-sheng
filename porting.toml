@@ -46,6 +46,7 @@ result = "For iPadOS 27.0.1 build 24A446 the runtime launchd cache configures on
 kind = "device"
 reference = "reports/ipados27-touch-frame-gaps.md"
 command = "fastboot boot ico4.img"
+revision = "1c0d9770f6b3cf8de565ba793146c8d5427b979f"
 result = "On 24A446 boot 41dcdcce, iconservicesagent PID 168 obtained the Adreno 740 Metal device and created a command queue. Eight completed command buffers contained 149 draws. The kernel recorded 495 paired submissions and retirements with zero replays. No fault or exit of that agent was recorded through the 240-second export."
 
 
@@ -440,8 +441,10 @@ reference = "package/BootUiTraceProbe.c"
 result = "CLI1 header flag 1 identifies exact user-mode samples with the interrupting CPU ID in the wait field. The target CPU records its own timestamp, PC, LR and FP. CPF1 records the policy vote and EPSS domain state per governor window."
 
 [[area.evidence]]
-kind = "source"
+kind = "host"
 reference = "scripts/check-boot-ui-trace.py"
+command = "python3 scripts/check-boot-ui-trace.py"
+revision = "571fcc972a4ea3e8c402183ba98a0a8f67a4750a"
 result = "The shared sampler retains the three expected return addresses for a blocked thread. The regression covers the TH_WAIT | TH_RUN transition observed in boot 6ba5a54e, terminating threads, missing or out-of-stack saved state and a wrapping frame address."
 
 [[area.evidence]]
