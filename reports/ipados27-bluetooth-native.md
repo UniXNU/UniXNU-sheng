@@ -57,14 +57,18 @@ arm64e iPadOS 27. Normal traffic stays in UART.SK and the native stack.
 
 ## Complete image
 
-The local build uses UniXNU `f3c3092156d0410b0976a4d3e1202388ca1e719a`,
-board `8f2af527c7204b07535b9e015a53c05d8029c0ee`,
+The local build uses UniXNU `92edc99b04010d61fab63139cba4101455bb2e09`,
+board `b2c0146caafe7d23d57479ed401c7f4790e6c154`,
 SM8550 `1ebec150cd2d8f7bb7fe9d75c72c00479a791750` and
-QcaBluetooth `442ea7da0004c6265f325c676f69eb315e6cc720`.
+QcaBluetooth `4e05b3956b17d6f518c05df976f2b4ddaf567b75`.
 The board startup entry has C linkage. Archive validation covers the Bluetooth
 board, core, shim and SoC source dependencies. Clock-restore failures terminate
 all three wake paths with the original hardware error and stop forwarding and
-retries. The protocol sanitizer check and target compile pass.
+retries. UART.SK clears failed queues, wakes both rings and returns the
+controller error from sync callbacks before data movement. Notification references
+keep both rings alive until disconnect drains them. The kernel-pipe wrappers
+return these callback errors to channel synchronization. Target compilation and
+isolated export checks pass. The unchanged protocol sanitizer check passes.
 
 The complete native kernel links all nine checked Bluetooth exports. Fileset
 prelink passes the existing regression policy. The 176 MiB FAT payload and
@@ -73,9 +77,9 @@ matches its firmware, DTB and payload inputs. SHA-256:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| Prelinked kernel | `0439e3b2d6d96c69ab7307cf574c636b948b5ee040425f3c2d4ba9b8fece1c52` |
-| FAT payload | `4b4cda53eb0cd30fc9fced41b40712b8a8d29b204005c3c0d2638e3ab3de071b` |
-| Temporary boot image | `d94ce87446e5942f72762b2df9417cd1f66240ff124a1382104f4deac734cf4d` |
+| Prelinked kernel | `85fa15562a40d1a5584a2fd50a6a4d99439271d11f9ca7f2908a7bb677c641f6` |
+| FAT payload | `6a97345bac30bcc6632a5d967699aee3558e8760ce56d85d58a9f59eb70d8400` |
+| Temporary boot image | `bda2e7ee055b19d3e3594bc94d68e177d85667510aa146760d0c21dc2436f621` |
 
 Direct FAT extraction verifies six files against their build hashes, the signed
 runtime/trust inputs, preserved Data seed, H4/3.2 Mbaud properties and the enabled
