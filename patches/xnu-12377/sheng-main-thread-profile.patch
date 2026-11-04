@@ -1,0 +1,104 @@
+diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
+index d8d69a3..9561134 100644
+--- a/osfmk/arm64/sleh.c
++++ b/osfmk/arm64/sleh.c
+@@ -767,6 +767,9 @@ is_platform_error(uint64_t esr)
+ 	       is_table_walk_error(fault_code);
+ }
+ 
++/* Optional fixup for board PMU system-register accesses at EL1. */
++bool (*sheng_pmu_fixup)(arm_saved_state_t *);
++
+ void
+ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused bool did_initiate_panic_lockdown)
+ {
+@@ -804,6 +807,11 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
+ 	}
+ #endif
+ 	bool is_user = PSR64_IS_USER(get_saved_state_cpsr(state));
++	if (!is_user && (class == ESR_EC_MSR_TRAP || class == ESR_EC_UNCATEGORIZED) &&
++	    sheng_pmu_fixup && sheng_pmu_fixup(state)) {
++		return;
++	}
++
+ 
+ #if CONFIG_SPTM
+ 	// Lockdown should only be initiated for kernel exceptions
+diff --git a/osfmk/ipc/mach_msg.c b/osfmk/ipc/mach_msg.c
+index afaaf38..eee4fee 100644
+--- a/osfmk/ipc/mach_msg.c
++++ b/osfmk/ipc/mach_msg.c
+@@ -384,6 +384,17 @@ out:
+ 	return mr;
+ }
+ 
++/* A board diagnostic may opt in one specific main thread. */
++uint64_t sheng_sb_wait_tid;
++void (*sheng_sb_wait_hook)(unsigned, uint64_t, unsigned, int, uint32_t);
++
++static inline bool
++sheng_sb_wait_target(void)
++{
++	return __improbable(os_atomic_load(&sheng_sb_wait_tid, relaxed) == thread_tid(current_thread()) &&
++	           sheng_sb_wait_hook != NULL);
++}
++
+ void
+ mach_msg_receive_continue(void)
+ {
+@@ -392,6 +403,9 @@ mach_msg_receive_continue(void)
+ 	ipc_port_thread_group_unblocked();
+ 
+ 	mr = mach_msg_receive_results(NULL);
++	if (sheng_sb_wait_target()) {
++		sheng_sb_wait_hook(3, thread_tid(current_thread()), 0, -1, mr);
++	}
+ 	thread_syscall_return(mr);
+ }
+ 
+@@ -946,6 +960,27 @@ mach_msg2_trap(
+ 
+ 	KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_INFO) | DBG_FUNC_START);
+ 
++	bool sheng_trace = sheng_sb_wait_target() && (option64 & MACH64_RCV_MSG) &&
++	    !((option64 & MACH64_RCV_TIMEOUT) && msg_timeout == 0 && !(option64 & MACH64_SEND_MSG));
++	if (sheng_trace) {
++		const mach_port_name_t destination = (mach_port_name_t)mr_lp;
++		const mach_port_name_t reply = (mach_port_name_t)(mr_lp >> 32);
++		unsigned kind = 0; /* receive only, no named sender */
++		if (option64 & MACH64_RCV_SYNC_WAIT) {
++			kind = 2; /* explicit synchronous destination */
++		} else if (option64 & MACH64_SEND_MSG) {
++			kind = MACH_PORT_VALID(reply) && reply == (mach_port_name_t)(dc_rn >> 32) ? 1 : 3;
++		}
++		int peer = -1;
++		ipc_port_t port = IP_NULL;
++		if (kind && MACH_PORT_VALID(destination) &&
++		    ipc_port_translate_send(current_space(), destination, &port) == KERN_SUCCESS) {
++			peer = ip_in_space(port, ipc_space_kernel) ? 0 : ipc_port_get_receiver_task_locked(port, NULL);
++			ip_mq_unlock(port);
++		}
++		sheng_sb_wait_hook(1, thread_tid(current_thread()), kind, peer,
++		    (option64 & MACH64_SEND_MSG) ? (uint32_t)(mv_id >> 32) : 0);
++	}
+ 	mr = ipc_preflight_msg_option64(option64);
+ 	if (mr != MACH_MSG_SUCCESS) {
+ 		goto send_fail;
+@@ -1042,11 +1077,17 @@ send_fail:
+ 			sync_send = (mach_port_name_t)mr_lp;
+ 		}
+ 
++		if (sheng_trace) {
++			sheng_sb_wait_hook(2, thread_tid(current_thread()), 0, -1, 0);
++		}
+ 		mr = mach_msg_trap_receive(msg_addr, aux_addr, option64,
+ 		    msg_timeout, sync_send, msg_size, aux_size, rcv_name);
+ 	}
+ 
+ end:
++	if (sheng_trace) {
++		sheng_sb_wait_hook(3, thread_tid(current_thread()), 0, -1, mr);
++	}
+ 	/* unblock call is idempotent */
+ 	ipc_port_thread_group_unblocked();
+ 	return mr;

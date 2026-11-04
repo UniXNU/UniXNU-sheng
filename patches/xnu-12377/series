@@ -9,3 +9,4 @@ zzzzzzzz-sheng-exit-latency.patch
 zzzzzzzzz-sheng-unnest-trace.patch
 sheng-wifi-launchd-cache.patch
 sheng-wifi-association-event.patch
+sheng-main-thread-profile.patch
