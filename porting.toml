@@ -25,6 +25,11 @@ reference = "board.toml"
 result = "Implementation and configuration described in this section"
 
 
+[[area.evidence]]
+kind = "source"
+reference = "scripts/check-boot-watchdog-policy.py"
+result = "The opt-in sheng-lite=2 launch policy writes the lite profile plus a disabled key for com.apple.iconservices.iconservicesagent. Removing that key from the resulting plist reproduces the original profile bytes, including the camera and watchdog jobs."
+
 [[area]]
 id = "firmware"
 status = "implemented"
