@@ -217,9 +217,16 @@ extern "C" unsigned native_legacy_swap_timeline(char *out,unsigned cap) {
 // properties reported at that rate, and the rate.
 static volatile uint64_t vsyncEvents[6];
 static volatile unsigned vsyncHz;
+// Each tick event while the diagnostic export holds a ring (BootDiagExport.c kernel.vsync.bin): (mach time << 3) | event, events as above
+// (0 armed, 1 sent, 2 idle stop, 3 late, 4 started, 5 refresh reported). native_legacy_vsync_count counts every one.
+extern "C" {uint64_t *native_legacy_vsync_ring;volatile uint32_t native_legacy_vsync_count;}
 void native_legacy_vsync_observed(unsigned event,unsigned hz) {
     if(event<6)vsyncEvents[event]=vsyncEvents[event]+1;
     vsyncHz=hz;
+    if(uint64_t *ring=native_legacy_vsync_ring) {
+        const uint32_t n=__atomic_fetch_add(&native_legacy_vsync_count,1u,__ATOMIC_RELAXED);
+        ring[n&65535]=(mach_absolute_time()<<3)|(event&7);
+    }
 }
 extern "C" unsigned native_legacy_prepare_report(char *out,unsigned cap) {
     return snprintf(out,cap,"prepare calls=%u failures=%u retried=%u max_attempts=%u waited_ms=%llu vsync hz=%u sent=%llu arms=%llu idle=%llu late=%llu start=%llu refresh=%llu",

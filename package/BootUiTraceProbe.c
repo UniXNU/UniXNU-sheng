@@ -523,6 +523,37 @@ static void cs_refresh(void) {
  }
 }
 extern uint64_t native_gpu_role_thread(uint32_t,uint32_t) __attribute__((weak_import));
+// A running target's user registers at the sample instant: the user state saved in its PCB is the one of its last kernel entry, so a
+// thread busy in user code showed where it last entered the kernel (its system calls) instead of what it was running. A cross call to the
+// CPU it runs on interrupts it there; the handler copies the interrupted user PC, LR and FP when that CPU still runs it in user mode.
+// Such samples carry peer -2. One request at a time: the sampler is a single thread, and a request that did not answer within 1 ms stays
+// owned by its CPU until it does.
+struct cs_ipi {thread_t target;uint64_t pc,lr,fp;volatile uint32_t done,user;};
+static struct cs_ipi cs_ipi_req;
+static volatile bool cs_ipi_busy;
+static void cs_ipi_handler(void *arg) {
+ struct cs_ipi *q=(struct cs_ipi *)arg;
+ arm_saved_state_t *s=(arm_saved_state_t *)getCpuDatap()->cpu_int_state;
+ if(s && current_thread()==q->target && is_saved_state64(s) && PSR64_IS_USER(get_saved_state_cpsr(s))) {
+  q->pc=(uint64_t)get_saved_state_pc(s);q->lr=(uint64_t)get_saved_state_lr(s);q->fp=(uint64_t)get_saved_state_fp(s);q->user=1;
+ }
+ __atomic_store_n(&q->done,1,__ATOMIC_RELEASE);
+}
+// 1: e holds the target's user PC, LR and FP at this instant.
+static int cs_exact(thread_t thread,int cpu,struct bt_entry *e) {
+ struct cs_ipi *q=&cs_ipi_req;
+ if(cs_ipi_busy) {if(!__atomic_load_n(&q->done,__ATOMIC_ACQUIRE))return 0;cs_ipi_busy=false;}
+ if(cpu<0 || cpu==cpu_number())return 0;
+ q->target=thread;q->user=0;q->pc=q->lr=q->fp=0;__atomic_store_n(&q->done,0,__ATOMIC_RELEASE);
+ if(cpu_xcall(cpu,cs_ipi_handler,q)!=KERN_SUCCESS)return 0;
+ cs_ipi_busy=true;
+ const uint64_t start=mach_absolute_time();uint64_t limit=0;nanoseconds_to_absolutetime(1000000,&limit);
+ while(!__atomic_load_n(&q->done,__ATOMIC_ACQUIRE))if(mach_absolute_time()-start>limit)return 0;
+ cs_ipi_busy=false;
+ if(!q->user)return 0;
+ e->pc=BT_STRIP_USER_PC(q->pc);e->lr=BT_STRIP_USER_PC(q->lr);e->fp=q->fp;e->trap=0;
+ return 1;
+}
 static void cs_sample(unsigned slot,unsigned role) {
  task_t task=cs_task[slot];
  if(!task || !task_lock_try(task))return;
@@ -532,7 +563,7 @@ static void cs_sample(unsigned slot,unsigned role) {
  ipc_space_t space=task->itk_space;if(space)is_reference(space);
  struct cs_rec r;memset(&r,0,sizeof(r));
  struct bt_entry e;memset(&e,0,sizeof(e));
- bool got=false;
+ bool got=false;int running_cpu=-1;
  thread_t thread=(thread_t)queue_first(&task->threads);
  const bool server=!strcmp(cs_names[slot],"backboardd");
  const uint64_t render=server && &native_gpu_role_thread?native_gpu_role_thread((uint32_t)cs_pid[slot],role):0;
@@ -547,6 +578,8 @@ static void cs_sample(unsigned slot,unsigned role) {
   if(simple_lock_try(&thread->sched_lock,&thread_lck_grp)) {
    r.state=(uint16_t)thread->state;if(render && thread->thread_id==render)r.state|=(uint16_t)(role<<12);if(thread_get_runq(thread)!=PROCESSOR_NULL)r.state|=0x8000;
    r.pri=(int16_t)thread->sched_pri;r.cs=thread->c_switch;r.wait=(uint64_t)thread->wait_event;r.cpu=recount_thread_time_mach(thread);
+   processor_t on=thread->last_processor;
+   if((thread->state&TH_RUN) && !(r.state&0x8000) && on && on->active_thread==thread)running_cpu=on->cpu_id;
    arm_saved_state_t *state=thread->machine.upcb;
    if(state && is_saved_state64(state)) {
     e.pc=BT_STRIP_USER_PC((uint64_t)get_saved_state_pc(state));e.lr=BT_STRIP_USER_PC((uint64_t)get_saved_state_lr(state));
@@ -560,10 +593,12 @@ static void cs_sample(unsigned slot,unsigned role) {
  }
  task_unlock(task);
  r.abs=mach_absolute_time();r.pid=cs_pid[slot];r.peer=-1;
+ const bool exact=running_cpu>=0 && cs_exact(thread,running_cpu,&e);
+ if(exact){got=true;r.peer=-2;}
  if(got) {
   r.frames[0]=e.pc;r.frames[1]=e.lr;
   if(bt_user(e.pc,4) && (!e.lr || bt_user(e.lr,4)))bt_walk_n(&e,read_user,map,&r.frames[2],9);
-  if(e.trap==UINT64_MAX-46){lookup_peer(&e,space);r.peer=e.peer;}
+  if(!exact && e.trap==UINT64_MAX-46){lookup_peer(&e,space);r.peer=e.peer;}
  }
  if(space)is_release(space);
  vm_map_deallocate(map);
