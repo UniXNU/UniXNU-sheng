@@ -17,11 +17,49 @@ def pct(values, q):
     return values[min(len(values) - 1, int(q * len(values)))] if values else None
 
 
-def report(diag):
+def frame_metrics(diag):
     files = diag / 'files'
     touch_blob = (files / 'kernel.touch.bin').read_bytes()
-    _, _, kept, _ = struct.unpack_from('<4I', touch_blob)
+    magic, total, kept, _ = struct.unpack_from('<4sIII', touch_blob)
+    if magic != b'TCH1' or kept > total or len(touch_blob) != 16 + 8 * kept:
+        raise ValueError(f'invalid touch ring in {files}')
     touches = sorted(t for (t,) in struct.iter_unpack('<Q', touch_blob[16:16 + kept * 8]))
+    out = {}
+
+    # Frame intervals: display flips (swap ring event 4) with a touch report between them.
+    flips = sorted(int(l.split()[1]) for l in open(files / 'kernel.rings.txt') if l.startswith('S ') and l.split()[2] == '4')
+    intervals, continuous, gaps = [], [], 0
+    for a, b in zip(flips, flips[1:]):
+        i, j = bisect.bisect_left(touches, a), bisect.bisect_left(touches, b)
+        if j > i:
+            intervals.append((b - a) / 1000)
+            # At 120 Hz, allow up to two scan periods without a report.
+            # Include both flip boundaries so a lone tap after a long idle is excluded.
+            updates = [a, *touches[i:j], b]
+            if all(y - x <= 16700 for x, y in zip(updates, updates[1:])):
+                continuous.append((b - a) / 1000)
+        if b - a >= 100000 and j - i >= 3:
+            gaps += 1
+    intervals.sort()
+    out['frame_ms'] = {'n': len(intervals), 'p50': pct(intervals, .5), 'p90': pct(intervals, .9), 'p99': pct(intervals, .99),
+                       'max': intervals[-1] if intervals else None,
+                       'over_50ms': sum(t > 50 for t in intervals)}
+    out['touch_gaps_100ms'] = gaps
+    continuous.sort()
+    out['continuous_touch_frame_ms'] = {
+        'max_hid_gap_us': 16700, 'n': len(continuous), 'p50': pct(continuous, .5),
+        'p95': pct(continuous, .95), 'p99': pct(continuous, .99),
+        'at_least_100ms': sum(t >= 100 for t in continuous),
+    }
+    cadence = sorted((b - a) / 1000 for a, b in zip(touches, touches[1:]) if b - a <= 50000)
+    out['hid_interval_ms'] = {'max_gap_us': 50000, 'n': len(cadence),
+                              'p50': pct(cadence, .5), 'p95': pct(cadence, .95), 'p99': pct(cadence, .99)}
+
+    return out
+
+
+def report(diag):
+    files = diag / 'files'
     windows = json.loads((diag / 'latency.touch-windows.json').read_text())['windows']
 
     def inside(us):
@@ -29,19 +67,7 @@ def report(diag):
 
     out = {'touch_windows': len(windows), 'touch_seconds': round(sum(w['end_us'] - w['begin_us'] for w in windows) / 1e6, 1)}
 
-    # Frame intervals: display flips (swap ring event 4) with a touch report between them.
-    flips = sorted(int(l.split()[1]) for l in open(files / 'kernel.rings.txt') if l.startswith('S ') and l.split()[2] == '4')
-    intervals, gaps = [], 0
-    for a, b in zip(flips, flips[1:]):
-        i, j = bisect.bisect_left(touches, a), bisect.bisect_left(touches, b)
-        if j > i:
-            intervals.append((b - a) / 1000)
-        if b - a >= 100000 and j - i >= 3:
-            gaps += 1
-    intervals.sort()
-    out['frame_ms'] = {'n': len(intervals), 'p50': pct(intervals, .5), 'p90': pct(intervals, .9), 'p99': pct(intervals, .99),
-                       'max': intervals[-1] if intervals else None}
-    out['touch_gaps_100ms'] = gaps
+    out.update(frame_metrics(diag))
 
     # Large GPU allocations: page wiring per 64 MiB from kernel.boalloc.bin, runtime allocation times from the frame trace.
     blob = (files / 'kernel.boalloc.bin').read_bytes()
@@ -114,4 +140,6 @@ def report(diag):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('diag', type=Path, help='RUN/diag of read-sheng-log.py')
-    print(json.dumps(report(parser.parse_args().diag), indent=1))
+    parser.add_argument('--frames-only', action='store_true', help='compare flips and HID cadence using only the two kernel rings')
+    args = parser.parse_args()
+    print(json.dumps(frame_metrics(args.diag) if args.frames_only else report(args.diag), indent=1))
