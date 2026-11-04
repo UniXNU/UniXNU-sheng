@@ -1,11 +1,12 @@
 # Touch and frame timing on sheng
 
-Tests used iPadOS 27.0.1 build 24A446 on a Xiaomi Pad 6S Pro. Both images were started with `fastboot boot`. The hardware tests did not qualify App Switcher gestures or keyboard flicks.
+Tests used iPadOS 27.0.1 build 24A446 on a Xiaomi Pad 6S Pro. The three images were started with `fastboot boot`. The hardware tests did not qualify App Switcher gestures or keyboard flicks.
 
 | Run | Board revision | Boot image SHA-256 | Observation |
 | --- | --- | --- | --- |
 | sch1, boot 532856a9 | `8fcf9a4e0f3c5a23a820f85fd25189e2c7e83f87` | `445f10c4c6a257f48551b267b9c0d740c17150f3ca5a2e2a51db24cfd1ca2a94` | The tester reported limited improvement and an idle desktop freeze. The panic flush recorded state 5. |
 | sch2, boot 5cfa7b18a | `8ec842f38c21ef1d73e12000fae16df7442e0c73` | `15ff435d078f17bdad4bda870b6a85b268b5284217c93a05e227d3b785be27a9` | Both App Switcher gestures still failed and keyboard flicks recurred. The desktop responded before a manual reboot. |
+| sch3, boot da1dbd496 | `948a8b8` (profile code) | `060d6c256f1acc18af5d54d40762cdcddf398fc370ae8df45029002f87d9c776` | The tester reached the desktop and exercised it. A complete 240-second diagnostic snapshot was recovered at log uptime 276 seconds. The reader returned the tablet to fastboot. |
 
 ## Sampling boundaries
 
@@ -68,6 +69,32 @@ The 12 sch1 long intervals yielded 290 user-mode interrupts of the SpringBoard m
 
 The generated sheng XNU configuration defines `CONFIG_CPU_COUNTERS 0`. Neither capture supplies retired instructions or CPU cycles. IPC and a quantitative comparison with an Apple CPU cannot be derived from these traces.
 
+## Main-thread profile on sch3
+
+The recovered 16-file stream contained 231,686 latency records with zero reported drops or overwrites, 57,108 client samples, 8,485 governor windows and 2,345 HID timestamps. The image retained sch2's touch object and GPU addon. Boot arguments included `cs-profile=1 cs-exact=1 sheng-cpufreq=4`. SpringBoard PID 30, main TID 320, used cache slide 0x458000. Client records with peer −2 identified 6,680 exact EL0 samples. The interrupted CPU was in 3–6 or 7 for 6,678 of them. Only SpringBoard received profiling IPIs. Across 125 complete cost windows the sampler spent 82.19 ms on 8,019 attempts, 0.0582% of the observed wall time. The largest measured attempt was 69.1 µs. This measures the sampler-side cross-call path.
+
+### Mach waits
+
+The capture retained 16,442 completed main-thread Mach calls of at least 250 µs and one call still waiting at export. For direct calls with a resolved user peer, backboardd accounted for 283 calls (median receive time 0.363 ms, maximum 358.180 ms), runningboardd for 223 (median 1.795 ms, maximum 4.736 ms) and launchd for 87 (median 0.472 ms, maximum 0.650 ms). The 358.180 ms backboardd wait came from `CA::Context::commit_transaction`, request ID 40209. There were two flips and zero HID reports while SpringBoard awaited this reply.
+
+At uptime 3237.363240 s SpringBoard entered an explicit synchronous XPC receive. Its destination was unresolved at entry. The same blocked thread's stack contained `xpc_connection_send_message_with_reply_sync` and `NSXPCConnection`. Samples at +3.377 and +4.510 s resolved its remote port to PID 387, which the kernel process identity record named `iconservicesagent`. The call returned successfully after 4.644428 s. It overlapped 4.444334 s of a 4.583440 s flip interval. During that interval 85 HID reports arrived in bursts, with a maximum uncovered span of 1.267 s.
+
+Five separate iconservicesagent PIDs (123, 359, 366, 373 and 377) faulted at the same CoreImage instruction. PID 377 exited on SIGSEGV 1.254 s before the XPC wait began, and PID 387 appeared during the wait. At unslid PC `0x1a575982c` the 24A446 instruction `str d0, [x8, #0x28]` wrote to address 0x28 with x8 zero. It lies in the block inside `CI::ProgramNode::create_program_and_arguments`. The blocked stack and remote port identify the service involved in this stall. The trace does not separate launch delay from time spent servicing the request. The code path that supplied the null program state and a fix for the service still require verification.
+
+### Running CPU and instruction throughput
+
+| Group | Intervals between exact samples with the same running thread, CPU and context-switch count | Retired instructions per EL0 cycle |
+| --- | ---: | ---: |
+| All qualifying pairs | 1,521 | 0.803 |
+| Within the five busy flip intervals of 100 ms or longer | 78 | 0.714 |
+| Within the 191 similarly busy flips under 30 ms | 130 | 0.838 |
+
+The board read two architectural PMU events on 6,679 exact samples. One sample on CPU 0 reported occupied counters. Each aggregate is a ratio of summed instruction and cycle deltas. Both endpoints must report a ready PMU and the sample spacing must be at most 20 ms. Per-core aggregate IPC was 0.809 on CPU 3, 0.793 on 4, 0.738 on 5, 0.798 on 6 and 0.935 on 7. These are selected execution windows on sheng. Establishing the hardware difference from an Apple CPU would require a comparable measurement on that device.
+
+Across the five busy long flips, both performance domains requested their maximum allowed frequencies in all 82 governor windows. The one continuously HID-covered case spanned 131.501 ms, with 15 reports and SpringBoard main-thread CPU share 74.3%. All eight governor windows read 2,707 / 2,956 MHz. The main thread spent about 31.0 ms in undirected Mach receives, 4.58 ms in receives directed to runningboardd and 0.28 ms in receives directed to backboardd. Six uninterrupted PMU intervals gave 0.761 instructions per cycle.
+
+The five long flips contained 171 exact SpringBoard samples, compared with 523 in similarly busy short flips. `objc_msgSend` was the interrupted instruction's function in 29/171 versus 69/523. The stack included `+[UIView(Animation) performWithoutAnimation:]` in 10/171 versus 1/523 and `-[SBIconListView configureIconView:forIcon:]` in 5/171 versus 0/523. Function hits overlap and give no exclusive elapsed time. The action boundaries were not marked on the device. The GPU and touch binaries match sch2, but this workload and sampler configuration differ from the earlier touch tests.
+
 ## Idle desktop panic
 
 The final sch1 panic recorded `turnstile.c:1470` and `thread->inheritor == TURNSTILE_INHERITOR_NULL`. With native slide 0x3920000, the interrupted stack includes `gpuIrq`, `native_adreno_preempt_irq + 0x54`, `lck_mtx_unlock_contended` and the waitq wakeup path. The saved return address immediately follows the call to `lck_mtx_unlock`. A GPU hard interrupt released a contended mutex while the interrupted thread already had a pending turnstile inheritor.
@@ -76,8 +103,10 @@ Sch2 schedules CP preemption completion on a serialized thread call. Disassembly
 
 ## Outstanding observations
 
-Identify digitizer child events at dispatch and receipt in backboardd and SpringBoard. The bottom-edge classification and the keyboard decision both occur above the recorded contact stream. Pair the actual CoreAnimation display-link callbacks with SpringBoard commits and backboardd submissions to distinguish late wakeups from late production. The two captures do not establish one cause for every frame gap.
+Trace the null CoreImage program state during iconservicesagent restart. Separately, identify digitizer child events at dispatch and receipt in backboardd and SpringBoard. The bottom-edge classification and the keyboard decision both occur above the recorded contact stream. Pair the actual CoreAnimation display-link callbacks with SpringBoard commits and backboardd submissions to distinguish late wakeups from late production. The two captures do not establish one cause for every frame gap.
 
 ## Reproduction
 
 Use `scripts/read-sheng-log.py` to recover the diagnostic export, `scripts/decode-sheng-touchpath.py` with `--jsonl` to inspect the contact sequence and `python3 scripts/sheng-latency-report.py RUN/diag --frames-only` to reproduce the cadence and flip metrics. Omit `--frames-only` to include the GPU pass metrics. Use the cache slide recorded for each individual boot when symbolizing.
+
+For sch3 use `python3 scripts/sheng-springboard-profile.py RUN/diag/files/kernel.latency.bin` for per-call timing, PMU pairs and sampler cost.
