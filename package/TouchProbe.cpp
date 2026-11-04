@@ -14,12 +14,15 @@
 #include <libkern/c++/OSSharedPtr.h>
 #include <kern/thread.h>
 #include <kern/clock.h>
+#include <mach/mach_time.h>
+#include <IOKit/IOLocks.h>
 #include <pexpert/pexpert.h>
 extern "C" {
 #include "GeniSpi.h"
 #include "NvtProtocol.h"
 #include "NvtTouchCore.h"
 #include "TouchBoard.h"
+#include "TouchTrace.h"
 #include "SmmuBypass.h"
 extern const uint8_t native_touch_firmware[] __attribute__((weak_import));
 extern const uint32_t native_touch_firmware_size __attribute__((weak_import));
@@ -43,6 +46,8 @@ volatile int native_touch_xs[NVT_SLOTS], native_touch_ys[NVT_SLOTS], native_touc
 volatile int32_t native_touch_strokes[16][7];
 volatile uint32_t native_touch_stroke_count;
 volatile int32_t native_touch_extent[4] = {0x7fffffff, -1, 0x7fffffff, -1};
+extern volatile int native_hid_input_results[8] __attribute__((weak_import));
+extern volatile uint32_t native_touch_edge_stats[4] __attribute__((weak_import));
 }
 
 namespace {
@@ -501,9 +506,91 @@ extern "C" int armcpu_spi_attach(uint32_t, bool, void (*)(void *), void *, uint3
 extern "C" {volatile uint32_t native_touch_irq_stats[4];}   // [0] 0 not armed, 1 armed, 2 attach failed, [1] interrupts, [2] spurious, [3] attach status
 static volatile uint32_t gTouchIrqEvents;
 static volatile uint32_t *gTouchPin;
+static struct {
+    IOLock *lock;
+    touch_trace_row *ring;
+    uint32_t total;
+    bool frozen;
+    struct { int id, x, y; uint8_t edges; } origin[NVT_SLOTS];
+} pathTrace;
+static uint64_t lastTouchIrq;
+
+static void initPathTrace() {
+    unsigned enabled = 0;
+    if (!PE_parse_boot_argn("sheng-tlog", &enabled, sizeof enabled) || !enabled) return;
+    IOLock *lock = IOLockAlloc();
+    if (!lock) return;
+    pathTrace.ring = static_cast<touch_trace_row *>(IOMalloc(sizeof(touch_trace_row) * TouchTraceCapacity));
+    if (!pathTrace.ring) { IOLockFree(lock); return; }
+    __atomic_store_n(&pathTrace.lock, lock, __ATOMIC_RELEASE);
+}
+
+extern "C" const touch_trace_row *sheng_touch_trace_freeze(uint32_t *total) {
+    IOLock *lock = __atomic_load_n(&pathTrace.lock, __ATOMIC_ACQUIRE);
+    if (!lock) return nullptr;
+    IOLockLock(lock);
+    pathTrace.frozen = true;
+    *total = pathTrace.total;
+    IOLockUnlock(lock);
+    return pathTrace.ring;
+}
+
+static uint64_t touchUs(uint64_t ticks) {
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(ticks, &ns);
+    return ns / 1000;
+}
+
+static void recordPaths(const nvt_touch_core &core, touch_trace_row frame) {
+    IOLockLock(pathTrace.lock);
+    if (!pathTrace.frozen) {
+        for (unsigned i = 0; i < NVT_SLOTS; ++i) {
+            const auto &slot = core.slots[i];
+            auto &origin = pathTrace.origin[i];
+            if (origin.id && (!slot.active || slot.age == 1 || origin.id != slot.tracking_id)) {
+                auto end = frame;
+                end.id = origin.id;
+                end.flags |= TouchEnd;
+                end.origin_edges = origin.edges;
+                end.miss_reason = slot.miss_reason;
+                pathTrace.ring[pathTrace.total++ % TouchTraceCapacity] = end;
+                origin.id = 0;
+            }
+            if (!slot.active) continue;
+            auto row = frame;
+            if (!origin.id) {
+                const unsigned edge = 48 * NVT_SUPER_RESOLUTION;
+                origin = {slot.tracking_id, slot.x, slot.y, static_cast<uint8_t>(
+                    (slot.x < (int)edge) | ((slot.x >= NVT_LONG_AXIS_MAX - (int)edge) << 1) |
+                    ((slot.y < (int)edge) << 2) | ((slot.y >= NVT_SHORT_AXIS_MAX - (int)edge) << 3))};
+                row.flags |= TouchBegin;
+            }
+            row.id = origin.id;
+            row.origin_edges = origin.edges; // left, right, bottom, top
+            row.raw_dx = slot.x - origin.x;
+            row.raw_dy = origin.y - slot.y;
+            row.out_dx = slot.rx - origin.x;
+            row.out_dy = origin.y - slot.ry;
+            if (slot.age >= 2) row.flags |= TouchVisible;
+            if (slot.missed) {row.flags |= TouchHeld; row.miss_reason = slot.miss_reason;}
+            for (unsigned j = 0; j < NVT_SLOTS; ++j) {
+                const auto &other = core.slots[j];
+                if (j == i || !other.active || other.missed || slot.missed) continue;
+                const int dx = slot.x >= other.x ? slot.x - other.x : other.x - slot.x;
+                const int dy = slot.y >= other.y ? slot.y - other.y : other.y - slot.y;
+                const int distance = dx > dy ? dx : dy;
+                if (distance < row.peer_distance) row.peer_distance = distance;
+            }
+            pathTrace.ring[pathTrace.total++ % TouchTraceCapacity] = row;
+        }
+    }
+    IOLockUnlock(pathTrace.lock);
+}
+
 static void touchIrq(void *) {
     if (!(gTouchPin[0xc / 4] & 1)) {native_touch_irq_stats[2] = native_touch_irq_stats[2] + 1; return;}
     gTouchPin[0xc / 4] = 0;
+    if (pathTrace.lock) __atomic_store_n(&lastTouchIrq, mach_absolute_time(), __ATOMIC_RELEASE);
     native_touch_irq_stats[1] = native_touch_irq_stats[1] + 1;
     __atomic_fetch_add(&gTouchIrqEvents, 1, __ATOMIC_RELEASE);
     thread_wakeup((event_t)&gTouchIrqEvents);
@@ -636,6 +723,7 @@ static void touchThread(void *, wait_result_t) {
         // brings that back for diagnosis only, and it is also the fallback if the interrupt cannot be armed (then native_touch_irq_stats[0] says 2).
         unsigned pollOnly = 0;
         PE_parse_boot_argn("sheng-touch-poll", &pollOnly, sizeof pollOnly);
+        initPathTrace();
         const bool irqArmed = !pollOnly && armTouchIrq(*s);
         uint32_t seen = gTouchIrqEvents;
         for (;;) {
@@ -647,6 +735,7 @@ static void touchThread(void *, wait_result_t) {
             }
             for (;;) {   // every frame that is ready now
                 native_touch_loop_step = 1;
+                const uint64_t irq = __atomic_load_n(&lastTouchIrq, __ATOMIC_ACQUIRE);
                 const bool high = (rd32(s->tlmmIrq.va, 4) & 1) != 0;
                 s->irqHigh = high;
                 if (high) ++s->irqSeen;
@@ -658,18 +747,22 @@ static void touchThread(void *, wait_result_t) {
                 for (unsigned q = 0; q < 24; ++q) s->thp[q] = pk[q];
                 if ((++rowTick & 255) == 0) rows(*s);
                 if (!nvt_peek_valid(pk)) {++s->bad; break;}
-                const unsigned counter = nvt_peek_counter(pk), type = nvt_peek_type(pk);
-                if (counter == lastCounter) break;
-                lastCounter = counter;
+                if (nvt_peek_counter(pk) == lastCounter) break;
                 ++s->fresh;
-                s->lastType = type;
-                if (type != 2 && type != 4) continue;
+                const unsigned peekType = nvt_peek_type(pk);
+                if (peekType != 2 && peekType != 4) {lastCounter = nvt_peek_counter(pk); break;}
                 native_touch_loop_step = 4;
                 if (nvt_read_frame(&s->chip, s->frame)) {fail(11, NVT_ERR_BUS); break;}
+                const uint64_t readTime = pathTrace.lock ? mach_absolute_time() : 0;
                 native_touch_loop_step = 5;
                 ++s->reads;
                 for (unsigned q = 0; q < 24; ++q) s->head[q] = s->frame[q];
-                if (!nvt_frame_header_valid(s->frame)) {++s->bad; continue;}   // torn: the chip rewrote it while it was read
+                if (!nvt_frame_header_valid(s->frame)) {++s->bad; break;}
+                const unsigned counter = nvt_frame_counter(s->frame), type = nvt_frame_type(s->frame);
+                if (counter == lastCounter) break;
+                lastCounter = counter;
+                s->lastType = type;
+                if (type != 2 && type != 4) break;
                 native_touch_valid = native_touch_valid + 1;
                 int16_t *matrix = s->matrix;
                 nvt_frame_matrix(s->frame, matrix);
@@ -678,6 +771,7 @@ static void touchThread(void *, wait_result_t) {
                 s->mn = mn; s->mx = mx;
                 struct nvt_contact out[NVT_SLOTS];
                 native_touch_loop_step = 6;
+                const auto merges = s->core->merges;
                 const int n = nvt_touch_process(s->core, matrix, type, out, NVT_SLOTS);
                 native_touch_jitter[0] = static_cast<uint32_t>(s->core->jitter_frames);
                 native_touch_jitter[1] = static_cast<uint32_t>(s->core->jitter_sum);
@@ -697,7 +791,29 @@ static void touchThread(void *, wait_result_t) {
                 if (n > 0 || (n == 0 && !gScriptedDown)) {
                     native_touch_contacts = static_cast<uint32_t>(n);
                     if (n > 0) {native_touch_last_x = out[0].x; native_touch_last_y = out[0].y;}
+                    const auto reports = native_touch_hid_reports;
+                    const auto begins = pathTrace.lock && &native_touch_edge_stats ? native_touch_edge_stats[1] : 0;
+                    const auto edges = pathTrace.lock && &native_touch_edge_stats ? native_touch_edge_stats[2] : 0;
                     publish(static_cast<unsigned>(n), out);
+                    if (pathTrace.lock) {
+                        touch_trace_row frame = {};
+                        frame.irq_us = touchUs(irq);
+                        frame.read_us = touchUs(readTime);
+                        frame.report_us = touchUs(mach_absolute_time());
+                        frame.counter = counter;
+                        frame.count = n;
+                        frame.merges = s->core->merges - merges;
+                        frame.peer_distance = UINT16_MAX;
+                        if (native_touch_hid_reports != reports && &native_hid_input_results) {
+                            frame.flags |= TouchReport;
+                            frame.hid_result = native_hid_input_results[6];
+                        }
+                        if (&native_touch_edge_stats) {
+                            frame.hid_begins = native_touch_edge_stats[1] - begins;
+                            frame.hid_edge_begins = native_touch_edge_stats[2] - edges;
+                        }
+                        recordPaths(*s->core, frame);
+                    }
                 }
                 if ((++tick & 15) == 0) rows(*s);
                 if (irqArmed && gTouchIrqEvents == seen) break;   // no further pulse: the frame just read was the only one

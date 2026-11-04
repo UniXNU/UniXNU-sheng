@@ -195,6 +195,12 @@ extern volatile uint32_t native_touch_report_count __attribute__((weak_import));
 enum {TouchRing = 65536};
 // Display refresh ticks (LegacyDisplayProbe.cpp), kernel.vsync.bin: header "VSY1", total, kept, 0; then u64 (microseconds << 3) | event
 // (0 armed, 1 sent, 2 idle stop, 3 late, 4 started, 5 refresh reported), oldest first.
+#include "TouchTrace.h"
+_Static_assert(sizeof(struct touch_trace_row) == 48, "TPR1 row");
+extern const struct touch_trace_row *sheng_touch_trace_freeze(uint32_t *) __attribute__((weak_import));
+extern unsigned native_legacy_prepare_report(char *,unsigned) __attribute__((weak_import));
+static const struct touch_trace_row *path_trace;
+static uint32_t path_total, path_kept;
 extern uint64_t *native_legacy_vsync_ring __attribute__((weak_import));
 extern volatile uint32_t native_legacy_vsync_count __attribute__((weak_import));
 enum {VsyncRing = 65536};
@@ -333,6 +339,13 @@ static void rings_build(void) {
   const size_t alen = args ? strlen(args) : 0;
   RT("# boot-args seen by the kernel: length %lu first32 [%.32s] last32 [%s]\n", (unsigned long)alen, args ? args : "", alen > 32 ? args + alen - 32 : (args ? args : ""));
   RT("# autoreset: %s\n", boot_log_autoreset_text);
+  if (&native_legacy_prepare_report) {
+    char status[256];
+    native_legacy_prepare_report(status, sizeof status);
+    RT("# display: %s; vsync ring allocated=%u recorded=%u\n", status,
+       (unsigned)(&native_legacy_vsync_ring && native_legacy_vsync_ring != NULL),
+       &native_legacy_vsync_count ? native_legacy_vsync_count : 0);
+  }
   if (&native_legacy_ring_count && &native_legacy_ring_cap && native_legacy_ring_cap) {
     const uint32_t n = native_legacy_ring_count;
     RT("# swap ring: S <us> <event 1 validated 2 fence wait 3 fence passed 4 flip 5 latch 6 retire 7 copy offer 8 blank> <slot or -1> <validated depth> <fences out> <tag> (total %u)\n", n);
@@ -432,6 +445,14 @@ uint64_t boot_diag_scan(uint64_t budget) {
     const uint64_t cost = 24 + strlen("screen-000-0.bgrx") + 16 + (uint64_t)shot_w * shot_h * 4;
     if (used + cost <= budget) {++shots_kept; used += cost;} else shot_time[i] = 0xffffffffu;
   }
+  path_total = 0;
+  path_trace = sheng_touch_trace_freeze ? sheng_touch_trace_freeze(&path_total) : NULL;
+  path_kept = path_total > TouchTraceCapacity ? TouchTraceCapacity : path_total;
+  if (path_trace) {
+    const uint64_t cost = 24 + strlen("kernel.touchpath.bin") + 16 + (uint64_t)path_kept * sizeof(*path_trace);
+    if (used + cost <= budget) used += cost;
+    else {note("touch-budget", "kernel.touchpath.bin", (int)path_kept); path_trace = NULL;}
+  }
   rings_keep=0;
   // Files are scanned before optional exports. Frame records have first claim
   // on the budget, so fast IPC and scene data cannot displace the causal trace.
@@ -486,7 +507,7 @@ uint64_t boot_diag_scan(uint64_t budget) {
   }
   vsync_keep = cpufreq_keep = 0;
   vsync_kept = (&native_legacy_vsync_count && &native_legacy_vsync_ring && native_legacy_vsync_ring) ? native_legacy_vsync_count : 0;
-  if (vsync_kept) {
+  if (&native_legacy_vsync_ring && native_legacy_vsync_ring) {
     const uint32_t kept = vsync_kept > VsyncRing ? VsyncRing : vsync_kept;
     const uint64_t cost = 24 + strlen("kernel.vsync.bin") + 16 + (uint64_t)kept * 8;
     if (used + cost <= budget) {vsync_keep = 1; used += cost;}
@@ -527,7 +548,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   if (!chunk) return -1;
   vfs_context_t ctx = vfs_context_kernel();
   int rc = emit("M2VCACH1", 8, arg);
-  const uint32_t root_len = 1, count = boot_diag_files + 1 + rings_keep + client_keep + touch_keep + vsync_keep + cpufreq_keep + cpu_keep + boalloc_keep + ptime_keep + !!gpu_trace_size[0] + !!latency_size + shots_kept;
+  const uint32_t root_len = 1, count = boot_diag_files + 1 + rings_keep + client_keep + touch_keep + !!path_trace + vsync_keep + cpufreq_keep + cpu_keep + boalloc_keep + ptime_keep + !!gpu_trace_size[0] + !!latency_size + shots_kept;
   if (!rc) rc = emit(&root_len, 4, arg);
   if (!rc) rc = emit("/", 1, arg);
   if (!rc) rc = emit(&count, 4, arg);
@@ -630,6 +651,20 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
         memcpy(chunk + (size_t)k * 8, &us, 8);
       }
       rc = emit(chunk, n * 8, arg);
+      at += n;
+    }
+  }
+  if (!rc && path_trace) {
+    const uint32_t head[4] = {'T' | 'P' << 8 | 'R' << 16 | (uint32_t)'1' << 24,
+                              path_total, path_kept, sizeof(*path_trace)};
+    rc = put_head(emit, arg, "kernel.touchpath.bin", 0100644, 0, 0, 16 + (uint64_t)path_kept * sizeof(*path_trace));
+    if (!rc) rc = emit(head, sizeof head, arg);
+    for (uint32_t at = 0; !rc && at < path_kept;) {
+      const uint32_t index = (path_total - path_kept + at) % TouchTraceCapacity;
+      uint32_t n = path_kept - at;
+      if (n > TouchTraceCapacity - index) n = TouchTraceCapacity - index;
+      if (n > DiagChunk / sizeof(*path_trace)) n = DiagChunk / sizeof(*path_trace);
+      rc = emit(path_trace + index, n * sizeof(*path_trace), arg);
       at += n;
     }
   }
