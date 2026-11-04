@@ -30,6 +30,13 @@ kind = "source"
 reference = "scripts/check-boot-watchdog-policy.py"
 result = "The opt-in sheng-lite=2 launch policy writes the lite profile plus a disabled key for com.apple.iconservices.iconservicesagent. Removing that key from the resulting plist reproduces the original profile bytes, including the camera and watchdog jobs."
 
+[[area.evidence]]
+kind = "device"
+reference = "reports/ipados27-touch-frame-gaps.md"
+command = "fastboot boot sch4.img"
+revision = "fe636ce2c24b5f5ef406e2dc70504d2573f00092"
+result = "Boot 50d4021e7 with sheng-lite=2 recorded no iconservicesagent PID or associated main-thread wait. Settings opened. All app icon artwork was missing from the photographed Home Screen and Dock. The continuous-HID flip median changed from 15.358 to 9.631 ms and P99 from 43.232 to 46.384 ms."
+
 [[area]]
 id = "firmware"
 status = "implemented"

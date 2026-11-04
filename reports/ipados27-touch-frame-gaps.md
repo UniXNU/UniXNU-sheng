@@ -1,12 +1,13 @@
 # Touch and frame timing on sheng
 
-Tests used iPadOS 27.0.1 build 24A446 on a Xiaomi Pad 6S Pro. The three images were started with `fastboot boot`. The hardware tests did not qualify App Switcher gestures or keyboard flicks.
+Tests used iPadOS 27.0.1 build 24A446 on a Xiaomi Pad 6S Pro. The four images were started with `fastboot boot`. The hardware tests did not qualify App Switcher gestures or keyboard flicks.
 
 | Run | Board revision | Boot image SHA-256 | Observation |
 | --- | --- | --- | --- |
 | sch1, boot 532856a9 | `8fcf9a4e0f3c5a23a820f85fd25189e2c7e83f87` | `445f10c4c6a257f48551b267b9c0d740c17150f3ca5a2e2a51db24cfd1ca2a94` | The tester reported limited improvement and an idle desktop freeze. The panic flush recorded state 5. |
 | sch2, boot 5cfa7b18a | `8ec842f38c21ef1d73e12000fae16df7442e0c73` | `15ff435d078f17bdad4bda870b6a85b268b5284217c93a05e227d3b785be27a9` | Both App Switcher gestures still failed and keyboard flicks recurred. The desktop responded before a manual reboot. |
 | sch3, boot da1dbd496 | `948a8b8` (profile code) | `060d6c256f1acc18af5d54d40762cdcddf398fc370ae8df45029002f87d9c776` | The tester reached the desktop and exercised it. A complete 240-second diagnostic snapshot was recovered at log uptime 276 seconds. The reader returned the tablet to fastboot. |
+| sch4, boot 50d4021e7 | `fe636ce` (launch policy) | `3f42a416c4f9a6a5fe123c65eafe93e8660ba014c6927f416d0e14bcfde21ea4` | The tester could open Settings. All app icon artwork on the photographed Home Screen and Dock was missing. |
 
 ## Sampling boundaries
 
@@ -94,6 +95,30 @@ The board read two architectural PMU events on 6,679 exact samples. One sample o
 Across the five busy long flips, both performance domains requested their maximum allowed frequencies in all 82 governor windows. The one continuously HID-covered case spanned 131.501 ms, with 15 reports and SpringBoard main-thread CPU share 74.3%. All eight governor windows read 2,707 / 2,956 MHz. The main thread spent about 31.0 ms in undirected Mach receives, 4.58 ms in receives directed to runningboardd and 0.28 ms in receives directed to backboardd. Six uninterrupted PMU intervals gave 0.761 instructions per cycle.
 
 The five long flips contained 171 exact SpringBoard samples, compared with 523 in similarly busy short flips. `objc_msgSend` was the interrupted instruction's function in 29/171 versus 69/523. The stack included `+[UIView(Animation) performWithoutAnimation:]` in 10/171 versus 1/523 and `-[SBIconListView configureIconView:forIcon:]` in 5/171 versus 0/523. Function hits overlap and give no exclusive elapsed time. The action boundaries were not marked on the device. The GPU and touch binaries match sch2, but this workload and sampler configuration differ from the earlier touch tests.
+
+## Disabling iconservicesagent on sch4
+
+Both boots used the same tablet, OS, 240-second export and SpringBoard sampling configuration. The tester repeated Home Screen page switches, opening Settings and returning home, and opening and closing App Library. The on-device process samples identify Settings (Preferences) on both boots. Image verification confirmed the same GPU addon and Novatek object. The boot line changed only the build tag and `sheng-lite=1` to `sheng-lite=2`. Comparing the two generated launchd plists byte for byte after removing the extra key verified that only `com.apple.iconservices.iconservicesagent` was added to the disabled set. Sch4 completed startup, which checks for a successful policy write before starting launchd.
+
+| Metric | sch3, enabled | sch4, disabled |
+| --- | ---: | ---: |
+| Distinct iconservicesagent PIDs observed / distinct PIDs exiting on SIGSEGV | 6 / 5 | 0 / 0 |
+| Longest observed synchronous wait attributed to iconservicesagent | 4,644.428 ms | None observed |
+| Longest directed receive from backboardd / median | 358.180 / 0.363 ms | 18.580 / 0.364 ms |
+| HID reports | 2,345 | 2,118 |
+| Flip intervals with at least one HID report | 1,214 | 1,242 |
+| Over 50 ms among those intervals | 27 (2.22%) | 36 (2.90%) |
+| Median / P99 for those intervals | 15.947 / 90.789 ms | 9.972 / 93.446 ms |
+| Median / P95 / P99 under continuous HID coverage | 15.358 / 28.067 / 43.232 ms | 9.631 / 28.006 / 46.384 ms |
+| Maximum under continuous coverage | 131.501 ms | 75.483 ms |
+| At least 100 ms under continuous coverage | 1 / 1,138 | 0 / 1,163 |
+| Full-screen-width GPU pass P95 | 4.819 ms | 4.461 ms |
+| User instructions per cycle during busy long flips (eligible pairs) | 0.714 (78) | 0.732 (20) |
+| HID report interval, median / P99 | 8.331 / 8.531 ms | 8.333 / 8.535 ms |
+
+Sch3's longest flip with HID activity was 4.583 s, including 4.444 s of the synchronous wait linked to iconservicesagent. The longest such sch4 interval was 2.511 s. Its first HID report arrived 2.480 s into the interval and SpringBoard spent 2.486 s in undirected Mach receives. The largest sch4 synchronous receive with a resolved user destination was the 18.580 ms backboardd call.
+
+The 216,848 sch4 latency records were retained with zero reported drops or overwrites. The icon service wait and its crash loop did not recur in the captured workload. The tester's photograph shows that every app position on the visible Home Screen page and Dock lacked its normal icon artwork. The tile backgrounds, app names and Dock remained visible, and the tester could still open Settings. Each condition was measured once with human input, and disabling the service removed visible rendering work. The lower median coexisted with a higher P99 and a higher share above 50 ms.
 
 ## Idle desktop panic
 
