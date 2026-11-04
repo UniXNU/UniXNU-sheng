@@ -55,5 +55,44 @@ address to bdaddr_t order. Protocol simulation and target source compilation
 pass. The executable/library mount patch applies and kern_exec.c compiles for
 arm64e iPadOS 27. Normal traffic stays in UART.SK and the native stack.
 
-Component registration, the full kernel/image rebuild and device scanning,
-pairing, audio and power verification are pending.
+## Complete image
+
+The local build uses UniXNU `f3c3092156d0410b0976a4d3e1202388ca1e719a`,
+board `8f2af527c7204b07535b9e015a53c05d8029c0ee`,
+SM8550 `1ebec150cd2d8f7bb7fe9d75c72c00479a791750` and
+QcaBluetooth `442ea7da0004c6265f325c676f69eb315e6cc720`.
+The board startup entry has C linkage. Archive validation covers the Bluetooth
+board, core, shim and SoC source dependencies. Clock-restore failures terminate
+all three wake paths with the original hardware error and stop forwarding and
+retries. The protocol sanitizer check and target compile pass.
+
+The complete native kernel links all nine checked Bluetooth exports. Fileset
+prelink passes the existing regression policy. The 176 MiB FAT payload and
+185733120-byte temporary boot image build successfully. Boot-image unpacking
+matches its firmware, DTB and payload inputs. SHA-256:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Prelinked kernel | `0439e3b2d6d96c69ab7307cf574c636b948b5ee040425f3c2d4ba9b8fece1c52` |
+| FAT payload | `4b4cda53eb0cd30fc9fced41b40712b8a8d29b204005c3c0d2638e3ab3de071b` |
+| Temporary boot image | `d94ce87446e5942f72762b2df9417cd1f66240ff124a1382104f4deac734cf4d` |
+
+Direct FAT extraction verifies six files against their build hashes, the signed
+runtime/trust inputs, preserved Data seed, H4/3.2 Mbaud properties and the enabled
+Bluetooth boot argument. The payload kernel retains all nine exports. The panic
+screen is enabled and the entry probe has no automatic reset.
+
+From the UniXNU checkout, use the installation's preserved local inputs:
+
+```sh
+./unixnu build kernel payload -D ../UniXNU-sheng --os 27 \
+  --config /path/to/installation-inputs.toml \
+  --local-module driver:QcaBluetooth=/path/to/QcaBluetooth
+./unixnu bootimg -D ../UniXNU-sheng --os 27 \
+  --config /path/to/installation-inputs.toml --dtb /path/to/sheng.dtb \
+  --ramdisk /path/to/payload.img -o /path/to/boot-bluetooth.img
+```
+
+The build uses the explicit local component before catalog publication. Device
+scanning, pairing, reconnection, BLE, audio, idle power and Wi-Fi coexistence
+measurements are pending.
