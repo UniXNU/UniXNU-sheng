@@ -172,6 +172,13 @@ command = "cd ../UniXNU && python3 scripts/build-sheng-source-drivers.py --tree 
 revision = "2ab05c11ae80e8b59dac2d312f627e78cacc0fca"
 result = "Source-interface compile audit with uncommitted workspace changes; source and object hashes are recorded. Link/runtime/edge qualification remain false. Historical device results in this area apply to iOS 17."
 
+[[area.evidence]]
+kind = "device"
+reference = "package/TouchProbe.cpp"
+command = "fastboot boot sch1.img"
+revision = "8fcf9a4e0f3c5a23a820f85fd25189e2c7e83f87"
+result = "The tester reached the home screen and reported limited improvement in bottom-edge swipes, four/five-finger switching and rapid typing. The capture retained 6195 HID report timestamps. sheng-tlog=1 captures relative contact paths for the next comparison."
+
 [[area]]
 id = "gpu"
 status = "implemented"

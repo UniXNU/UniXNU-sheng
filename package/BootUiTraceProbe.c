@@ -5,6 +5,7 @@
 #include <kern/thread.h>
 #include <kern/simple_lock.h>
 #include <kern/clock.h>
+#include <pexpert/pexpert.h>
 #include <kern/misc_protos.h>
 #include <machine/machine_routines.h>
 #include <arm/thread.h>
@@ -531,6 +532,7 @@ extern uint64_t native_gpu_role_thread(uint32_t,uint32_t) __attribute__((weak_im
 struct cs_ipi {thread_t target;uint64_t pc,lr,fp;volatile uint32_t done,user;};
 static struct cs_ipi cs_ipi_req;
 static volatile bool cs_ipi_busy;
+static unsigned cs_exact_enabled = 1;
 static void cs_ipi_handler(void *arg) {
  struct cs_ipi *q=(struct cs_ipi *)arg;
  arm_saved_state_t *s=(arm_saved_state_t *)getCpuDatap()->cpu_int_state;
@@ -593,7 +595,7 @@ static void cs_sample(unsigned slot,unsigned role) {
  }
  task_unlock(task);
  r.abs=mach_absolute_time();r.pid=cs_pid[slot];r.peer=-1;
- const bool exact=running_cpu>=0 && cs_exact(thread,running_cpu,&e);
+ const bool exact=cs_exact_enabled && running_cpu>=0 && cs_exact(thread,running_cpu,&e);
  if(exact){got=true;r.peer=-2;}
  if(got) {
   r.frames[0]=e.pc;r.frames[1]=e.lr;
@@ -768,6 +770,7 @@ static void cs_thread(void *arg,wait_result_t result) {
 }
 void boot_client_sampler_start(void) {
  if(__atomic_exchange_n(&cs_started,1,__ATOMIC_ACQUIRE))return;
+ PE_parse_boot_argn("cs-exact",&cs_exact_enabled,sizeof(cs_exact_enabled));
  struct cs_rec *ring=(struct cs_rec *)IOMallocAligned(sizeof(struct cs_rec)*CS_RING,4096);
  if(!ring)return;
  memset(ring,0,sizeof(struct cs_rec)*CS_RING);
