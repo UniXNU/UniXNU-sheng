@@ -140,6 +140,14 @@ The final sch1 panic recorded `turnstile.c:1470` and `thread->inheritor == TURNS
 
 Sch2 schedules CP preemption completion on a serialized thread call. Disassembly of the linked image confirms that the hard handler queues the call and only the worker calls the original preemption routine. The tester manually rebooted a responsive desktop at log time 360 seconds. The exact-stack sampler was disabled for this comparison. The run does not establish long-duration stability.
 
+## Lock-screen sampler panic on ico4
+
+On boot `6ba5a54e` the tester locked sheng and later photographed a kernel data-pointer authentication fault. The last periodic log write was at 2,286 seconds of uptime. The 240-second export identifies the kernel symbol anchor. Mapping the screen’s PC to the exact kernel collection places it at `cs_wait_task + 0x528`, in `bt_kernel_stack` sampling a backboardd thread. The saved thread state was `TH_WAIT | TH_RUN`. The stack base was nonzero, the saved kernel-state pointer was null, and execution trapped on `autda x16, x17` before loading the frame pointer.
+
+The fix in `571fcc9` admits a waiting, non-runnable, non-terminating thread under its scheduler lock. It checks that the saved state and each frame fit in the owned stack. The regression exercises the faulting transition, a missing or partial saved state, an overflowing frame address and a valid chain. The packaged arm64e kernel branches past pointer authentication on both the state check and a null saved-state pointer.
+
+The fixed image (SHA-256 `c2f67213c102d8c95f3249eacd3a0a573bf859f08bf876c26c7e90bfb5973a1d`) retains the ico4 boot arguments, icon configuration and GPU addon. Fastboot accepted the image and boot command. Long-duration locked operation was not tested.
+
 ## Outstanding observations
 
 Trace the null CoreImage program state during iconservicesagent restart. Separately, identify digitizer child events at dispatch and receipt in backboardd and SpringBoard. The bottom-edge classification and the keyboard decision both occur above the recorded contact stream. Pair the actual CoreAnimation display-link callbacks with SpringBoard commits and backboardd submissions to distinguish late wakeups from late production. The two captures do not establish one cause for every frame gap.
