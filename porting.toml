@@ -403,6 +403,11 @@ reference = "scripts/read-sheng-log.py"
 result = "Implementation and configuration described in this section"
 
 
+[[area.evidence]]
+kind = "source"
+reference = "package/BootUiTraceProbe.c"
+result = "CLI1 header flag 1 identifies exact user-mode samples with the interrupting CPU ID in the wait field. The target CPU records its own timestamp, PC, LR and FP. CPF1 records the policy vote and EPSS domain state per governor window."
+
 [[area]]
 id = "arm64e-os"
 status = "planned"
