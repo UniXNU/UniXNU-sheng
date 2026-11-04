@@ -354,7 +354,7 @@ void worker(void *,wait_result_t) {
     }
 }
 }
-void sheng_bluetooth_probe(void) {
+extern "C" void sheng_bluetooth_probe(void) {
     unsigned enabled=0;
     if(!PE_parse_boot_argn("sheng-bluetooth",&enabled,sizeof(enabled)) || !enabled)return;
     uint32_t expected=0;if(!__atomic_compare_exchange_n(&bt.started,&expected,1u,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE))return;
