@@ -13,11 +13,14 @@ parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('output',type=Path)
 parser.add_argument('target',choices=('ios27',))
 parser.add_argument('--os-root',type=Path,required=True)
+parser.add_argument('--component',type=Path,help='resolved QcaBluetooth checkout')
 parser.add_argument('--firmware-source',type=Path,default=root/'.cache/firmware/qca')
 args=parser.parse_args()
 out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
 (out/'report.json').unlink(missing_ok=True)
-component=Path(os.environ.get('QCA_BLUETOOTH_DIR',root/'drivers/QcaBluetooth')).resolve()
+component=(args.component or Path(os.environ.get('QCA_BLUETOOTH_DIR',root/'drivers/QcaBluetooth'))).resolve()
+if not (component/'include/qbt.h').is_file():
+    parser.error('QcaBluetooth module directory missing: '+str(component))
 userland=out/'userland'
 subprocess.run([sys.executable,component/'tools/build-userland.py',userland,
                 '--bluetoothd',args.os_root/'usr/sbin/bluetoothd'],check=True)

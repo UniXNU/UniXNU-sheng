@@ -477,7 +477,8 @@ KITS = ROOT / 'kits/sheng'
 # As on iPadOS 17, ATH12K_WIFI_DIR names a checkout whose deps/linux holds the driver sources.
 WIFI = Path(os.environ.get('ATH12K_WIFI_DIR') or DEVICE / 'drivers/Ath12kWifi')
 require((WIFI / 'include/nw_abi.h').exists(), 'Ath12kWifi module directory')
-BLUETOOTH = Path(os.environ.get('QCA_BLUETOOTH_DIR') or DEVICE / 'drivers/QcaBluetooth')
+BLUETOOTH = Path(os.environ.get('QCA_BLUETOOTH_DIR') or
+                 (ROOT / 'drivers/QcaBluetooth' if (ROOT / 'drivers/QcaBluetooth').is_dir() else DEVICE / 'drivers/QcaBluetooth'))
 require((BLUETOOTH / 'include/qbt.h').exists(), 'QcaBluetooth module directory')
 board_objects = []
 for stem, extra in [('CpuFreqProbe', ()), ('WifiProbe', ('-I', str(WIFI / 'include'))),
