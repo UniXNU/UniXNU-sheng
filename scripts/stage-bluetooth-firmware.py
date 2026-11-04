@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import os
+import tempfile
 import urllib.request
 
 root = Path(__file__).resolve().parents[1]
@@ -21,14 +23,25 @@ for name, expected in manifest['files'].items():
     if not re.fullmatch(r'hmtbtfw[0-9a-f]{2}\.tlv|hmtnv[0-9a-f]{2}\.(bin|b[0-9a-f]{2,4})', name):
         raise SystemExit('Unsupported Bluetooth firmware name: '+name)
     source = a.source/name
+    fetched = False
     if not source.exists() and a.fetch:
         url = manifest['repository'].replace('github.com', 'raw.githubusercontent.com')+'/'+manifest['commit']+'/qca/'+name
         with urllib.request.urlopen(url, timeout=30) as response:
             data = response.read()
+        fetched = True
     else:
         data = source.read_bytes()
     if len(data) != expected['bytes'] or hashlib.sha256(data).hexdigest() != expected['sha256']:
         raise SystemExit('Bluetooth firmware identity mismatch: '+name)
+    if fetched:
+        source.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=source.parent, prefix=name+'.', delete=False) as cache:
+            temporary = Path(cache.name)
+            cache.write(data)
+        try:
+            os.replace(temporary, source)
+        finally:
+            temporary.unlink(missing_ok=True)
     staged[name] = data
 destination = a.output.resolve()/prefix
 destination.mkdir(parents=True, exist_ok=True)
