@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory() as td:
     with (root / 'board.toml').open('rb') as stream:
         overrides = tomllib.load(stream)['payload']['runtime']['launchd_job_environment']
     icon_label = 'com.apple.iconservices.iconservicesagent'
-    assert overrides == {icon_label: {'FORCE_SOFTWARE_RENDERER': '1', 'CI_ENABLE_METAL_GPU': '0'}}
+    assert overrides == {icon_label: {'FORCE_SOFTWARE_RENDERER': '0', 'CI_ENABLE_METAL_GPU': '0'}}
     profile_cache = work / 'icon.plist'
     module.merge_launchd_cache(source, daemons, profile_cache, overrides)
     profile = plistlib.loads(profile_cache.read_bytes())

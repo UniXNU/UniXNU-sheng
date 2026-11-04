@@ -40,7 +40,14 @@ result = "Boot 50d4021e7 with sheng-lite=2 recorded no iconservicesagent PID or 
 [[area.evidence]]
 kind = "source"
 reference = "board.toml"
-result = "For iPadOS 27.0.1 build 24A446 the runtime launchd cache configures only com.apple.iconservices.iconservicesagent with FORCE_SOFTWARE_RENDERER=1 and CI_ENABLE_METAL_GPU=0. The agent retains its original executable, Mach service, user and on-demand launch rules."
+result = "For iPadOS 27.0.1 build 24A446 the runtime launchd cache configures only com.apple.iconservices.iconservicesagent with FORCE_SOFTWARE_RENDERER=0 and CI_ENABLE_METAL_GPU=0. The agent retains its original executable, Mach service, user and on-demand launch rules."
+
+[[area.evidence]]
+kind = "device"
+reference = "reports/ipados27-touch-frame-gaps.md"
+command = "fastboot boot ico4.img"
+result = "On 24A446 boot 41dcdcce, iconservicesagent PID 168 obtained the Adreno 740 Metal device and created a command queue. Eight completed command buffers contained 149 draws. The kernel recorded 495 paired submissions and retirements with zero replays. No fault or exit of that agent was recorded through the 240-second export."
+
 
 [[area]]
 id = "firmware"
