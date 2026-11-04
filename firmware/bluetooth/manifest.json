@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/ianchb/sheng-firmware",
+  "commit": "053da477a5c338ac28d7c1c869e8c3ff7ca24d11",
+  "files": {
+    "hmtbtfw20.tlv": {
+      "bytes": 231484,
+      "sha256": "e757354efe4af4260b47ca98da9023e8d90120f3652e836dfb2b72c5d9fb2720"
+    },
+    "hmtnv20.bin": {
+      "bytes": 9036,
+      "sha256": "8c54ce84da45b71d8d5ec4063cd3d508a4083e0dd0dfb9e11fb7baed383a51e4"
+    }
+  }
+}
