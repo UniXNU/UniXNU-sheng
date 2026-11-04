@@ -84,6 +84,7 @@ extern "C" IOReturn NativeAdrenoGmuContextBringup(volatile uint8_t *smmu, size_t
 #include <libkern/c++/OSSymbol.h>
 #include <mach/kmod.h>
 #include <kern/clock.h>
+#include <kern/thread_call.h>
 #include <mach/mach_time.h>
 extern "C" ShengGmuStatus ShengGmuColdStart(ShengGmuDevice *, const ShengGmuConfig *, const AdrenoHfiStartupConfig *,
     const ShengGmuStartupLimits *, ShengGmuStartupResult *) __attribute__((weak));
@@ -697,6 +698,10 @@ IOReturn armcpu_spi_attach(uint32_t intid, bool edge, void (*handler)(void *), v
 extern volatile uint64_t armcpu_spi_unhandled __attribute__((weak));
 }
 volatile uint32_t gIrqLast, gIrqSeen, gIrqEmpty;
+static thread_call_t gPreemptCall;
+static void finishPreemption(thread_call_param_t, thread_call_param_t) {
+    (void)native_adreno_preempt_irq();
+}
 void gpuIrq(void *) {
     // a6xx_irq: read RBBM_INT_0_STATUS and clear it through RBBM_INT_CLEAR_CMD before anything else, so the level line drops
     // before the EOI. A storm (a line with no source to clear) masks the GPU interrupts instead of hanging the boot CPU; the
@@ -713,7 +718,9 @@ void gpuIrq(void *) {
     if (status & (1u << 8)) {
         native_gpu_preempt[1] = native_gpu_preempt[1] + 1;   // CP_SW interrupts seen, whether or not a switch was in flight
         native_gpu_preempt[2] = status;
-        if (&native_adreno_preempt_irq) (void)native_adreno_preempt_irq();
+        // Completing a switch takes the submission mutex. Even its unlock can
+        // wake a waiter and use the interrupted thread's turnstile state.
+        if (gPreemptCall) thread_call_enter(gPreemptCall);
     }
     thread_wakeup(event_t(&gIrqCount));
 }
@@ -750,6 +757,9 @@ void irqAndTimer() {
     // set, so a working line fires as soon as it is enabled; one more fence (CP_NOP) must fire it again.
     uint32_t readback = 0;
     uint64_t router = ~0ull;
+    if (&native_adreno_preempt_irq && !gPreemptCall)
+        gPreemptCall = thread_call_allocate_with_options(finishPreemption, nullptr,
+            THREAD_CALL_PRIORITY_HIGH, THREAD_CALL_OPTIONS_ONCE);
     q[0] = armcpu_spi_attach ? uint32_t(armcpu_spi_attach(332, false, gpuIrq, nullptr, &readback, &router)) : 0xdead;
     gIrqAttached = q[0] == 0;
     q[1] = readback;
