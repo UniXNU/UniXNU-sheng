@@ -114,6 +114,7 @@ extern volatile uint32_t native_adreno_export_stats[4] __attribute__((weak_impor
 extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import));
 extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
 extern volatile uint32_t native_wifi_stats[29] __attribute__((weak_import));
+extern volatile uint64_t native_bluetooth_stats[32] __attribute__((weak_import));
 extern volatile uint32_t native_wifi_dump[108] __attribute__((weak_import));
 extern volatile uint32_t native_wifi_pmic[472] __attribute__((weak_import));
 extern volatile uint32_t native_wifi_ep[16] __attribute__((weak_import));
@@ -992,6 +993,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     snprintf(row, sizeof row, "[export] pieces=%u refused=%u generation=%u bytes=%u | complete generation=%u bytes=%u", native_adreno_export_stats[0],
              native_adreno_export_stats[1], native_adreno_export_stats[2], native_adreno_export_stats[3], export_ready, export_ready_bytes);
     at = put(out, at, cap, row, sizeof row);
+  }
+  if (&native_bluetooth_stats && (native_bluetooth_stats[0] || native_bluetooth_stats[14])) {
+    const volatile uint64_t *b=native_bluetooth_stats;char row[300];
+    snprintf(row,sizeof row,"[bluetooth] state=%llu error=%lld phase=%llu baud=%llu tx=%llu rx=%llu irq=%llu timeout=%llu sleep=%llu smmu=%llu/%llu fsr=%llx fw=%llx qup=%llx votes=%llx soc=%llx rompatch=%llx power=%llx owners=%llx",
+        b[0],(long long)b[1],b[14],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13],b[18],b[19],b[20],b[21]);
+    at=put(out,at,cap,row,sizeof row);
   }
   // WiFi bring-up (WifiProbe.cpp): stage, GCC votes, PCIe0 GDSC, halted branches, WLAN_EN/SW_CTRL/PERST# pins, LTSSM, root port ID, link.
   if (&native_wifi_stats && native_wifi_stats[0]) {

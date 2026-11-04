@@ -477,8 +477,12 @@ KITS = ROOT / 'kits/sheng'
 # As on iPadOS 17, ATH12K_WIFI_DIR names a checkout whose deps/linux holds the driver sources.
 WIFI = Path(os.environ.get('ATH12K_WIFI_DIR') or DEVICE / 'drivers/Ath12kWifi')
 require((WIFI / 'include/nw_abi.h').exists(), 'Ath12kWifi module directory')
+BLUETOOTH = Path(os.environ.get('QCA_BLUETOOTH_DIR') or DEVICE / 'drivers/QcaBluetooth')
+require((BLUETOOTH / 'include/qbt.h').exists(), 'QcaBluetooth module directory')
 board_objects = []
-for stem, extra in [('CpuFreqProbe', ()), ('WifiProbe', ('-I', str(WIFI / 'include'))), ('AdspProbe', ()), ('AudioProbe', ()),
+for stem, extra in [('CpuFreqProbe', ()), ('WifiProbe', ('-I', str(WIFI / 'include'))),
+                    ('BluetoothProbe', ('-I', str(BLUETOOTH / 'include'), '-I', str(ROOT / 'kits/Sm8550Platform'))),
+                    ('AdspProbe', ()), ('AudioProbe', ()),
                     ('BacklightProbe', ()), ('DisplayTimingProbe', ()), ('BatteryProbe', ()),
                     # GPU power, GMU and the Metal accelerator publication (sheng-gpu-power, sheng-gpu-metal), as on iPadOS 17.
                     ('GpuPowerProbe', tuple(x for d in ('drivers/Adreno740', 'kits/ArmSmmu4K', 'kits/AdrenoFirmware', 'kits/AdrenoPM4',
@@ -499,6 +503,8 @@ compile_c(KITS / 'AdspFirmware.c', board_dir / 'AdspFirmware.o', 'bsd/DEVELOPMEN
 board_objects.append(board_dir / 'AdspFirmware.o')
 board_objects += [Path(line.split(' ', 1)[1]) for line in run(['python3', ROOT / 'scripts/build-ath12k-wifi.py', WIFI, board_dir / 'ath12k-wifi'],
                                                                     text=True).splitlines() if line.startswith('OBJ ')]
+board_objects += [Path(line.split(' ', 1)[1]) for line in run(['python3', ROOT / 'scripts/build-qca-bluetooth.py', BLUETOOTH,
+    board_dir / 'qca-bluetooth', '--tree', ROOT], text=True).splitlines() if line.startswith('OBJ ')]
 input_objects += board_objects
 print(f'Board drivers: {len(board_objects)} objects')
 archive = OUT / 'libNativeLegacyDisplay.late.a'
