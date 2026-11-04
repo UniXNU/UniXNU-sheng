@@ -441,6 +441,11 @@ result = "CLI1 header flag 1 identifies exact user-mode samples with the interru
 
 [[area.evidence]]
 kind = "source"
+reference = "scripts/check-boot-ui-trace.py"
+result = "The shared sampler retains the three expected return addresses for a blocked thread. The regression covers the TH_WAIT | TH_RUN transition observed in boot 6ba5a54e, terminating threads, missing or out-of-stack saved state and a wrapping frame address."
+
+[[area.evidence]]
+kind = "source"
 reference = "scripts/sheng-springboard-profile.py"
 result = "With cs-profile=1 the sheng sampler limits exact cross-calls to the SpringBoard main thread. The trace records directed Mach receive timing, optional Arm PMUv3 EL0 instructions and cycles, per-core availability and sampler elapsed time. A hardware report must establish which counters actually count."
 
