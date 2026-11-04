@@ -50,10 +50,18 @@ volatile uint32_t native_cpufreq_boosts;
 volatile uint32_t native_cpufreq_frame[2];
 // Mode 4, per domain: busy windows (busiest CPU >= 50 %), throttled ones among them, lowest domain state (MHz) in a throttled one
 volatile uint32_t native_cpufreq_throttle[9];
+// Mode 4, one record per 16 ms window while the diagnostic export holds a ring (BootDiagExport.c kernel.cpufreq.bin): the window's end
+// (mach units), per domain the voted and the running frequency (MHz, the domain state register) and the busiest CPU's busy share (per
+// mille), and flags (1 touch boost, 2 frame floor). native_cpufreq_count counts every record; the ring keeps the last CpuFreqRing.
+struct native_cpufreq_rec {uint64_t abs; uint16_t vote_mhz[3], state_mhz[3], busy_pm[3]; uint16_t flags; uint32_t reserved;};
+struct native_cpufreq_rec *native_cpufreq_ring;
+volatile uint32_t native_cpufreq_count;
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
 extern volatile uint32_t native_hid_input_events[8] __attribute__((weak_import));
 uint64_t sheng_cpu_idle_mach(int cpu);
 }
+static_assert(sizeof(native_cpufreq_rec) == 32, "cpufreq record");
+enum {kCpuFreqRing = 32768};   // BootDiagExport.c CpuFreqRing
 
 namespace {
 constexpr uint64_t kDomainBase[3] = {0x17d91000, 0x17d92000, 0x17d93000};
@@ -243,6 +251,9 @@ void governorThread(void *, wait_result_t) {
         uint64_t ns = 0;
         absolutetime_to_nanoseconds(dt, &ns);
         winNs += ns;
+        native_cpufreq_rec rec = {};
+        rec.abs = t;
+        rec.flags = (boost ? 1 : 0) | (framing ? 2 : 0);
         IOLockLock(gLock);
         for (unsigned d = 0; d < 3; ++d) {
             Window &w = gDomain[d];
@@ -288,8 +299,15 @@ void governorThread(void *, wait_result_t) {
             }
             khzNs[d] += (uint64_t)l.khz[cur[d]] / 1000 * ns;
             busyNs[d] += busy[d] * ns / 10;
+            rec.vote_mhz[d] = (uint16_t)(l.khz[cur[d]] / 1000);
+            rec.state_mhz[d] = (uint16_t)((rd32(w.va, kRegDomainState) & 0xff) * kXoKHz / 1000);
+            rec.busy_pm[d] = (uint16_t)busy[d];
         }
         IOLockUnlock(gLock);
+        if (native_cpufreq_rec *ring = native_cpufreq_ring) {
+            const uint32_t n = __atomic_fetch_add(&native_cpufreq_count, 1u, __ATOMIC_RELAXED);
+            ring[n & (kCpuFreqRing - 1)] = rec;
+        }
         if (winNs >= 10000000000ull) {
             for (unsigned d = 0; d < 3; ++d) {
                 native_cpufreq_gov[d * 3] = changes[d];
