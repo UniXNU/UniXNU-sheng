@@ -75,7 +75,7 @@ wifi_launchd_cache = true
 wifi_bin_prefix = "wifi-bin"
 
 [payload.runtime.launchd_job_environment."com.apple.iconservices.iconservicesagent"]
-FORCE_SOFTWARE_RENDERER = "1"
+FORCE_SOFTWARE_RENDERER = "0"
 CI_ENABLE_METAL_GPU = "0"
 
 ["payload"."install"]
