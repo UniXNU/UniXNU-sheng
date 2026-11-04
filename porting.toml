@@ -74,6 +74,13 @@ kind = "source"
 reference = "dts/sheng.dts"
 result = "Implementation and configuration described in this section"
 
+[[area.evidence]]
+kind = "device"
+reference = "reports/ipados27-touch-frame-gaps.md"
+command = "fastboot boot sch3.img"
+revision = "948a8b8696e56c0ab74a4a1ee22753744ea462e3"
+result = "Boot da1dbd496 recorded 6,680 exact SpringBoard samples with CPU IDs, 6,679 ready Arm PMU readings, 8,485 DVFS windows and main-thread Mach wait durations. The five busy long flips had maximum votes in all 82 governor windows. A synchronous XPC wait involving iconservicesagent overlapped 4.444 seconds of a flip gap."
+
 [[area]]
 id = "memory"
 status = "implemented"
