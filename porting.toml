@@ -179,6 +179,13 @@ command = "fastboot boot sch1.img"
 revision = "8fcf9a4e0f3c5a23a820f85fd25189e2c7e83f87"
 result = "The tester reached the home screen and reported limited improvement in bottom-edge swipes, four/five-finger switching and rapid typing. The capture retained 6195 HID report timestamps. sheng-tlog=1 captures relative contact paths for the next comparison."
 
+[[area.evidence]]
+kind = "device"
+reference = "reports/ipados27-touch-frame-gaps.md"
+command = "fastboot boot sch2.img"
+revision = "8ec842f38c21ef1d73e12000fae16df7442e0c73"
+result = "Boot 5cfa7b18a retained separate five-finger tracks through a measured 250 ms pause and successful releases for all 57 rapid typing contacts. The tester reported zero successful App Switcher attempts and recurrent flicks. Consumer delivery remains unmeasured."
+
 [[area]]
 id = "gpu"
 status = "implemented"
@@ -205,6 +212,13 @@ reference = "package/GpuPowerProbe.cpp"
 command = "fastboot boot sch1.img"
 revision = "8fcf9a4e0f3c5a23a820f85fd25189e2c7e83f87"
 result = "iPadOS 27 build 24A446, capture 532856a9, panicked while idle on the home screen. The interrupted stack reached lck_mtx_unlock_contended from native_adreno_preempt_irq via gpuIrq. The board now queues preemption completion on a serialized thread call."
+
+[[area.evidence]]
+kind = "device"
+reference = "reports/ipados27-touch-frame-gaps.md"
+command = "fastboot boot sch2.img"
+revision = "8ec842f38c21ef1d73e12000fae16df7442e0c73"
+result = "The desktop remained responsive until manual reboot at log time 360 seconds with CP preemption completion deferred and cross-core stack sampling disabled. The first run panic did not reproduce during this observation."
 
 [[area]]
 id = "network"
