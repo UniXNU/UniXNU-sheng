@@ -22,6 +22,7 @@
 #include <kern/thread.h>
 #include <kern/clock.h>
 #include <pexpert/pexpert.h>
+#include "AppsSmmuLock.h"
 #include <string.h>
 extern "C" {
 #include "ShengAdsp.h"
@@ -41,6 +42,7 @@ extern "C" {
 extern kmod_info_t g_kernel_kmod_info;
 extern "C" void native_audio_service_static_init(void) __asm__("__GLOBAL__sub_I_ShengAudioService.cpp");
 extern "C" void sheng_audio_service_start(void);
+extern "C" bool sm8550_gcc_update32(volatile uint32_t *,uint32_t,uint32_t) __attribute__((weak_import));
 
 extern "C" ShengAdspChannel *sheng_adsp_channel(const char *, uint32_t, uint32_t, int, const ShengAdspClient *, void *) __attribute__((weak_import));
 extern "C" int sheng_adsp_send(ShengAdspChannel *, const void *, uint32_t) __attribute__((weak_import));
@@ -283,6 +285,8 @@ bool runProgram(unsigned amp, const Cs35Step *steps, unsigned count, Cs35Run &ru
 bool setupSmmu() {
     if (!mapRegion(kSmmu, TB_APPS_SMMU_SIZE, gAudio.smmu)) return false;
     struct smmu_io io = {reinterpret_cast<void *>(gAudio.smmu.va), smmuRd, smmuWr};
+    AppsSmmuLock smmuGuard;
+    if (!smmuGuard.ready()) return false;
     int32_t result = 0;
     for (unsigned i = 0; i < sizeof kStreams / sizeof *kStreams; ++i) {
         struct smmu_plan plan = smmu_plan_bypass(&io, kStreams[i], gAudio.bufferPa, kBufferBytes);
@@ -336,7 +340,9 @@ bool setupClocks() {
     wr32(gAudio.gccVote.va, TB_GCC_GPLL0_ENABLE & 0xfff, rd32(gAudio.gccVote.va, TB_GCC_GPLL0_ENABLE & 0xfff) | 1u);
     for (unsigned i = 0; i < 10000 && !(rd32(gAudio.gccLow.va, TB_GCC_GPLL0_MODE) & (1u << 31)); ++i) IODelay(10);
     wr32(gAudio.gccVote.va, kVote1 & 0xfff, rd32(gAudio.gccVote.va, kVote1 & 0xfff) | kVote1Bits);
-    wr32(gAudio.gccVote.va, kVote2 & 0xfff, rd32(gAudio.gccVote.va, kVote2 & 0xfff) | kVote2Bits);
+    if (sm8550_gcc_update32) {
+        if (!sm8550_gcc_update32(reinterpret_cast<volatile uint32_t *>(gAudio.gccVote.va + (kVote2 & 0xfff)),0,kVote2Bits)) return false;
+    } else wr32(gAudio.gccVote.va, kVote2 & 0xfff, rd32(gAudio.gccVote.va, kVote2 & 0xfff) | kVote2Bits);
     auto halt = [](uint32_t reg) -> uint32_t {
         const uintptr_t page = (reg >> 12) == 0x18 ? gAudio.gcc18.va : (reg >> 12) == 0x1e ? gAudio.gcc1e.va : gAudio.gcc23.va;
         return rd32(page, reg & 0xfff);

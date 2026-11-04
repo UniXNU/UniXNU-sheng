@@ -501,6 +501,7 @@ extern void native_touch_probe(void);
 extern void sheng_cpufreq_probe(void);
 extern void sheng_gpu_power_probe(void);
 extern void sheng_wifi_probe(void);
+extern void sheng_bluetooth_probe(void) __attribute__((weak_import));
 extern void sheng_adsp_probe(void);
 extern void sheng_battery_probe(void);
 extern void sheng_audio_probe(void);
@@ -513,6 +514,7 @@ void native_legacy_display_late_probe(void) {
     sheng_gpu_power_probe();
     native_touch_probe();
     sheng_wifi_probe();
+    if (sheng_bluetooth_probe) sheng_bluetooth_probe();
     sheng_adsp_probe();
     sheng_battery_probe();
     sheng_audio_probe();

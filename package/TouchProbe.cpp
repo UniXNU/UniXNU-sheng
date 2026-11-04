@@ -17,6 +17,7 @@
 #include <mach/mach_time.h>
 #include <IOKit/IOLocks.h>
 #include <pexpert/pexpert.h>
+#include "AppsSmmuLock.h"
 extern "C" {
 #include "GeniSpi.h"
 #include "NvtProtocol.h"
@@ -451,6 +452,8 @@ bool prepareDma(Session &s) {
     cacheRange(virt, 2 * kDmaBytes, 1);
     if (!mapRegion(TB_APPS_SMMU_BASE, TB_APPS_SMMU_SIZE, s.smmu)) {fail(43, -12); return false;}
     mark(s, 43);
+    AppsSmmuLock smmuGuard;
+    if (!smmuGuard.ready()) {fail(43, -12); return false;}
     struct smmu_io io = {reinterpret_cast<void *>(s.smmu.va), smmuRd, smmuWr};
     struct smmu_plan plan = smmu_plan_bypass(&io, TB_QUP_SMMU_SID, s.dmaPhys, 2 * kDmaBytes);
     s.smmuSlot = static_cast<int>(plan.slot); s.smmuBank = static_cast<int>(plan.bank);
@@ -503,6 +506,7 @@ bool configureClock(Session &s, unsigned hz) {
 // target, 3 = the application processor), +0xc INTR_STATUS (bit 0; acknowledged by writing 0, the sm8550 groups set no intr_ack_high). All TLMM
 // pin interrupts share the summary SPI 208 (sm8550.dtsi tlmm interrupts, level high), INTID 240.
 extern "C" int armcpu_spi_attach(uint32_t, bool, void (*)(void *), void *, uint32_t *, uint64_t *) __attribute__((weak_import));
+extern "C" int armcpu_spi_share(uint32_t, void (*)(void *), void *) __attribute__((weak_import));
 extern "C" {volatile uint32_t native_touch_irq_stats[4];}   // [0] 0 not armed, 1 armed, 2 attach failed, [1] interrupts, [2] spurious, [3] attach status
 static volatile uint32_t gTouchIrqEvents;
 static volatile uint32_t *gTouchPin;
@@ -603,8 +607,9 @@ static bool armTouchIrq(Session &s) {
     gTouchPin[0x8 / 4] = cfg;
     gTouchPin[0xc / 4] = 0;
     __asm__ volatile("dsb sy" ::: "memory");
-    if (!armcpu_spi_attach) {native_touch_irq_stats[0] = 2; native_touch_irq_stats[3] = 0xffff; return false;}
-    const int rc = armcpu_spi_attach(32 + 208, false, touchIrq, nullptr, nullptr, nullptr);
+    if (!armcpu_spi_share && !armcpu_spi_attach) {native_touch_irq_stats[0] = 2; native_touch_irq_stats[3] = 0xffff; return false;}
+    const int rc = armcpu_spi_share ? armcpu_spi_share(32 + 208, touchIrq, nullptr) :
+        armcpu_spi_attach(32 + 208, false, touchIrq, nullptr, nullptr, nullptr);
     native_touch_irq_stats[3] = (uint32_t)rc;
     if (rc) {native_touch_irq_stats[0] = 2; return false;}
     gTouchPin[0x8 / 4] = cfg | 1u;   // enable last
