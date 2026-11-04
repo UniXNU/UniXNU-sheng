@@ -192,6 +192,13 @@ command = "python3 scripts/check-native-adreno-scheduling.py"
 revision = "509bd695c4f58dab8d2d005d1b92f5ba85312595"
 result = "Address/undefined-behavior checks pass for ring packets, preemption power sequencing, per-ring tables, queue FIFO, fence-history rollover and CPU-table fallback. Kernel, board, Turnip and Metal bridge builds target arm64e iPadOS 27. Hardware qualification of these changes is pending."
 
+[[area.evidence]]
+kind = "device"
+reference = "package/GpuPowerProbe.cpp"
+command = "fastboot boot sch1.img"
+revision = "8fcf9a4e0f3c5a23a820f85fd25189e2c7e83f87"
+result = "iPadOS 27 build 24A446, capture 532856a9, panicked while idle on the home screen. The interrupted stack reached lck_mtx_unlock_contended from native_adreno_preempt_irq via gpuIrq. The board now queues preemption completion on a serialized thread call."
+
 [[area]]
 id = "network"
 status = "implemented"
