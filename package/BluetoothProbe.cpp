@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 #include <IOKit/IOLib.h>
+#include <IOKit/IOService.h>
+#include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IODeviceTreeSupport.h>
@@ -26,6 +28,7 @@ namespace {
 struct Region {IOMemoryMap *map;volatile uint32_t *va;};
 struct Bluetooth {
     Region gcc,uart,wrapper,tlmm,smmu;
+    IOService *radio;
     IOBufferMemoryDescriptor *dma,*tables;
     struct sm8550_qup_dma domain;
     struct qbt_geni geni;
@@ -163,9 +166,38 @@ bool address() {
     const uint8_t *seed=static_cast<const uint8_t *>(id->getBytesNoCopy());
     bool nonzero=false;
     for(unsigned i=0;i<id->getLength();i++){nonzero|=seed[i]!=0;hash=(hash^seed[i])*0x100000001b3ULL;}
-    if(nonzero){for(unsigned i=0;i<6;i++)bt.address[i]=(uint8_t)(hash>>(i*8));bt.address[0]=(bt.address[0]&0xfe)|2;
-        chosen->setProperty("mac-address-bluetooth0",bt.address,6);}
-    chosen->release();return nonzero;
+    bool published=false;
+    if(nonzero) {
+        for(unsigned i=0;i<6;i++)bt.address[i]=(uint8_t)(hash>>(i*8));
+        bt.address[0]=(bt.address[0]&0xfe)|2;
+        IORegistryEntry *node=IORegistryEntry::fromPath("/arm-io/bluetooth",gIODTPlane);
+        OSData *encoding=node?OSDynamicCast(OSData,node->getProperty("transport-encoding")):nullptr;
+        OSData *speed=node?OSDynamicCast(OSData,node->getProperty("transport-speed")):nullptr;
+        uint32_t wire=0,baud=0;
+        if(encoding && encoding->getLength()==4)memcpy(&wire,encoding->getBytesNoCopy(),4);
+        if(speed && speed->getLength()==4)memcpy(&baud,speed->getBytesNoCopy(),4);
+        if(node && wire==1 && baud==3200000) {
+            published=chosen->setProperty("mac-address-bluetooth0",bt.address,6) &&
+                node->setProperty("local-mac-address",bt.address,6);
+            if(published && !bt.radio) {
+                IOService *radio=new IOService;
+                if(radio && radio->init()) {
+                    radio->setName("bluetooth");
+                    published=radio->setProperty("device_type","bluetooth") &&
+                        radio->setProperty("transport-encoding",encoding) &&
+                        radio->setProperty("transport-speed",speed) &&
+                        radio->setProperty("local-mac-address",bt.address,6);
+                    IOService *provider=IOService::getPlatform();
+                    if(published && provider && radio->attach(provider)) {
+                        bt.radio=radio;radio->registerService();
+                    } else {published=false;radio->release();}
+                } else {published=false;if(radio)radio->release();}
+            }
+        }
+        if(node)node->release();
+    }
+    chosen->release();return published;
+
 }
 int resources() {
     if(bt.resources)return 0;
@@ -327,6 +359,7 @@ void sheng_bluetooth_probe(void) {
     if(!PE_parse_boot_argn("sheng-bluetooth",&enabled,sizeof(enabled)) || !enabled)return;
     uint32_t expected=0;if(!__atomic_compare_exchange_n(&bt.started,&expected,1u,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE))return;
     native_bluetooth_stats[0]=1;
+    if(!address()){native_bluetooth_stats[0]=3;native_bluetooth_stats[1]=(uint64_t)(int64_t)-ENOENT;return;}
     PE_parse_boot_argn("log-bluetooth",&bt.log,sizeof(bt.log));
     thread_t thread=nullptr;
     if(kernel_thread_start(worker,nullptr,&thread)==KERN_SUCCESS)thread_deallocate(thread);

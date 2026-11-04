@@ -14,6 +14,15 @@
         status = "okay";
     };
 
+    bluetooth {
+        device_type = "bluetooth";
+        compatible = "qcom,wcn7850-bt";
+        unixnu,adt-name = "bluetooth";
+        transport-encoding = <1>;
+        transport-speed = <3200000>;
+        status = "okay";
+    };
+
     memory@80000000 {
         device_type = "memory";
         reg = <0 0x80000000 0 0x80000000>;
