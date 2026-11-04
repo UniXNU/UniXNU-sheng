@@ -69,7 +69,15 @@ int main(void){
  /* sheng-lite=1 adds the built-in jobs, with or without other options. */
  reset();enabled=0;lite_arg=1;assert(!run()&&strstr((char*)written_data,"<key>com.apple.photoanalysisd</key><true/>")&&strstr((char*)written_data,"<key>com.apple.identityservicesd</key><true/>")&&!strstr((char*)written_data,"watchdogd")&&written_size<sizeof(written_data));
  reset();lite_arg=1;strcpy(jobs,"com.apple.locationd");assert(!run()&&strstr((char*)written_data,"watchdogd")&&strstr((char*)written_data,"com.apple.eyereliefd"));
- reset();enabled=0;lite_arg=2;assert(!run()&&!opens);
+ /* Compare the complete sch3 and sch4 policy bytes, including the default camera job. */
+ reset();lite_arg=1;strcpy(jobs,"com.apple.cameracaptured");assert(!run());
+ char baseline[sizeof(written_data)];memcpy(baseline,written_data,written_size);baseline[written_size]=0;
+ reset();lite_arg=2;strcpy(jobs,"com.apple.cameracaptured");assert(!run());
+ const char *extra="<key>com.apple.iconservices.iconservicesagent</key><true/>";
+ char *key=strstr((char*)written_data,extra);assert(key);
+ memmove(key,key+strlen(extra),strlen(key+strlen(extra))+1);
+ assert(!strcmp(baseline,(char*)written_data) && !strstr(baseline,extra));
+ reset();enabled=0;lite_arg=3;assert(!run()&&!opens);
  /* sheng-setup=1 removes Setup's completion flags (both files) before the policy, and works without any other option. */
  reset();enabled=0;setup_arg=1;assert(!run()&&unlinks==2&&!strcmp(unlinked[0],"/private/var/mobile/Library/Preferences/com.apple.purplebuddy.plist")&&!strcmp(unlinked[1],"/private/var/mobile/Library/Preferences/com.apple.purplebuddy.notbackedup.plist")&&!opens);
  reset();setup_arg=1;assert(!run()&&unlinks==2&&opens==2);

@@ -28,7 +28,7 @@ static const char lite_jobs[]=
  "com.apple.ndoagent,com.apple.biomesyncd,com.apple.email.maild,com.apple.amsengagementd,com.apple.adid,com.apple.eyereliefd,"
  // Crash or respawn loops seen on hardware (int-176): fairplayd.A2 is KeepAlive and exits at once (22 launches in 6 minutes), passd crashes,
  // obliteration is a data-wipe daemon with nothing to do here. iconservicesagent also dies in CI::GLContext::init, but disabling it leaves
- // the icons missing (seen on hardware), so it stays enabled. coreduetd keeps one thread above 50 % of a core for the whole boot
+ // the icons missing (seen on hardware), so the usual lite policy keeps it enabled. coreduetd keeps one thread above 50 % of a core for the whole boot
  // (the kernel's "burning CPU" report in i480 to i556), holding a big core and the P domain at its top clock.
  "com.apple.fairplayd.A2,com.apple.passd,com.apple.mobile.obliteration,com.apple.coreduetd,"
  // Advice and statistics services with nothing to advise on here (untagged-3f2bd680: PerfPowerServices alone held 1.8 of 7 CPUs while it
@@ -79,7 +79,7 @@ int sheng_boot_watchdog_policy(void *process, uint64_t scratch) {
  int enabled=0,error=0,fd=-1;int32_t result=0;
  PE_parse_boot_argn("sheng-disable-watchdogd",&enabled,sizeof(enabled));
  if(!PE_parse_boot_argn("sheng-disable-jobs",jobs,sizeof(jobs)))jobs[0]=0;jobs[sizeof(jobs)-1]=0;
- int lite=0;PE_parse_boot_argn("sheng-lite",&lite,sizeof(lite));if(lite!=1)lite=0;
+ int lite=0;PE_parse_boot_argn("sheng-lite",&lite,sizeof(lite));if(lite!=1 && lite!=2)lite=0;
  if(enabled!=1)enabled=0;
  for(const char *c=jobs;*c;++c)if(!((*c>='a'&&*c<='z')||(*c>='A'&&*c<='Z')||(*c>='0'&&*c<='9')||*c=='.'||*c=='-'||*c==','))return EINVAL;
  int setup=0,reset=0;
@@ -96,6 +96,10 @@ int sheng_boot_watchdog_policy(void *process, uint64_t scratch) {
  policy[0]=0;strlcat(policy,policy_head,sizeof(policy));
  if(enabled)strlcat(policy,policy_watchdogd,sizeof(policy));
  if(lite)for(const char *c=lite_jobs;*c;) {if((error=append_job(&c)))return error;}
+ if(lite==2) {
+  const char *icon_agent="com.apple.iconservices.iconservicesagent";
+  if((error=append_job(&icon_agent)))return error;
+ }
  for(const char *c=jobs;*c;) {if((error=append_job(&c)))return error;}
  strlcat(policy,policy_tail,sizeof(policy));
  const char *directory="/private/var/db/com.apple.xpc.launchd";
@@ -145,6 +149,7 @@ int sheng_boot_watchdog_policy(void *process, uint64_t scratch) {
   }
  }
  sheng_watchdog_policy_status=error;
+ if(lite==2 && !error)printf("sheng launch policy: disabled com.apple.iconservices.iconservicesagent\n");
  printf("sheng bring-up watchdogd launch policy: %d (hardware watchdog not implemented)\n",error);
  return error;
 }
