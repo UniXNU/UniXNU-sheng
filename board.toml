@@ -74,6 +74,10 @@ wifi_target = "ios27"
 wifi_launchd_cache = true
 wifi_bin_prefix = "wifi-bin"
 
+[payload.runtime.launchd_job_environment."com.apple.iconservices.iconservicesagent"]
+FORCE_SOFTWARE_RENDERER = "1"
+CI_ENABLE_METAL_GPU = "0"
+
 ["payload"."install"]
 "title" = "Install and boot"
 "confirm" = "ERASE all iPadOS user data and install again?"
