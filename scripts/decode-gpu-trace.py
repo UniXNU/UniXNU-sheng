@@ -57,6 +57,11 @@ LATENCY_FIELDS = {
  34: ('capture_budget','normal_total normal_kept critical_total critical_kept unused0 unused1'),
  35: ('unnest','unnest start end pc lr sp'),
  36: ('unnest_kernel','unnest first_depth pc0 pc1 pc2 pc3'),
+ 37: ('springboard_mach_wait','begin_us receive_us end_us kind_and_peer message_id result'),
+ 38: ('springboard_pmu','interrupt_us cpu switches status instructions32 cycles32'),
+ 39: ('springboard_profile','target_tid minimum_wait_us xnu_cpu_counters exact_profile instruction_event cycle_event'),
+ 40: ('springboard_mach_pending','begin_us receive_us observed_us kind_and_peer message_id reserved'),
+ 41: ('springboard_probe_cost','begin_us end_us attempts exact total_ns max_ns'),
 }
 RUNTIME_STAGES = {40:'memory_begin',41:'memory_pool',42:'memory_kib',43:'available_kib',
  44:'allocated',45:'reused',46:'memory_low',47:'memory_high',48:'cached_kib',49:'deferred_kib',

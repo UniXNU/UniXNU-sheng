@@ -408,6 +408,11 @@ kind = "source"
 reference = "package/BootUiTraceProbe.c"
 result = "CLI1 header flag 1 identifies exact user-mode samples with the interrupting CPU ID in the wait field. The target CPU records its own timestamp, PC, LR and FP. CPF1 records the policy vote and EPSS domain state per governor window."
 
+[[area.evidence]]
+kind = "source"
+reference = "scripts/sheng-springboard-profile.py"
+result = "With cs-profile=1 the sheng sampler limits exact cross-calls to the SpringBoard main thread. The trace records directed Mach receive timing, optional Arm PMUv3 EL0 instructions and cycles, per-core availability and sampler elapsed time. A hardware report must establish which counters actually count."
+
 [[area]]
 id = "arm64e-os"
 status = "planned"

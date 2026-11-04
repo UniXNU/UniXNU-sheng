@@ -36,6 +36,64 @@ void boot_latency_record(uint32_t kind,uint64_t a,uint64_t b,uint64_t c,uint64_t
  record_as(kind,(uint32_t)proc_selfpid(),thread_tid(current_thread()),a,b,c,d,e,f);
 }
 int boot_latency_enabled(void) {return __atomic_load_n(&store.slots,__ATOMIC_ACQUIRE)!=NULL;}
+/* The XNU hook runs only on the selected main thread. Track one outstanding
+ * receive per TID. Short calls use clock reads, but do not enter the export. */
+extern uint64_t sheng_sb_wait_tid __attribute__((weak_import));
+extern void (*sheng_sb_wait_hook)(unsigned,uint64_t,unsigned,int,uint32_t) __attribute__((weak_import));
+extern void proc_name(int, char *, int);
+static struct {
+ uint64_t tid, start, receive;
+ int peer,pid;
+ uint32_t kind, msgid;
+} sb_pending;
+static uint32_t sb_guard;
+static int sb_seen_pids[64];
+static unsigned sb_seen_count;
+
+static void sb_wait_event(unsigned phase,uint64_t tid,unsigned kind,int peer,uint32_t value) {
+ uint32_t unlocked=0;
+ if(!__atomic_compare_exchange_n(&sb_guard,&unlocked,1,0,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED))return;
+ const uint64_t now=mach_absolute_time();
+ if(phase==1) {
+  sb_pending.pid=proc_selfpid();sb_pending.tid=tid;sb_pending.start=now;sb_pending.receive=0;
+  sb_pending.kind=kind;sb_pending.peer=peer;sb_pending.msgid=value;
+ } else if(sb_pending.tid==tid && phase==2) {
+  sb_pending.receive=now;
+ } else if(sb_pending.tid==tid && phase==3) {
+  uint64_t start_ns=0,end_ns=0,recv_ns=0;
+  absolutetime_to_nanoseconds(sb_pending.start,&start_ns);
+  absolutetime_to_nanoseconds(now,&end_ns);
+  if(sb_pending.receive)absolutetime_to_nanoseconds(sb_pending.receive,&recv_ns);
+  sb_pending.tid=0;
+  if(end_ns-start_ns>=250000) {
+   const int dest=sb_pending.peer;
+   record_as(37,(uint32_t)proc_selfpid(),tid,start_ns/1000,recv_ns/1000,end_ns/1000,
+             ((uint64_t)sb_pending.kind<<32)|(uint32_t)dest,sb_pending.msgid,value);
+   unsigned i=0;while(i<sb_seen_count && sb_seen_pids[i]!=dest)++i;
+   if(dest>0 && i==sb_seen_count && i<64) {
+    sb_seen_pids[sb_seen_count++]=dest;
+    __atomic_store_n(&sb_guard,0,__ATOMIC_RELEASE);
+    uint64_t words[4]={0};proc_name(dest,(char *)words,sizeof words);
+    record_as(14,(uint32_t)proc_selfpid(),tid,0,(uint32_t)dest,words[0],words[1],words[2],words[3]);
+    return;
+   }
+  }
+ }
+ __atomic_store_n(&sb_guard,0,__ATOMIC_RELEASE);
+}
+
+void boot_latency_sb_target(uint64_t tid) {
+ if(!boot_latency_enabled() || !&sheng_sb_wait_tid || !&sheng_sb_wait_hook)return;
+ if(__atomic_load_n(&sheng_sb_wait_tid,__ATOMIC_RELAXED)==tid)return;
+ if(!sheng_sb_wait_hook)sheng_sb_wait_hook=sb_wait_event;
+ __atomic_store_n(&sheng_sb_wait_tid,tid,__ATOMIC_RELEASE);
+ boot_latency_record(39,tid,250,CONFIG_CPU_COUNTERS,1,8,17);
+}
+
+void boot_latency_pmu(int pid,uint64_t tid,uint64_t abs,uint32_t cpu,uint32_t switches,uint32_t status,const uint32_t counts[2]) {
+ uint64_t ns=0;absolutetime_to_nanoseconds(abs,&ns);
+ record_as(38,(uint32_t)pid,tid,ns/1000,cpu,switches,status,status==1?counts[0]:0,status==1?counts[1]:0);
+}
 void boot_latency_waiter(int pid,uint64_t tid,unsigned state,uint64_t wait,unsigned switches,int peer,unsigned peer_code,unsigned error,const uint64_t frames[12],const uint64_t kernel[12]) {
  static uint64_t sequence;const uint64_t id=++sequence;
  record_as(28,(uint32_t)pid,tid,id,state,wait,frames[0],frames[1],switches);
@@ -152,8 +210,22 @@ void boot_latency_start(void) {
  if(&sheng_user_exit_hook)sheng_user_exit_hook=user_exit;
  if(&sheng_unnest_hook)sheng_unnest_hook=user_unnest;
 }
+static void sb_snapshot_pending(void) {
+ uint32_t unlocked=0;
+ if(!__atomic_compare_exchange_n(&sb_guard,&unlocked,1,0,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED))return;
+ if(sb_pending.tid) {
+  uint64_t begin=0,receive=0,now=0;
+  absolutetime_to_nanoseconds(sb_pending.start,&begin);
+  if(sb_pending.receive)absolutetime_to_nanoseconds(sb_pending.receive,&receive);
+  absolutetime_to_nanoseconds(mach_absolute_time(),&now);
+  record_as(40,(uint32_t)sb_pending.pid,sb_pending.tid,begin/1000,receive/1000,now/1000,
+            ((uint64_t)sb_pending.kind<<32)|(uint32_t)sb_pending.peer,sb_pending.msgid,0);
+ }
+ __atomic_store_n(&sb_guard,0,__ATOMIC_RELEASE);
+}
 uint32_t boot_latency_snapshot(void *out,uint32_t bytes) {
  if(!store.slots || bytes<16+sizeof(struct bl_record))return 0;
+ sb_snapshot_pending();
  struct bl_record *rows=(struct bl_record *)((char *)out+16);
  uint32_t count=0,capacity=(bytes-16)/sizeof(struct bl_record),kept[2]={0};
  uint64_t total[2]={0};struct bl_store *lanes[2]={&critical,&store};
