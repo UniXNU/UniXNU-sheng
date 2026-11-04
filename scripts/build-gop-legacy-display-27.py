@@ -517,8 +517,23 @@ sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'driv
            ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source,
            ROOT / 'scripts' / ABI_PATH.name, keystore_source, ROOT / 'drivers/AppleKeyStoreState/NativeKeyStoreEvents.cpp',
            ROOT / 'scripts/hid-device-24A446.json', hid_probe]
+sources += [KITS / name for name in ('BluetoothProbe.cpp', 'BluetoothFirmware.h', 'WcnPower.h')]
+sources += [ROOT / 'scripts/build-qca-bluetooth.py', BLUETOOTH / 'tools/source-lock.json']
+sources += [Path(name) for name in json.loads((board_dir / 'qca-bluetooth/report.json').read_text())['source']]
+for directory in ('include', 'src', 'shim', 'out/linux'):
+    sources += sorted((BLUETOOTH / directory).rglob('*.h'))
+sources += [ROOT / 'kits/Sm8550Platform' / name for name in ('Sm8550GeniUart.h', 'Sm8550QupDma.h')]
+
+
+def source_name(path):
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
 (OUT / 'build-report.json').write_text(json.dumps(dict(
-    source_sha256={str(p.relative_to(ROOT)): sha(p) for p in sources}, generated_abi_sha256=sha(OUT / 'OriginalLegacyFramebufferABI.h'),
+    source_sha256={source_name(p): sha(p) for p in sources}, generated_abi_sha256=sha(OUT / 'OriginalLegacyFramebufferABI.h'),
     kernelcache_sha256=abi['kernelcache_sha256'], compiled_object_sha256=sha(obj), archive_sha256=sha(archive),
     bindings={n: hex(v) for n, v in bindings.items()}, virtual_entries=len(slots), owned_entries=owned,
     inherited_native_entries=native, original_bindings='fixed-collection-addresses', original_instructions_modified=False), indent=2) + '\n')
