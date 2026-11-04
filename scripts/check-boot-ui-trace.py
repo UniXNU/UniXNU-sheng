@@ -14,13 +14,21 @@ prefix=r'''
 #include "BootUiTraceCore.h"
 #include "BootUiTraceDetails.h"
 #define KERN_SUCCESS 0
+#define TH_WAIT 0x01
+#define TH_RUN 0x04
+#define TH_TERMINATE 0x10
+#define TH_TERMINATE2 0x20
 struct saved {uint64_t pc,lr,fp;bool valid;};typedef struct saved arm_saved_state_t;
-struct thread {bool sched_lock;struct {struct saved *upcb;} machine;struct thread *next;uint64_t thread_id;uint32_t c_switch;uint64_t kernel_stack;uint64_t wait_event;int state;uint8_t block_hint;int16_t sched_pri;};typedef struct thread *thread_t;
+struct thread {bool sched_lock;struct {struct saved *upcb;struct kstate *kstackptr;} machine;struct thread *next;uint64_t thread_id;uint32_t c_switch;uint64_t kernel_stack;uint64_t wait_event;int state;uint8_t block_hint;int16_t sched_pri;};typedef struct thread *thread_t;
 static uint64_t recount_thread_time_mach(struct thread *thread){(void)thread;return 0;}
 static void proc_name(int pid,char *name,int size){snprintf(name,(unsigned)size,"pid%d",pid);}
 struct kstate {struct {struct {uint64_t fp,lr,sp;} ss;} machine;};typedef struct kstate *thread_kernel_state_t;
-static struct kstate fake_kstate;static uint64_t kernel_stack_size=16384;static uint64_t fake_kstack[2048] __attribute__((aligned(16)));
-#define thread_get_kernel_state(t) (&fake_kstate)
+static struct {uint64_t frames[64];struct kstate state;} fake_stack __attribute__((aligned(16)));
+static uint64_t kernel_stack_size=sizeof(fake_stack);
+static thread_kernel_state_t thread_get_kernel_state(thread_t t) {
+ assert(t->sched_lock && !(t->state & (TH_RUN|TH_TERMINATE|TH_TERMINATE2)));
+ return t->machine.kstackptr;
+}
 static uint64_t fake_now=1000;static uint64_t mach_absolute_time(void){return fake_now;}
 static void absolutetime_to_nanoseconds(uint64_t t,uint64_t *ns){*ns=t;}
 struct task;
@@ -126,12 +134,24 @@ int main(void){
   char hot[8][120];assert(boot_ui_trace_hot_rows(hot,8)==0);
   fake_now+=1000000000ull;threads[0].c_switch=900;threads[1].c_switch=52;
   /* A kernel stack for thread 0: link register, then a two-frame chain inside the stack. */
-  threads[0].kernel_stack=(uint64_t)fake_kstack;fake_kstate.machine.ss.lr=0xfffffff0071a0000ull;fake_kstate.machine.ss.fp=(uint64_t)&fake_kstack[8];
-  fake_kstack[8]=(uint64_t)&fake_kstack[16];fake_kstack[9]=0xfffffff0071a1111ull;fake_kstack[16]=0;fake_kstack[17]=0xfffffff0071a2222ull;
+  threads[0].state=TH_WAIT;threads[0].kernel_stack=(uintptr_t)&fake_stack;threads[0].machine.kstackptr=&fake_stack.state;
+  fake_stack.state.machine.ss.lr=0xfffffff0071a0000ull;fake_stack.state.machine.ss.fp=(uintptr_t)&fake_stack.frames[8];
+  fake_stack.frames[8]=(uintptr_t)&fake_stack.frames[16];fake_stack.frames[9]=0xfffffff0071a1111ull;fake_stack.frames[16]=0;fake_stack.frames[17]=0xfffffff0071a2222ull;
   boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);boot_ui_trace_publish();
   unsigned rows=boot_ui_trace_hot_rows(hot,8);for(unsigned i=0;i<rows;++i)puts(hot[i]);
   assert(rows==3 && strstr(hot[0],"HOTB p57 tid=b sw/s=800") && strstr(hot[0],"pc=1e3dbcb58") && !strncmp(hot[1],"HOT+ b ",7) &&
    !strncmp(hot[2],"HOTK b st=",10) && strstr(hot[2]," fffffff0071a0000 fffffff0071a1111 fffffff0071a2222") && !trace_lock);}
+ /* A waiter may still be switching out, with a nonzero stack base but no saved state. */
+ {struct thread t={.sched_lock=true,.kernel_stack=(uintptr_t)&fake_stack};
+  uint64_t frames[BT_KFRAMES],empty[BT_KFRAMES]={0};
+  const int states[]={TH_WAIT|TH_RUN,TH_RUN,TH_WAIT|TH_TERMINATE,TH_WAIT|TH_TERMINATE2,TH_WAIT};
+  for(unsigned i=0;i<sizeof(states)/sizeof(states[0]);++i){
+   t.state=states[i];memset(frames,0xff,sizeof(frames));bt_kernel_stack(&t,frames);assert(!memcmp(frames,empty,sizeof(frames)));
+  }
+  t.machine.kstackptr=(struct kstate *)((uintptr_t)&fake_stack+sizeof(fake_stack)-8);
+  bt_kernel_stack(&t,frames);assert(!memcmp(frames,empty,sizeof(frames)));
+  t.machine.kstackptr=&fake_stack.state;fake_stack.state.machine.ss.fp=UINT64_MAX-15;
+  bt_kernel_stack(&t,frames);assert(frames[0]==fake_stack.state.machine.ss.lr && !frames[1]);}
  puts("PASS: actual UI capture/formatter; lossless address tokens, distinct tasks, grouping, 64-thread cap, VM/IPC reads outside task locks, map/space/port reference/lock/IRQ restoration, main32/image/peer/lookup failures, invalid chains, copy failure, pages and blocked-reader isolation");
 }
 '''
