@@ -529,7 +529,7 @@ extern uint64_t native_gpu_role_thread(uint32_t,uint32_t) __attribute__((weak_im
 // CPU it runs on interrupts it there; the handler copies the interrupted user PC, LR and FP when that CPU still runs it in user mode.
 // Such samples carry peer -2. One request at a time: the sampler is a single thread, and a request that did not answer within 1 ms stays
 // owned by its CPU until it does.
-struct cs_ipi {thread_t target;uint64_t pc,lr,fp;volatile uint32_t done,user;};
+struct cs_ipi {thread_t target;uint64_t pc,lr,fp,abs;uint32_t cpu;volatile uint32_t done,user;};
 static struct cs_ipi cs_ipi_req;
 static volatile bool cs_ipi_busy;
 static unsigned cs_exact_enabled = 1;
@@ -537,12 +537,14 @@ static void cs_ipi_handler(void *arg) {
  struct cs_ipi *q=(struct cs_ipi *)arg;
  arm_saved_state_t *s=(arm_saved_state_t *)getCpuDatap()->cpu_int_state;
  if(s && current_thread()==q->target && is_saved_state64(s) && PSR64_IS_USER(get_saved_state_cpsr(s))) {
+  q->abs=mach_absolute_time();
+  q->cpu=cpu_number();
   q->pc=(uint64_t)get_saved_state_pc(s);q->lr=(uint64_t)get_saved_state_lr(s);q->fp=(uint64_t)get_saved_state_fp(s);q->user=1;
  }
  __atomic_store_n(&q->done,1,__ATOMIC_RELEASE);
 }
 // 1: e holds the target's user PC, LR and FP at this instant.
-static int cs_exact(thread_t thread,int cpu,struct bt_entry *e) {
+static int cs_exact(thread_t thread,int cpu,struct bt_entry *e,struct cs_rec *sample) {
  struct cs_ipi *q=&cs_ipi_req;
  if(cs_ipi_busy) {if(!__atomic_load_n(&q->done,__ATOMIC_ACQUIRE))return 0;cs_ipi_busy=false;}
  if(cpu<0 || cpu==cpu_number())return 0;
@@ -554,6 +556,10 @@ static int cs_exact(thread_t thread,int cpu,struct bt_entry *e) {
  cs_ipi_busy=false;
  if(!q->user)return 0;
  e->pc=BT_STRIP_USER_PC(q->pc);e->lr=BT_STRIP_USER_PC(q->lr);e->fp=q->fp;e->trap=0;
+ // A thread interrupted in user mode has no wait event. Store its CPU in that
+ // slot for exact samples only (CLI1 header flag 1).
+ sample->abs=q->abs;
+ sample->wait=q->cpu;
  return 1;
 }
 static void cs_sample(unsigned slot,unsigned role) {
@@ -595,7 +601,7 @@ static void cs_sample(unsigned slot,unsigned role) {
  }
  task_unlock(task);
  r.abs=mach_absolute_time();r.pid=cs_pid[slot];r.peer=-1;
- const bool exact=cs_exact_enabled && running_cpu>=0 && cs_exact(thread,running_cpu,&e);
+ const bool exact=cs_exact_enabled && running_cpu>=0 && cs_exact(thread,running_cpu,&e,&r);
  if(exact){got=true;r.peer=-2;}
  if(got) {
   r.frames[0]=e.pc;r.frames[1]=e.lr;

@@ -212,10 +212,11 @@ _Static_assert(sizeof(struct cpufreq_rec) == 32, "cpufreq record");
 extern struct cpufreq_rec *native_cpufreq_ring __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_count __attribute__((weak_import));
 enum {CpuFreqRing = 32768};
-// The client sampler (BootUiTraceProbe.c): kernel.client.bin is its ring in time order (16-byte header "CLI1", u32 total, u32 kept, u32 0;
+// The client sampler (BootUiTraceProbe.c): kernel.client.bin is its ring in time order (16-byte header "CLI1", u32 total, u32 kept, u32 flags;
 // then 128-byte records {u64 microseconds, i32 pid, u16 state, i16 priority, u32 context switches, i32 mach_msg peer pid, u64 CPU time
 // (mach units), u64 wait event, u64 frames[11] (pc, lr, nine callers)}); kernel.rings.txt has a C row per target (pid, shared cache
 // slide, main image address, name). A record lasts until the next one of the same pid (unchanged blocked threads are not repeated).
+// Flag 1: records with peer -2 carry the interrupted CPU number in the wait slot and the time observed on that CPU.
 struct cs_rec {uint64_t abs; int32_t pid; uint16_t state; int16_t pri; uint32_t cs; int32_t peer; uint64_t cpu, wait, frames[11];};
 struct cs_target {int pid; unsigned slide; uint64_t image, seen; char name[32];};
 // CPU occupancy (BootUiTraceProbe.c), kernel.cpus.bin: header "CPU1", total, kept, 0; then 40-byte records {u64 microseconds, i16 priority
@@ -706,7 +707,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
   }
   if (!rc && client_keep) {
     const uint32_t client_total = client_kept, kept = client_total > ClientRing ? ClientRing : client_total;
-    const uint32_t head[4] = {'C' | 'L' << 8 | 'I' << 16 | (uint32_t)'1' << 24, client_total, kept, 0};
+    const uint32_t head[4] = {'C' | 'L' << 8 | 'I' << 16 | (uint32_t)'1' << 24, client_total, kept, 1};
     rc = put_head(emit, arg, "kernel.client.bin", 0100644, 0, 0, 16 + (uint64_t)kept * sizeof(struct cs_rec));
     if (!rc) rc = emit(head, sizeof head, arg);
     for (uint32_t at = 0; !rc && at < kept;) {   // oldest first, microseconds since boot
