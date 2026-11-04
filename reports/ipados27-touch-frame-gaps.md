@@ -1,159 +1,74 @@
 # Touch and frame timing on sheng
 
-Tests used iPadOS 27.0.1 build 24A446 on a Xiaomi Pad 6S Pro. The four images were started with `fastboot boot`. The hardware tests did not qualify App Switcher gestures or keyboard flicks.
+Measurements are from a Xiaomi Pad 6S Pro running iPadOS 27.0.1 build 24A446. A flip interval is the time between consecutive display flips in `kernel.rings.txt`. A long interval can include idle time. The continuous-input measurements below require a HID report at least every 16.7 ms, including at both ends of the interval.
 
-| Run | Board revision | Boot image SHA-256 | Observation |
-| --- | --- | --- | --- |
-| sch1, boot 532856a9 | `8fcf9a4e0f3c5a23a820f85fd25189e2c7e83f87` | `445f10c4c6a257f48551b267b9c0d740c17150f3ca5a2e2a51db24cfd1ca2a94` | The tester reported limited improvement and an idle desktop freeze. The panic flush recorded state 5. |
-| sch2, boot 5cfa7b18a | `8ec842f38c21ef1d73e12000fae16df7442e0c73` | `15ff435d078f17bdad4bda870b6a85b268b5284217c93a05e227d3b785be27a9` | Both App Switcher gestures still failed and keyboard flicks recurred. The desktop responded before a manual reboot. |
-| sch3, boot da1dbd496 | `948a8b8` (profile code) | `060d6c256f1acc18af5d54d40762cdcddf398fc370ae8df45029002f87d9c776` | The tester reached the desktop and exercised it. A complete 240-second diagnostic snapshot was recovered at log uptime 276 seconds. The reader returned the tablet to fastboot. |
-| sch4, boot 50d4021e7 | `fe636ce` (launch policy) | `3f42a416c4f9a6a5fe123c65eafe93e8660ba014c6927f416d0e14bcfde21ea4` | The tester could open Settings. All app icon artwork on the photographed Home Screen and Dock was missing. |
+## Icon rendering and memory
 
-## Sampling boundaries
+With `sheng-lite=1`, launchd starts `iconservicesagent` on demand. The job sets `FORCE_SOFTWARE_RENDERER=0` and `CI_ENABLE_METAL_GPU=0`. IconRendering uses the Adreno 740 Metal device. Core Image has Metal disabled for this process. The stock J820 Jetsam profile sets a 15 MiB inactive hard limit and a 1,224 MiB active soft limit.
 
-The 240-second sch1 snapshot retained 6,195 HID timestamps, 8,621 frequency windows and 60,638 thread samples. The 360-second sch2 snapshot used `sheng-tlog=1` and `cs-exact=0`. Manual reboot preceded publication of the final export length. Read-only recovery from the first diagnostic half recovered a complete 17-file stream. The embedded boot arguments, ring formats, lengths and cross-ring timestamps identify sch2. The earlier competing boot returned after one log slot and provided no interaction data.
+| Hardware observation | Evidence |
+| --- | --- |
+| GPU rendering | On boot `41dcdcce`, PID 168 obtained a Metal device and command queue. Its first eight completed command buffers contained 149 draws. All 495 GPU submissions retired. |
+| Cold icon cache | On `ico4-lock-fix` boot `41ee75ce`, Settings and App Store displayed complete Home Screen icons. Their rebuilt 68 pt cache entries matched the complete reference artwork byte for byte. |
+| Settings artwork | The same cache contained transparent 56 × 56 px entries for Wi-Fi, Battery and About. Wi-Fi also had a populated 120 × 120 px entry. The cache records variants independently of the one displayed. |
+| Process lifetime | On `41ee75ce`, all 488 GPU submissions from PID 139 retired. Launchd recorded one Jetsam termination for the per-process memory limit after 173.752 s of process life. |
+| Startup cache | On boot `3fc07c73`, PID 1 exited with `No service cache`. The mounted `launchd.plist` contained the expected 1,327,067 bytes followed by 30 bytes from a longer file. On `41ee75ce` the file matched the image in length and SHA-256. |
 
-TPR1 stored 16,384 of 18,988 contact rows. The oldest 2,604 rows, including the beginning of the test sequence, were overwritten. The independent TCH1 ring retained all 3,962 report timestamps. TPR1 covered 2,975 observed contact frames and 2,896 successful HID report attempts. The median and 99th percentile from the most recent IRQ to SPI completion were 2.52 and 2.60 ms. From SPI completion to return from publishing a frame with a HID report, they were 0.13 and 0.30 ms. These timestamps end in the kernel. Delivery to backboardd, UIKit gesture recognition and the keyboard's selected character were not recorded.
+The cold-cache image SHA-256 is `c2f67213c102d8c95f3249eacd3a0a573bf859f08bf876c26c7e90bfb5973a1d`.
 
-## Gestures and typing
+## SpringBoard waits and frame intervals
 
-- The user reported zero successful bottom-edge and multi-finger attempts in sch2. The ring did not retain the initial bottom-edge test in sufficient detail to classify those starts.
-- Four retained five-finger sequences had 186, 63, 155 and 197 five-contact frames. The five IDs remained distinct. In one contraction, median nearest-neighbour distance fell from 321 to 235 panel px. During a subsequent 250 ms pause, every finger stayed within a 1.75 px diameter. Other retained five-finger sequences moved apart. The host replay that previously collapsed five peaks into one is covered by the component regression test.
-- In a 12.7-second typing sequence, all 57 contacts had a successful release and all 56 adjacent pairs separated into distinct paths. Downward output displacement from each initial contact had a median of 0 px, a 95th percentile of 10.4 px and a maximum of 16.6 px. The UI's key-flick threshold and the specific tap that selected an alternate character remain unknown.
-- The per-report synchronous deltas of the HID edge counters were zero throughout the retained trajectory. Those deltas cannot distinguish asynchronous event dispatch from an inactive hook. The tester confirmed palm or multi-finger contact during the final high-contact-count burst. This burst cannot identify phantom touches on an unattended screen.
+On boot `da1dbd496`, SpringBoard's main thread spent 4.644 s in a synchronous XPC call to `iconservicesagent` PID 387. The wait overlapped 4.444 s of a 4.583 s flip interval. The preceding agent process exited on SIGSEGV in Core Image 1.254 s before the call began.
 
-## SpringBoard frame gaps
+The comparison workload used Home Screen page changes, Settings launches and App Library. Both 240-second captures used the same GPU addon and touch driver. With the service disabled, the Home Screen and Dock displayed icon backgrounds without app artwork.
 
-### Before and after the touch change
+| Metric | Agent enabled, `da1dbd496` | Agent disabled, `50d4021e7` |
+| --- | ---: | ---: |
+| Observed agent processes / SIGSEGV exits | 6 / 5 | 0 / 0 |
+| Continuous-input flip interval, median / P95 / P99 (ms) | 15.358 / 28.067 / 43.232 | 9.631 / 28.006 / 46.384 |
+| Longest continuous-input flip interval (ms) | 131.501 | 75.483 |
+| Full-screen-width GPU pass, P95 (ms) | 4.819 | 4.461 |
+| HID report interval, median / P99 (ms) | 8.331 / 8.531 | 8.333 / 8.535 |
 
-Claude's earlier SpringBoard analysis used boot `333b621dc`, recorded on November 3 as `seven-trim/run5`. The retained `boot-lazy1.img` SHA-256 is `bdf3217018a7385d7e9d2ca4936ccfb41e70d81f07fe7da57b2e5568efaf73ed`. The selected Novatek revision was `a1a6f2b`. Both November 4 boots used `3b44b1b`. All three configured fixed 120 Hz and governor mode 4. Lazy1 and sch1 used the same boot arguments apart from the build tag. The Metal plugin and Turnip library embedded in lazy1 both differ from those in the two later images. The gestures and diagnostic sampling also differed between runs.
+Individual long frames have distinct causes. In a 242.143 ms interval on boot `532856a9`, 29 HID reports arrived and backboardd submitted at +238.523 ms. In a separate 333.145 ms interval, a 64 MiB allocation inside a backboardd command took 184.016 ms, including 178.904 ms of kernel page wiring.
 
-| Hardware metric | lazy1, before | sch1, after | sch2, after |
+## CPU profile
+
+With `cs-exact=1 cs-profile=1 sheng-cpufreq=4`, the interrupted CPU records SpringBoard's main-thread PC, LR and FP. Boot `da1dbd496` yielded 6,680 exact samples and 6,679 ready PMU readings. The sampler spent 82.19 ms on 8,019 attempts, or 0.0582% of the observed wall time.
+
+The performance and prime domains requested their maximum frequencies in all 82 governor windows across five busy flip intervals of at least 100 ms. In the 131.501 ms interval with continuous input, the eight EPSS readings were 2,707 and 2,956 MHz respectively. The stack included `-[SBIconListView configureIconView:forIcon:]` in 5 of 171 long-frame samples and 0 of 523 short-frame samples.
+
+| Busy flip intervals | Same-thread, same-core sample pairs | EL0 instructions per cycle |
+| --- | ---: | ---: |
+| At least 100 ms | 78 | 0.714 |
+| Under 30 ms | 130 | 0.838 |
+
+Busy intervals have more than 60% main-thread CPU use and recount coverage of at least 65% of the interval. PMU pairs span at most 20 ms with an unchanged context-switch count.
+
+## Touch delivery
+
+| Metric | `333b621dc`, driver `a1a6f2b` | `532856a9`, driver `3b44b1b` | `5cfa7b18a`, driver `3b44b1b` |
 | --- | ---: | ---: | ---: |
-| HID reports retained | 2,921 | 6,195 | 3,962 |
-| Adjacent HID reports, P50 / P99 (ms) | 8.326 / 8.563 | 8.334 / 8.574 | 8.334 / 8.526 |
-| Flips with HID activity, interval P50 / P99 (ms) | 14.544 / 100.975 | 17.580 / 129.162 | 15.876 / 106.805 |
-| Flip intervals over 50 ms with HID activity | 58 / 1,491 (3.89%) | 125 / 2,446 (5.11%) | 97 / 1,663 (5.83%) |
-| Continuously covered intervals of at least 100 ms | 2 / 1,379 (0.15%) | 15 / 2,375 (0.63%) | 11 / 1,630 (0.67%) |
-| Full-screen-width GPU pass, P95 (ms) | 5.386 | 4.601 | 4.656 |
+| HID report interval, median / P99 (ms) | 8.326 / 8.563 | 8.334 / 8.574 | 8.334 / 8.526 |
+| Flip intervals over 50 ms with any HID activity | 3.89% | 5.11% | 5.83% |
+| Continuously covered intervals of at least 100 ms | 2 / 1,379 | 15 / 2,375 | 11 / 1,630 |
 
-The HID cadence calculation excludes inter-report gaps above 50 ms. The original flip metric includes any interval containing at least one HID report. The continuous subset requires at least one report and a maximum gap of 16.7 ms between consecutive reports and at either flip boundary. A stationary contact may qualify. GPU pass durations use the existing report's touch windows and width threshold of 3,000 px. A pass covers part of a frame. In two additional pre-change captures, `seven-trim/run1` and `run3`, the fraction over 50 ms was 5.20% and 2.77%. The captures show similar HID cadence and persistent long flip intervals. They cannot isolate the effect of changing the touch driver. The pre-change image did not record paired IRQ and HID timestamps for a driver-latency comparison.
+All three captures used fixed 120 Hz and governor mode 4. Workloads, GPU binaries and sampling settings varied. HID cadence excludes gaps above 50 ms.
 
-### Where time was spent
+On `5cfa7b18a`, IRQ to SPI completion took 2.52 ms at the median and 2.60 ms at P99. SPI completion to return from HID publication took 0.13 and 0.30 ms respectively. Five contact IDs stayed distinct during a 250 ms pause. All 57 rapid typing contacts released. Bottom-edge swipes and multi-finger pinches still failed to open App Switcher, and some rapid taps selected alternate characters.
 
-The flip event is event 4 in `kernel.rings.txt`. A flip interval containing any touch can include idle time before the first touch or after lift. The following intervals provide continuous input coverage.
+## Kernel stack sampling and GPU interrupts
 
-| Run and start (uptime s) | Flip interval | Observed input | Observed rendering |
-| --- | ---: | --- | --- |
-| sch2 1454.762454 | 100.273 ms | Five IDs throughout 12 reports, 11 moving frames. One moved 25.1 panel px. | SpringBoard main thread used approximately 14% of the sampled span. The only GPU submission in the interval came from backboardd at +99.425 ms and retired at +99.944 ms. |
-| sch2 1411.645516 | 143.153 ms | 17 HID timestamps with a maximum gap of 8.39 ms. The underlying coordinates had already aged out. | SpringBoard main thread used approximately 84%. Median performance/prime cluster readbacks were 2,707/2,956 MHz. |
-| sch1 273.109302 | 242.143 ms | 29 HID timestamps with a maximum gap of 8.44 ms. | SpringBoard main thread used approximately 5%. Backboardd submitted the next buffer at +238.523 ms. |
+The blocked-thread sampler holds the scheduler lock and checks that the thread is waiting, non-runnable and not terminating. It validates the saved state and each frame against the thread's kernel stack. On lock-screen panic `6ba5a54e`, backboardd was both waiting and runnable, with a null saved-state pointer. The guard in `571fcc9` skips pointer authentication in this state.
 
-SpringBoard CPU shares use monotonic main-thread recount samples spanning at least 65% of the interval. In sch1, 8,536 SpringBoard main-thread samples and 9,842 backboardd samples captured exact user state. The sch1 cache slide read from the corresponding target records was 0xd6c000. Sampled busy intervals showed dispersed execution in Objective-C dispatch, retain operations and framework code. The frequent instruction addresses did not isolate a single dominant function.
+The GPU hard interrupt queues CP preemption completion on a serialized thread call. The worker takes and releases the preemption mutex. The idle desktop panic on `532856a9` occurred when the hard interrupt released that mutex with a pending turnstile inheritor.
 
-The sch2 display summary recorded 120 Hz, one timer startup and one reported refresh configuration. It recorded zero timer arms and sends, with the vsync ring allocated. This measures the port's IOMFB client notification path. On 24A446 the original IOMFB type 5 sender and the driver read the same client-list offset, 0x1ab8. QuartzCore can also schedule through CADisplayTimer. Neither per-client callback was traced. The observed gaps rule out extended silence in the touch driver for the continuously covered examples. Neither the vsync counters nor HID returns establish delivery of a display callback or touch event to SpringBoard.
+## Reading a capture
 
-At sch1 uptime 277.937616 s, 40 HID reports arrived during a 333.145 ms flip interval. A backboardd command was created 0.1 ms into the gap. Between its 34th and 35th passes, a synchronous 64 MiB allocation took 184.016 ms, with 178.904 ms in kernel page wiring. A background allocation of the same size and pool overlapped. SpringBoard's sampled stacks included a CoreAnimation transaction commit. In contrast, in the 242.143 ms sch1 interval above, the preceding backboardd command had already finished before the gap began, and the next command was created only at +233.6 ms. SpringBoard's 44 blocked samples were in the Mach message receive path. The late command creation and the delay inside an existing command require separate investigation.
+Run these commands in the sheng device repository. Set `RUN` to the directory produced by the log reader.
 
-### Governor and interrupted SpringBoard stacks
-
-For this analysis a busy long interval is at least 100 ms between consecutive flips with at least one HID report and SpringBoard main-thread CPU use above 60%. The first and last valid main-thread recount samples must span at least 65% of the interval. Controls use the same gates with a flip interval below 30 ms. Times, CPU shares and sample counts refer to those intervals only.
-
-| Capture | Busy long intervals | Governor windows | Both performance domains at their maximum requested levels | Median EPSS readbacks, performance / prime |
-| --- | ---: | ---: | ---: | ---: |
-| sch1 | 12 | 126 | 125 | 2,592 / 2,956 MHz |
-| sch2 | 3 | 24 | 24 | 2,707 / 2,956 MHz |
-
-Maximum governor votes were 2,803 MHz for CPUs 3–6 and 2,956 MHz for CPU 7. In sch1, among windows where at least one CPU in the corresponding domain was 50% busy, the EPSS readback fell below 80% of the vote in 34 of 125 performance-domain windows and 14 of 102 prime-domain windows. Matched short frames also showed this behavior (253 of 803 and 86 of 694). The 333.145 ms sch1 interval stayed at 2,707 / 2,956 MHz for all 20 readings. In the sole lower-vote window across the two boots, the next HID report came 4.405 ms after that reading. The next governor poll raised both votes and the following poll observed 2,707 / 2,956 MHz. The per-domain register is an instantaneous EPSS reading. These two boots did not record which CPU took an exact sample.
-
-The 12 sch1 long intervals yielded 290 user-mode interrupts of the SpringBoard main thread, compared with 2,168 in 665 similarly busy short intervals. Symbolization used the 24A446 cache, its sch1 slide 0xd6c000, and the function bounds of each unslid address. The interrupted PC was in `objc_msgSend` in 45 of 290 versus 292 of 2,168. The stack included `-[UIView(Internal) _didMoveFromWindow:toWindow:]` in 10 of 290 (four gaps) versus 11 of 2,168, and `-[FBScene updateSettings:withTransitionContext:completion:]` in 6 of 290 (six gaps) versus 8 of 2,168. Of the long-frame PCs, 28 did not resolve to a named function. Caller counts include each function at most once per sample. These are conditional sample shares, not per-function elapsed times. The handlers capture the interrupted PC, LR and FP. The later userspace FP walk is best effort. Sch2 collected no exact samples.
-
-The generated sheng XNU configuration defines `CONFIG_CPU_COUNTERS 0`. Neither capture supplies retired instructions or CPU cycles. IPC and a quantitative comparison with an Apple CPU cannot be derived from these traces.
-
-## Main-thread profile on sch3
-
-The recovered 16-file stream contained 231,686 latency records with zero reported drops or overwrites, 57,108 client samples, 8,485 governor windows and 2,345 HID timestamps. The image retained sch2's touch object and GPU addon. Boot arguments included `cs-profile=1 cs-exact=1 sheng-cpufreq=4`. SpringBoard PID 30, main TID 320, used cache slide 0x458000. Client records with peer −2 identified 6,680 exact EL0 samples. The interrupted CPU was in 3–6 or 7 for 6,678 of them. Only SpringBoard received profiling IPIs. Across 125 complete cost windows the sampler spent 82.19 ms on 8,019 attempts, 0.0582% of the observed wall time. The largest measured attempt was 69.1 µs. This measures the sampler-side cross-call path.
-
-### Mach waits
-
-The capture retained 16,442 completed main-thread Mach calls of at least 250 µs and one call still waiting at export. For direct calls with a resolved user peer, backboardd accounted for 283 calls (median receive time 0.363 ms, maximum 358.180 ms), runningboardd for 223 (median 1.795 ms, maximum 4.736 ms) and launchd for 87 (median 0.472 ms, maximum 0.650 ms). The 358.180 ms backboardd wait came from `CA::Context::commit_transaction`, request ID 40209. There were two flips and zero HID reports while SpringBoard awaited this reply.
-
-At uptime 3237.363240 s SpringBoard entered an explicit synchronous XPC receive. Its destination was unresolved at entry. The same blocked thread's stack contained `xpc_connection_send_message_with_reply_sync` and `NSXPCConnection`. Samples at +3.377 and +4.510 s resolved its remote port to PID 387, which the kernel process identity record named `iconservicesagent`. The call returned successfully after 4.644428 s. It overlapped 4.444334 s of a 4.583440 s flip interval. During that interval 85 HID reports arrived in bursts, with a maximum uncovered span of 1.267 s.
-
-Five separate iconservicesagent PIDs (123, 359, 366, 373 and 377) faulted at the same CoreImage instruction. PID 377 exited on SIGSEGV 1.254 s before the XPC wait began, and PID 387 appeared during the wait. At unslid PC `0x1a575982c` the 24A446 instruction `str d0, [x8, #0x28]` wrote to address 0x28 with x8 zero. It lies in the block inside `CI::ProgramNode::create_program_and_arguments`. The blocked stack and remote port identify the service involved in this stall. The trace does not separate launch delay from time spent servicing the request. The code path that supplied the null program state and a fix for the service still require verification.
-
-### Running CPU and instruction throughput
-
-| Group | Intervals between exact samples with the same running thread, CPU and context-switch count | Retired instructions per EL0 cycle |
-| --- | ---: | ---: |
-| All qualifying pairs | 1,521 | 0.803 |
-| Within the five busy flip intervals of 100 ms or longer | 78 | 0.714 |
-| Within the 191 similarly busy flips under 30 ms | 130 | 0.838 |
-
-The board read two architectural PMU events on 6,679 exact samples. One sample on CPU 0 reported occupied counters. Each aggregate is a ratio of summed instruction and cycle deltas. Both endpoints must report a ready PMU and the sample spacing must be at most 20 ms. Per-core aggregate IPC was 0.809 on CPU 3, 0.793 on 4, 0.738 on 5, 0.798 on 6 and 0.935 on 7. These are selected execution windows on sheng. Establishing the hardware difference from an Apple CPU would require a comparable measurement on that device.
-
-Across the five busy long flips, both performance domains requested their maximum allowed frequencies in all 82 governor windows. The one continuously HID-covered case spanned 131.501 ms, with 15 reports and SpringBoard main-thread CPU share 74.3%. All eight governor windows read 2,707 / 2,956 MHz. The main thread spent about 31.0 ms in undirected Mach receives, 4.58 ms in receives directed to runningboardd and 0.28 ms in receives directed to backboardd. Six uninterrupted PMU intervals gave 0.761 instructions per cycle.
-
-The five long flips contained 171 exact SpringBoard samples, compared with 523 in similarly busy short flips. `objc_msgSend` was the interrupted instruction's function in 29/171 versus 69/523. The stack included `+[UIView(Animation) performWithoutAnimation:]` in 10/171 versus 1/523 and `-[SBIconListView configureIconView:forIcon:]` in 5/171 versus 0/523. Function hits overlap and give no exclusive elapsed time. The action boundaries were not marked on the device. The GPU and touch binaries match sch2, but this workload and sampler configuration differ from the earlier touch tests.
-
-## Disabling iconservicesagent on sch4
-
-Both boots used the same tablet, OS, 240-second export and SpringBoard sampling configuration. The tester repeated Home Screen page switches, opening Settings and returning home, and opening and closing App Library. The on-device process samples identify Settings (Preferences) on both boots. Image verification confirmed the same GPU addon and Novatek object. The boot line changed only the build tag and `sheng-lite=1` to `sheng-lite=2`. Comparing the two generated launchd plists byte for byte after removing the extra key verified that only `com.apple.iconservices.iconservicesagent` was added to the disabled set. Sch4 completed startup, which checks for a successful policy write before starting launchd.
-
-| Metric | sch3, enabled | sch4, disabled |
-| --- | ---: | ---: |
-| Distinct iconservicesagent PIDs observed / distinct PIDs exiting on SIGSEGV | 6 / 5 | 0 / 0 |
-| Longest observed synchronous wait attributed to iconservicesagent | 4,644.428 ms | None observed |
-| Longest directed receive from backboardd / median | 358.180 / 0.363 ms | 18.580 / 0.364 ms |
-| HID reports | 2,345 | 2,118 |
-| Flip intervals with at least one HID report | 1,214 | 1,242 |
-| Over 50 ms among those intervals | 27 (2.22%) | 36 (2.90%) |
-| Median / P99 for those intervals | 15.947 / 90.789 ms | 9.972 / 93.446 ms |
-| Median / P95 / P99 under continuous HID coverage | 15.358 / 28.067 / 43.232 ms | 9.631 / 28.006 / 46.384 ms |
-| Maximum under continuous coverage | 131.501 ms | 75.483 ms |
-| At least 100 ms under continuous coverage | 1 / 1,138 | 0 / 1,163 |
-| Full-screen-width GPU pass P95 | 4.819 ms | 4.461 ms |
-| User instructions per cycle during busy long flips (eligible pairs) | 0.714 (78) | 0.732 (20) |
-| HID report interval, median / P99 | 8.331 / 8.531 ms | 8.333 / 8.535 ms |
-
-Sch3's longest flip with HID activity was 4.583 s, including 4.444 s of the synchronous wait linked to iconservicesagent. The longest such sch4 interval was 2.511 s. Its first HID report arrived 2.480 s into the interval and SpringBoard spent 2.486 s in undirected Mach receives. The largest sch4 synchronous receive with a resolved user destination was the 18.580 ms backboardd call.
-
-The 216,848 sch4 latency records were retained with zero reported drops or overwrites. The icon service wait and its crash loop did not recur in the captured workload. The tester's photograph shows that every app position on the visible Home Screen page and Dock lacked its normal icon artwork. The tile backgrounds, app names and Dock remained visible, and the tester could still open Settings. Each condition was measured once with human input, and disabling the service removed visible rendering work. The lower median coexisted with a higher P99 and a higher share above 50 ms.
-
-## Icon service and startup controls
-
-On 24A446, ico1 forced IconRendering into software while CoreImage could still select Metal. Home Screen artwork returned, but most Settings icons remained blank. Three separate agent PIDs exited on SIGSEGV. The faulting CoreImage instruction at unslid `0x1a575982c` wrote through a null program pointer.
-
-Ico2 also set `CI_ENABLE_METAL_GPU=0` in that job. The tester confirmed that both sets of icons displayed. The 240-second export from boot `ec3a8f48` identified PID 117 in the client ring. The exit and fault records contain no crash of that process, and the GPU trace contains no submission from it. Rebooting this exact image after the ico3 failures reached the lock screen or desktop again. In that second export, boot `53080690`, PID 120 again had zero recorded faults, exits and GPU submissions.
-
-Ico3 retained only the CoreImage override. Two boots of the original image showed an early PID 1 panic with `No service cache`. The last persistent records were at 86 and 82 seconds, before the diagnostic export. Two boots with the same launchd cache, trust cache, kernel and Data seed enabled cache-loader logging. Boots `a04301d1` and `11fcc3a27` both recorded a successful AMFI trust lookup followed by PID 1 exiting with LIBXPC subcode 1. The loader’s own log recorded successful delivery of the signed cache. These boots did not provide an icon service workload. The source image contained a signed, parseable 1,327,033-byte cache. In a host XPC test, appending the final 34 bytes of the longer ico2 file reproduced a parse failure. Boot `2ffaf77f7` ended before exporting the mounted file, so an on-device length mismatch remains unconfirmed.
-
-Ico4 set `FORCE_SOFTWARE_RENDERER=0` while keeping `CI_ENABLE_METAL_GPU=0` for the agent. The board thereby permits IconRendering to use Metal while CoreImage uses its software path. The first attempt left one log slot at zero seconds. On retry, boot `41dcdcce` recorded 336 seconds and completed the 240-second export. The export retained all 214,989 latency records. No fault or exit of iconservicesagent PID 168 was recorded. Preferences and SpringBoard also ran.
-
-A diagnostic build of the existing frontend recorded the returned `NativeBridgeMetalDevice` for PID 168, registry ID `0x1000001ad`, name `Turnip Adreno (TM) 740`, followed by successful command queue creation. Its first eight completed buffers with draw or dispatch work recorded Metal status 4 and draw counts of 17, 2, 4, 4, 45, 2, 22 and 53. The monitor observed the service’s own work without submitting commands. The retained hardware ring paired 495 submissions from PID 168 with 495 retirements and zero replays. GPU start and end timestamps were unavailable, so these records do not provide GPU durations.
-
-The normal image, SHA-256 `0adb4bc8ad5bf7d189657a9926b3ae6d83bd6f12f0b2fd9ef403bacacbeed791`, removes the timed reboot. Its kernel, GPU plugin, launchd cache, trust cache and Data seed match the measured ico4 image. After one early restart, the same image reached the Home Screen. The tester confirmed normal artwork on the Home Screen, in the Dock and in Settings → General.
-
-## Idle desktop panic
-
-The final sch1 panic recorded `turnstile.c:1470` and `thread->inheritor == TURNSTILE_INHERITOR_NULL`. With native slide 0x3920000, the interrupted stack includes `gpuIrq`, `native_adreno_preempt_irq + 0x54`, `lck_mtx_unlock_contended` and the waitq wakeup path. The saved return address immediately follows the call to `lck_mtx_unlock`. A GPU hard interrupt released a contended mutex while the interrupted thread already had a pending turnstile inheritor.
-
-Sch2 schedules CP preemption completion on a serialized thread call. Disassembly of the linked image confirms that the hard handler queues the call and only the worker calls the original preemption routine. The tester manually rebooted a responsive desktop at log time 360 seconds. The exact-stack sampler was disabled for this comparison. The run does not establish long-duration stability.
-
-## Lock-screen sampler panic on ico4
-
-On boot `6ba5a54e` the tester locked sheng and later photographed a kernel data-pointer authentication fault. The last periodic log write was at 2,286 seconds of uptime. The 240-second export identifies the kernel symbol anchor. Mapping the screen’s PC to the exact kernel collection places it at `cs_wait_task + 0x528`, in `bt_kernel_stack` sampling a backboardd thread. The saved thread state was `TH_WAIT | TH_RUN`. The stack base was nonzero, the saved kernel-state pointer was null, and execution trapped on `autda x16, x17` before loading the frame pointer.
-
-The fix in `571fcc9` admits a waiting, non-runnable, non-terminating thread under its scheduler lock. It checks that the saved state and each frame fit in the owned stack. The regression exercises the faulting transition, a missing or partial saved state, an overflowing frame address and a valid chain. The packaged arm64e kernel branches past pointer authentication on both the state check and a null saved-state pointer.
-
-The fixed image (SHA-256 `c2f67213c102d8c95f3249eacd3a0a573bf859f08bf876c26c7e90bfb5973a1d`) retains the ico4 boot arguments, icon configuration and GPU addon. Fastboot accepted the image and boot command. Long-duration locked operation was not tested.
-
-## Outstanding observations
-
-Trace the null CoreImage program state during iconservicesagent restart. Separately, identify digitizer child events at dispatch and receipt in backboardd and SpringBoard. The bottom-edge classification and the keyboard decision both occur above the recorded contact stream. Pair the actual CoreAnimation display-link callbacks with SpringBoard commits and backboardd submissions to distinguish late wakeups from late production. The two captures do not establish one cause for every frame gap.
-
-## Reproduction
-
-Use `scripts/read-sheng-log.py` to recover the diagnostic export, `scripts/decode-sheng-touchpath.py` with `--jsonl` to inspect the contact sequence and `python3 scripts/sheng-latency-report.py RUN/diag --frames-only` to reproduce the cadence and flip metrics. Omit `--frames-only` to include the GPU pass metrics. Use the cache slide recorded for each individual boot when symbolizing.
-
-For sch3 use `python3 scripts/sheng-springboard-profile.py RUN/diag/files/kernel.latency.bin` for per-call timing, PMU pairs and sampler cost.
+```sh
+python3 scripts/decode-sheng-touchpath.py "$RUN/diag/files/kernel.touchpath.bin" --jsonl paths.jsonl
+python3 scripts/sheng-latency-report.py "$RUN/diag" --frames-only
+python3 scripts/sheng-springboard-profile.py "$RUN/diag/files/kernel.latency.bin"
+```
