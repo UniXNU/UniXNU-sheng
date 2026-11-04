@@ -2,8 +2,8 @@
 // WiFi bring-up on the sheng board. Stage 1 (boot argument sheng-wifi=1) is a read-only look at what the boot loaders left of the WCN7850
 // path. Stage 2 (sheng-wifi=2) powers it and trains the PCIe0 link: WLAN_EN, the PCIe0 and PHY GDSCs, clocks, block resets, the QMP PHY
 // tables (WifiPcieTables.h), the controller's PARF setup, PERST# release, LTSSM, and a configuration read of the endpoint's ID.
-// The PHY supplies (L1E 0.88 V, L3E 1.2 V) are shared with the UFS PHY and the WCN7850 PMU inputs are RPMh rails, so the stage assumes
-// they are on; the interconnect votes are not made either, which is enough for register access but not yet for the device's DMA.
+// The PHY supplies (L1E 0.88 V, L3E 1.2 V) are shared with the UFS PHY. WcnPower coordinates the WCN7850 PMU's six input rails and sleep
+// clock between Wi-Fi and Bluetooth; the PCIe NoC vote belongs to Wi-Fi.
 // The devicetree facts: the WCN7850 sits on PCIe0 (pcie@1c00000, qcom,pcie-sm8550, two lanes, device 17cb:1107 below the root port),
 // WLAN_EN is GPIO 80, BT_EN GPIO 81, SW_CTRL GPIO 82, PERST# GPIO 94 (active low), WAKE# GPIO 96.
 // gcc-sm8550.c: PCIe0 GDSC at 0x6b004 (bit 31 PWR_ON); clock votes in 0x52008 (slv_axi 0, mstr_axi 1, cfg_ahb 2, aux 3, pipe 4,
@@ -23,6 +23,7 @@
 #include "MhiBoot.h"
 #include "nw_abi.h"
 #include "WifiFirmware.h"
+#include "WcnPower.h"
 #include "nw_control_endpoint.h"
 #include <IOKit/IOLocks.h>
 #include <sys/kern_control.h>
@@ -158,6 +159,8 @@ struct Pmic {Window core, cnfg, obs, chn; br_arbiter arb; uint32_t apids;};
 Pmic gPmic;
 
 bool pmicOpen(Pmic &p) {
+    if (p.core.va && p.cnfg.va && p.obs.va && p.chn.va) return true;
+    release(p.core); release(p.cnfg); release(p.obs); release(p.chn);
     p.arb.ee = 0;
     if (!mapWindow(p.core, kSpmiCore, 0x3000) || !mapWindow(p.cnfg, kSpmiCnfg, 0x4000)) return false;
     p.arb.core = p.core.va; p.arb.cnfg = p.cnfg.va;
@@ -299,7 +302,7 @@ constexpr Rail kRails[] = {{"smpg5", 850, 0x6a7}, {"ldob15", 1800, 0}, {"smpg2",
 constexpr uint64_t kRscDrv = 0x17a20000, kRscTcs = 0xd00, kCmdDb = 0x81c60000, kCmdDbSize = 0x20000;
 
 // [20] bit i: rail i found in the command database and voted | 1 << (8 + i) request done; [21] RSC id | TCS << 24 (negative stage on failure)
-int powerRails() {
+int powerRails(bool shared, bool pcie, bool on = true) {
     // A copy of the command database, held only while the rails are voted (a static copy would sit in the kernel's __DATA).
     struct CmdDbCopy {uint8_t *bytes = static_cast<uint8_t *>(IOMallocData(kCmdDbSize)); ~CmdDbCopy() {if (bytes) IOFreeData(bytes, kCmdDbSize);}} copy;
     uint8_t *const db = copy.bytes;
@@ -336,11 +339,13 @@ int powerRails() {
         const unsigned m = qcom_rpmh_finish(&layout, tcs, writes, 16);
         for (unsigned i = 0; i < m; ++i) r[(kRscTcs + writes[i].offset) / 4] = writes[i].value;
     };
-    for (unsigned i = 0; i < sizeof kRails / sizeof kRails[0]; ++i) {
+    for (unsigned step = 0; shared && step < sizeof kRails / sizeof kRails[0]; ++step) {
+        const unsigned i = on ? step : (unsigned)(sizeof kRails / sizeof kRails[0]) - 1 - step;
         QcomRpmhResource res;
         if (qcom_cmd_db_find(db, kCmdDbSize, kRails[i].name, &res)) continue;
         native_wifi_pmic[11 + i] = res.address;
         result |= 1u << i;
+        if (!on) {send(res.address + 4, 0); continue;}
         send(res.address + 8, 7);
         send(res.address, kRails[i].millivolts);
         send(res.address + 4, 1);
@@ -356,7 +361,7 @@ int powerRails() {
     }
     // The endpoint's DMA runs over the PCIe NoC, whose bus clock manager (SN7) the interconnect driver votes for when the link is brought up (pcie-mem path,
     // always tag); nothing has done that here. Bandwidth in the units of the manager's aux data: vote = ceil(ceil(kBps * width / buswidth) * 1000 / unit), buswidth 16.
-    {
+    if (pcie) {
         QcomRpmhResource bcm;
         if (!qcom_cmd_db_find(db, kCmdDbSize, "SN7", &bcm)) {
             uint32_t vote = 0x400;
@@ -376,7 +381,54 @@ int powerRails() {
     native_wifi_pmic[23] = uint32_t(ns / 1000000);
     native_wifi_stats[20] = result;
     release(rsc);
-    return 0;
+    return shared && result != 0x3f ? -3 : 0;
+}
+
+// Wi-Fi holds its vote while PCIe remains live. Bluetooth may power down its
+// own enable pin without changing the shared supplies underneath Wi-Fi.
+IOLock *gWcnLock;
+unsigned gWcnOwners;
+IOLock *wcnLock() {
+    IOLock *lock = __atomic_load_n(&gWcnLock, __ATOMIC_ACQUIRE);
+    if (lock) return lock;
+    IOLock *candidate = IOLockAlloc();
+    if (!candidate) return nullptr;
+    if (!__atomic_compare_exchange_n(&gWcnLock, &lock, candidate, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        IOLockFree(candidate); return lock;
+    }
+    return candidate;
+}
+extern "C" int sheng_wcn_power_get(unsigned radio) {
+    if (radio > SHENG_WCN_BLUETOOTH) return EINVAL;
+    IOLock *lock = wcnLock(); if (!lock) return ENOMEM;
+    IOLockLock(lock);
+    const unsigned bit = 1u << radio;
+    if (gWcnOwners & bit) {IOLockUnlock(lock); return 0;}
+    int error = 0;
+    if (!gWcnOwners) {
+        pmicPrepare();
+        if (native_wifi_pmic[10] != 0 && native_wifi_pmic[10] != 0xff) error = EIO;
+    }
+    if (!error && powerRails(!gWcnOwners, radio == SHENG_WCN_WLAN)) error = EIO;
+    if (!error) gWcnOwners |= bit;
+    else if (!gWcnOwners) (void)powerRails(true, false, false);
+    IOLockUnlock(lock); return error;
+}
+extern "C" int sheng_wcn_power_put(unsigned radio) {
+    if (radio > SHENG_WCN_BLUETOOTH) return EINVAL;
+    IOLock *lock = wcnLock(); if (!lock) return ENOMEM;
+    IOLockLock(lock);
+    const unsigned bit = 1u << radio;
+    int error = 0;
+    if ((gWcnOwners & bit) && !(gWcnOwners & ~bit)) {
+        if (powerRails(true, false, false)) error = EIO;
+    }
+    if (!error) gWcnOwners &= ~bit;
+    IOLockUnlock(lock); return error;
+}
+extern "C" unsigned sheng_wcn_power_owners(void) {
+    IOLock *lock = wcnLock(); if (!lock) return 0;
+    IOLockLock(lock); unsigned owners = gWcnOwners; IOLockUnlock(lock); return owners;
 }
 
 // The MEM window of pcie@1c00000: CPU and PCI addresses are the same, 0x60300000 for 0x3d00000 bytes (sm8550.dtsi ranges).
@@ -1412,8 +1464,7 @@ void endpointProbe(volatile uint32_t *a, volatile uint32_t *c, volatile uint32_t
 // Stage 2; the step reached stays in native_wifi_stats[0], a negative value names the step that failed.
 void bringUp(Window &gcc, Window &tlmm) {
     volatile uint32_t *g = gcc.va, *t = tlmm.va;
-    pmicPrepare();
-    const int rails = powerRails();
+    const int rails = sheng_wcn_power_get(SHENG_WCN_WLAN);
     IOSleep(20);
     if (gPmic.obs.va) {pmicSurvey(true); pmicFind1800(gPmic, native_wifi_ldo + 12);}
     if (rails) {native_wifi_stats[0] = -9; return;}
