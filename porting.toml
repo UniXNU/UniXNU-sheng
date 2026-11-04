@@ -150,6 +150,18 @@ next_action = ["Attach contact and orientation observations when firmware or geo
 
 [[area.evidence]]
 kind = "source"
+reference = "package/BootDiagExport.c"
+result = "The joint latency capture exports vsync tick events and CPU frequency windows alongside HID report times. Exact user-stack samples are marked with peer -2."
+
+[[area.evidence]]
+kind = "host"
+reference = "drivers/ShengNovatekTouch/Test/touch-core.c"
+revision = "3b44b1b7603eaadae942ea44ddc51bdcc48ad060"
+command = "python3 scripts/check-touch-host.py"
+result = "Synthetic matrices exercise adjacent-key retaps, bottom-edge tip-down coordinates, and four- and five-finger pinch-and-hold with stable IDs. Device gesture recognition requires an interactive run."
+
+[[area.evidence]]
+kind = "source"
 reference = "package/TouchBoard.h"
 result = "Implementation and configuration described in this section"
 
