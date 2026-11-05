@@ -6,9 +6,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-struct model {uint32_t regs[0xd0000/4];unsigned writes,delays,published,stream_writes;bool clock_stuck,tlb_stuck;};
+struct model {uint32_t regs[0xd0000/4];unsigned writes,delays,published,stream_writes,smr_reads[128];bool clock_stuck,tlb_stuck,selection_only;};
 static uint32_t rd(void *p,uint32_t r) {
     struct model *m=p;assert(r<sizeof(m->regs));
+    if(m->selection_only) {
+        assert(r<0x20000);
+        if(r>=0x800 && r<0xa00)assert(m->smr_reads[(r-0x800)/4]++==0);
+    }
     if(r==0x1e760 && !m->clock_stuck)m->regs[r/4]&=~1u;
     if(m->tlb_stuck && r>0x10000 && (r&0xfff)==0x7f4)return 1;
     return m->regs[r/4];
@@ -63,6 +67,11 @@ int main(void) {
     assert(d.poisoned && !d.active && !m->stream_writes && m->delays==1000);
     init(m);m->regs[0x20/4]|=1u<<8;d=(struct sm8550_qup_dma){0};
     assert(sm8550_qup_dma_attach(&io,&d,0x423,0x109000000ULL,32768,0x108000000ULL,tables,4)==-ENOTSUP && !m->writes);
+    init(m);m->selection_only=true;d=(struct sm8550_qup_dma){0};
+    for(unsigned i=2;i<7;i++)m->regs[(0x1000+i*4)/4]=0x1f300;
+    assert(sm8550_qup_dma_attach(&io,&d,0x423,0x109000000ULL,32768,0x108000000ULL,tables,4)==-ENOSPC);
+    assert(d.exhausted==2 && d.free_slots==14 && d.unused_banks==5 && d.rejected_config==5 &&
+        d.rejected_cbar==0x1f300 && !m->writes);
     free(tables);free(m);
     puts("PASS: exact UART rates, DFS handoff, bounded clock/TLB timeout, isolated QUP DMA tables, ASID allocation and preserved storage/touch routes");
 }
