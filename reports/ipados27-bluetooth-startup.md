@@ -1,48 +1,55 @@
 # iPadOS 27 Bluetooth startup
 
-Device startup reaches the Wi-Fi cache and Bluetooth runtime overlays at
-stage 5, status 0. PID 1 exits with namespace 7, subcode 1, `No service cache`.
-Bluetooth DMA attachment reports context-bank ENOSPC before UART startup.
-Automatic reset is disabled.
+The runtime overlays reach stage 5, status 0. PID 1 exits with namespace 7,
+subcode 1, `No service cache`. Automatic reset is disabled.
 
-## Launchd cache
+## Cache input
 
-The packed cache retains all 715 system jobs and adds the Wi-Fi supplicant.
-Only BlueTool changes: UserName is root, ThrottleInterval is 3,
-EnablePressuredExit is false and EnableTransactions is true. The six top-level
-entries retain their original values outside LaunchDaemons. Plist lint and the
-host private XPC parser accept the system, Wi-Fi and Bluetooth caches.
+Capture `untagged-3858ddb02` belongs to image SHA-256
+`dc172358b5c90b04a581370ad8f30191b95e85881fd7d34b6f19b3a449f8a506`,
+board `b558633fe6127aba996d59877c7d7c563a2df832` and SM8550
+`6f8acd4849c2e07c432bea33a4f3d8103a05e20a`. The log writer reports zero
+write errors. The parser receives a complete readable binary plist whose
+length and hash differ from the packed cache:
 
-The device also rejects the unchanged Wi-Fi baseline cache with BlueTool's
-original job. Its loader reports trusted code hash
-`8016fc5545e8f80fa8c90f529f68a71b66645c3e`. The loader completes signature
-attachment and sends the validated cache to launchd. Device parser acceptance
-remains unresolved.
+| Value | Packed cache | Device parser input |
+| --- | --- | --- |
+| Bytes | 1327012 | 1327067 |
+| FNV-1a | 5a19e661b07cc7d9 | fcee8a414ee038a2 |
+| Binary object count | 44478 | 44479 |
+| Offset table | 1149068 | 1149119 |
 
-Capture `untagged-116dc15ab` records this result with image SHA-256
-`bdf756b74064408877eb353db8d1fdefb860fe3657f4462d14359fac46e1bedf`,
-board `46fcac0c81c35b822d07dbc4f374547101ff5f5c` and SM8550
-`276bb6e16bbc6f5505776e62ecd5172d54c32ce9`. Its log writer reports zero
-write errors. The baseline image changes only the cache and its signature.
+The loader trusts code hash `c81688714f2abfb55a47015a07bb6208a8b5e10a`
+and completes signature attachment and delivery. The Wi-Fi baseline cache
+also reaches the same fatal cache path. The source of the extra 55 bytes is
+unresolved.
 
-`sheng-cache-log=1` captures the loader's file using the log writer's relative
-boot clock. On the matched 24A446 failure stack it also records launchd's XPC
-data length, head, trailer, complete FNV-1a hash and string-cache metadata.
-Bounded copyin reads compare the actual parser input with the packed file.
-The Bluetooth cache is 1327012 bytes with FNV-1a `5a19e661b07cc7d9`;
-the Wi-Fi baseline is 1327003 bytes with FNV-1a `3bcfff9d8deafc9c`.
+The packed dictionary retains all 715 system jobs, adds the Wi-Fi supplicant
+and changes four BlueTool fields: UserName root, ThrottleInterval 3,
+EnablePressuredExit false and EnableTransactions true. Its other top-level
+entries retain their original values. Plist lint and the host private XPC
+parser accept the system, Wi-Fi and Bluetooth caches.
 
-## SMMU allocation
+`sheng-cache-log=1` captures the loader log and, on the matched 24A446 failure
+stack, the actual parser input. The snapshot is bounded to 4 MiB and published
+once. The log writer exports launchd-parser-input.plist, the system-path cache,
+the Data addon cache and the loader log to the existing reserved diagnostic
+region. This cache-only export leaves GPU and latency capture disabled.
+`check-cache-input.py` covers bounds, failed-copy teardown, immutable bytes,
+one-shot publication and the fixed filesystem paths through ASan/UBSan.
 
-The device reports 98 free stream slots, 66 unrouted context banks and four
-banks excluded by existing configuration. Selection fails at the context-bank
-stage. Failure rows reuse the allocator's original reads without rescanning
-MMIO. They include SCTLR and fault status.
+## UART DMA
 
-The allocator accepts an unrouted, unconfigured bank with SCTLR.M clear even
-when other SCTLR reset bits remain set. Register simulation covers this state
-and skips a bank with M set. ASan/UBSan and arm64e compilation pass; the corrected
-selection awaits device verification.
+Private context-bank selection reaches register programming but returns EIO
+at readback before UART startup. The board instead uses the firmware-managed
+bypass context already shared by touch and audio. UART14 stream 0x423 receives
+the 64-bit physical addresses of 32 KiB of DMA buffers. The shared SMMU lock
+serializes route installation, and the existing touch route remains intact.
+The board needs no private 16 KiB page tables or shared-context fault polling.
+
+The shared-bank register fixture and arm64e compilation pass. The GENI model
+already verifies 64-bit DMA pointer writes. Device UART, firmware, scan, pairing,
+BLE, audio, power and Wi-Fi coexistence verification remains pending.
 
 ## Capture
 
@@ -53,8 +60,7 @@ fastboot boot UniXNU/out/sheng/inputs/sheng-linux-log.img
 python3 UniXNU-sheng/scripts/read-sheng-log.py --wait 50 --out /path/to/capture
 ```
 
-The reader copies the reserved log region without mounting or writing userdata,
-then returns to fastboot. Inspect msgbuf.txt and slots.txt before booting another
-system image. QcaBluetooth is selected from the local checkout with
-`--local-module`. Native scanning, pairing, BLE, audio, power and Wi-Fi
-coexistence measurements follow successful startup.
+The reader copies the reserved log and diagnostic regions without mounting
+userdata, then returns to fastboot. Inspect msgbuf.txt, slots.txt and the
+exported plist files before booting another system image. QcaBluetooth remains
+a local checkout selected with `--local-module`.
