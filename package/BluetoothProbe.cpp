@@ -265,9 +265,9 @@ int powerOn() {
     bt.baud=115200;
     if(!bt.serial_irq){e=armcpu_spi_attach(SM8550_UART14_INTID,false,serialIrq,nullptr,nullptr,nullptr);if(e)return -EIO;bt.serial_irq=true;irqMask(nullptr,true);}
     if(!bt.wake_irq){e=armcpu_spi_share(240,rxIrq,nullptr);if(e)return -EIO;bt.wake_irq=true;}
+    disarmRxWake();pin(kBtEnable,1u|(1u<<9),1);IOSleep(60);
     e=qbt_geni_start(&bt.geni);if(e)return e;
     native_bluetooth_stats[14]=6;
-    disarmRxWake();pin(kBtEnable,1u|(1u<<9),1);IOSleep(60);
     return qbt_boot(bt.core,3200000,bt.address);
 }
 int powerOff() {
@@ -301,6 +301,7 @@ void powerResult(bool enabled,int error) {
     native_bluetooth_stats[21]=sheng_wcn_power_owners();
     native_bluetooth_stats[0]=error?3:enabled?2:0;native_bluetooth_stats[1]=(uint64_t)(int64_t)error;
     printf("[bluetooth] power=%u result=%d baud=%u\n",enabled,error,info.baud);
+    if(error && bt.geni.error)printf("[bluetooth uart] error=%d irq=%x/%x/%x/%x\n",bt.geni.error,bt.geni.fault_irq[0],bt.geni.fault_irq[1],bt.geni.fault_irq[2],bt.geni.fault_irq[3]);
 }
 void worker(void *,wait_result_t) {
     thread_set_thread_name(current_thread(),"sheng-bluetooth");
