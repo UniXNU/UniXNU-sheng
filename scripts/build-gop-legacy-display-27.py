@@ -523,7 +523,7 @@ sources += [Path(name) for name in json.loads((board_dir / 'qca-bluetooth/report
 for directory in ('include', 'src', 'shim', 'out/linux'):
     sources += sorted((BLUETOOTH / directory).rglob('*.h'))
 sources += [ROOT / 'kits/Sm8550Platform' / name for name in ('Sm8550GeniUart.h', 'Sm8550QupDma.h')]
-sources += [ROOT / 'package' / name for name in ('SmmuBypass.h', 'AppsSmmuLock.h')]
+sources += [KITS / name for name in ('SmmuBypass.h', 'AppsSmmuLock.h')]
 
 
 def source_name(path):
