@@ -17,41 +17,6 @@
 extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
 /* Opt-in capture of the cache loader's own error log. Runs on the log writer,
  * reads one fixed file and stops after two minutes; ordinary boots do no I/O. */
-/* log-bluetooth=2: new bytes of bluetoothd's stderr, handed to the slot text in order. */
-enum {BluetoothLogChunk = 16384};
-static char *bluetooth_log;
-static uint32_t bluetooth_log_length;
-void boot_bluetooth_log_capture(unsigned now) {
-  static int enabled = -1;
-  static uint64_t offset;
-  (void)now;
-  if (enabled < 0) {
-    uint32_t value = 0;
-    enabled = PE_parse_boot_argn("log-bluetooth", &value, sizeof value) && value >= 2;
-    if (enabled) bluetooth_log = IOMallocData(BluetoothLogChunk);
-  }
-  bluetooth_log_length = 0;
-  if (!enabled || !bluetooth_log) return;
-  vfs_context_t ctx = vfs_context_kernel();
-  vnode_t vp = NULLVP;
-  if (vnode_open("/private/var/log/bluetoothd.log", FREAD, 0, 0, &vp, ctx)) return;
-  struct vnode_attr va;
-  VATTR_INIT(&va); VATTR_WANTED(&va, va_data_size);
-  if (!vnode_getattr(vp, &va, ctx) && va.va_data_size > offset) {
-    uint64_t pending = va.va_data_size - offset;
-    int length = pending > BluetoothLogChunk ? BluetoothLogChunk : (int)pending, resid = length;
-    if (!vn_rdwr(UIO_READ, vp, bluetooth_log, length, (off_t)offset, UIO_SYSSPACE,
-        IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx)) && resid >= 0 && resid <= length) {
-      bluetooth_log_length = (uint32_t)(length - resid);
-      offset += bluetooth_log_length;
-    }
-  }
-  vnode_close(vp, FREAD, ctx);
-}
-const char *boot_bluetooth_log_text(uint32_t *length) {
-  *length = bluetooth_log_length;
-  return bluetooth_log;
-}
 void boot_cache_loader_log_capture(unsigned now) {
   static int enabled = -1, last_error = -1;
   static unsigned next_read;
@@ -100,7 +65,6 @@ void boot_cache_loader_log_capture(unsigned now) {
   if (vp) vnode_close(vp, FREAD, ctx);
   if (error != last_error) {last_error = error; native_wifi_logf(6, "cache-loader-file: read status %d", error);}
 }
-
 
 enum {DiagMaxFiles = 128, DiagPath = 192, DiagDepth = 0, DiagChunk = 256 * 1024, DiagNote = 32768};
 struct diag_file {char path[DiagPath]; uint64_t size; uint32_t mode, uid, gid, root, keep;};
@@ -170,7 +134,6 @@ static void *gpu_trace_data[1];
 static uint32_t gpu_trace_size[1];
 static const char *gpu_trace_name[1]={"gpu.trace.bin"};
 static const uint32_t gpu_trace_capacity[1]={32+(65536+4096)*120};
-
 
 static void note(const char *text, const char *path, int error) {
   if (!diag_note) return;

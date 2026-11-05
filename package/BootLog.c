@@ -18,8 +18,6 @@
 #include <IOKit/IOLib.h>
 extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
 extern void boot_cache_loader_log_capture(unsigned) __attribute__((weak_import));
-extern void boot_bluetooth_log_capture(unsigned) __attribute__((weak_import));
-extern const char *boot_bluetooth_log_text(uint32_t *) __attribute__((weak_import));
 extern uint32_t boot_cache_input_ready(void) __attribute__((weak_import));
 
 #if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
@@ -1030,16 +1028,6 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
           s[0],s[2],s[1],s[3],s[4],s[5],s[6],s[7],s[8],s[9],s[10],s[11]);
       at=put(out,at,cap,row,sizeof row);
     }
-    if(&boot_bluetooth_log_text) {
-      uint32_t length=0;const char *text=boot_bluetooth_log_text(&length);
-      for(uint32_t offset=0;text && offset<length;) {
-        uint32_t n=0;
-        while(offset+n<length && n<260 && text[offset+n]!='\n')n++;
-        if(n){snprintf(row,sizeof row,"[bluetooth log] %.*s",(int)n,text+offset);at=put(out,at,cap,row,sizeof row);}
-        offset+=n;
-        if(offset<length && text[offset]=='\n')offset++;
-      }
-    }
     if(&native_bluetooth_boot_text_length && &native_bluetooth_boot_text && native_bluetooth_boot_text) {
       uint32_t length=__atomic_load_n(&native_bluetooth_boot_text_length,__ATOMIC_ACQUIRE);
       if(length>8192)length=8192;
@@ -1836,7 +1824,6 @@ static void writer(void *arg, wait_result_t result) {
   for (;;) {
     const unsigned now = (unsigned)((log_ticks() - start) / f);
     if (&boot_cache_loader_log_capture) boot_cache_loader_log_capture(now);
-    if (&boot_bluetooth_log_capture) boot_bluetooth_log_capture(now);
     int ok = 1;
     // Text slot, then the message buffer, then the header that makes both visible.
     memset(boot_log_buffer, 0, LogSlotBlocks * LogBlock);
