@@ -56,6 +56,8 @@ int main(void) {
     m->clock_stuck=true;assert(sm8550_geni_uart14_source(&clock,3200000,&hz)==-ETIMEDOUT && m->delays==1000);
     uint64_t *tables=aligned_alloc(4096,16384);assert(tables);struct sm8550_qup_dma_io io={m,rd,wr,delay,publish};
     struct sm8550_qup_dma d={0};init(m);
+    /* A disabled bank may retain SCTLR configuration bits with M cleared. */
+    m->regs[(32+2)*4096/4]=0x00c01020;
     assert(!sm8550_qup_dma_attach(&io,&d,0x423,0x109000000ULL,32768,0x108000000ULL,tables,4));
     assert(d.active && !d.poisoned && d.bank==2 && d.slot==2 && d.asid==2 && m->stream_writes==1);
     for(unsigned page=0;page<8;page++)assert(physical(tables,0x108000000ULL,SM8550_QUP_DMA_IOVA+page*4096)==0x109000000ULL+page*4096);
@@ -72,6 +74,8 @@ int main(void) {
     assert(sm8550_qup_dma_attach(&io,&d,0x423,0x109000000ULL,32768,0x108000000ULL,tables,4)==-ENOSPC);
     assert(d.exhausted==2 && d.free_slots==14 && d.unused_banks==5 && d.rejected_config==5 &&
         d.rejected_cbar==0x1f300 && !m->writes);
+    init(m);d=(struct sm8550_qup_dma){0};m->regs[(32+2)*4096/4]=0x00c01021;
+    assert(!sm8550_qup_dma_attach(&io,&d,0x423,0x109000000ULL,32768,0x108000000ULL,tables,4) && d.bank==3);
     free(tables);free(m);
     puts("PASS: exact UART rates, DFS handoff, bounded clock/TLB timeout, isolated QUP DMA tables, ASID allocation and preserved storage/touch routes");
 }
