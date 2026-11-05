@@ -1,0 +1,50 @@
+diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
+index 98bcafe..85eeb24 100644
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -1064,6 +1064,10 @@ sheng_dump_user_backtrace(const char *tag)
+ 	printf("sheng-ubt %s: pc=0x%llx lr=0x%llx sp=0x%llx fp=0x%llx x0=0x%llx x1=0x%llx x2=0x%llx\n", tag,
+ 	    get_saved_state_pc(ss), get_saved_state_lr(ss), get_saved_state_sp(ss), get_saved_state_fp(ss),
+ 	    get_saved_state_reg(ss, 0), get_saved_state_reg(ss, 1), get_saved_state_reg(ss, 2));
++	uint32_t cache_trace = 0;
++	PE_parse_boot_argn("sheng-cache-log", &cache_trace, sizeof(cache_trace));
++	cache_trace = cache_trace && tag && !strcmp(tag, "launchd");
++	uint64_t previous_return = 0;
+ 	uint64_t fp = get_saved_state_fp(ss);
+ 	for (int i = 0; i < 32 && fp != 0 && (fp & 7) == 0; i++) {
+ 		uint64_t frame[2];
+@@ -1071,6 +1075,34 @@ sheng_dump_user_backtrace(const char *tag)
+ 			break;
+ 		}
+ 		printf("sheng-ubt %s: #%d fp=0x%llx ret=0x%llx\n", tag, i, fp, frame[1] & 0x00007fffffffffffULL);
++
++		uint64_t ret = frame[1] & 0x00007fffffffffffULL;
++		/* 24A446 launchd: cache-parser caller follows its fatal-cache frame.
++		 * Its saved x19 is the original XPC data object passed to the parser. */
++		if (cache_trace && previous_return && ret > previous_return &&
++		    ret - previous_return == 0x46618 - 0x1bba4 && fp >= 8) {
++			uint64_t object = 0, data[7] = {0}, strings[2] = {0};
++			int error = copyin((user_addr_t)(fp - 8), &object, sizeof(object));
++			if (!error && object) error = copyin((user_addr_t)object, data, sizeof(data));
++			copyin((user_addr_t)(previous_return - 0x1bba4 + 0x87208), strings, sizeof(strings));
++			printf("[cache-input] object=%llx read=%d bytes=%llx length=%llu strings=%llx/%llu\n",
++			    object, error, data[4], data[5], strings[0], strings[1]);
++			if (!error && data[4] && data[5] >= 32 && data[5] <= 4 * 1024 * 1024) {
++				uint64_t first = 0, tail[4] = {0}, hash = 14695981039346656037ULL;
++				unsigned char bytes[256];
++				error = copyin((user_addr_t)data[4], &first, sizeof(first));
++				if (!error) error = copyin((user_addr_t)(data[4] + data[5] - 32), tail, sizeof(tail));
++				for (uint64_t offset = 0; !error && offset < data[5]; offset += sizeof(bytes)) {
++					size_t count = data[5] - offset < sizeof(bytes) ? (size_t)(data[5] - offset) : sizeof(bytes);
++					error = copyin((user_addr_t)(data[4] + offset), bytes, count);
++					if (!error) for (size_t j = 0; j < count; j++) hash = (hash ^ bytes[j]) * 1099511628211ULL;
++				}
++				printf("[cache-input] first=%llx tail=%llx/%llx/%llx/%llx fnv64=%llx read=%d\n",
++				    first, tail[0], tail[1], tail[2], tail[3], hash, error);
++			}
++			cache_trace = 0;
++		}
++		previous_return = ret;
+ 		if (frame[0] <= fp) {
+ 			break;
+ 		}
