@@ -13,7 +13,7 @@ index 98bcafe..85eeb24 100644
  	uint64_t fp = get_saved_state_fp(ss);
  	for (int i = 0; i < 32 && fp != 0 && (fp & 7) == 0; i++) {
  		uint64_t frame[2];
-@@ -1071,6 +1075,34 @@ sheng_dump_user_backtrace(const char *tag)
+@@ -1071,6 +1075,36 @@ sheng_dump_user_backtrace(const char *tag)
  			break;
  		}
  		printf("sheng-ubt %s: #%d fp=0x%llx ret=0x%llx\n", tag, i, fp, frame[1] & 0x00007fffffffffffULL);
@@ -30,6 +30,8 @@ index 98bcafe..85eeb24 100644
 +			printf("[cache-input] object=%llx read=%d bytes=%llx length=%llu strings=%llx/%llu\n",
 +			    object, error, data[4], data[5], strings[0], strings[1]);
 +			if (!error && data[4] && data[5] >= 32 && data[5] <= 4 * 1024 * 1024) {
++				extern void boot_cache_input_capture(user_addr_t, uint64_t) __attribute__((weak_import));
++				if (&boot_cache_input_capture) boot_cache_input_capture((user_addr_t)data[4], data[5]);
 +				uint64_t first = 0, tail[4] = {0}, hash = 14695981039346656037ULL;
 +				unsigned char bytes[256];
 +				error = copyin((user_addr_t)data[4], &first, sizeof(first));
