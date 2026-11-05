@@ -1,0 +1,63 @@
+diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
+--- a/bsd/kern/kern_exit.c
++++ b/bsd/kern/kern_exit.c
+@@ -1650,6 +1650,21 @@ exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, boolean_t perf_notify,
+ 	int error = 0;
+ 	bool proc_exiting = false;
+ 
++	/* log-bluetooth=2: why a native Bluetooth daemon left. */
++	if (!strcmp(p->p_comm, "bluetoothd") || !strcmp(p->p_comm, "BlueTool")) {
++		uint32_t bluetooth_log = 0;
++		if (PE_parse_boot_argn("log-bluetooth", &bluetooth_log, sizeof(bluetooth_log)) && bluetooth_log >= 2) {
++			extern void sheng_dump_user_backtrace(const char *tag);
++			char *description = exit_reason ? exit_reason_get_string_desc(exit_reason) : NULL;
++			printf("[bluetooth exit] %s[%d] rv=0x%x reason=%u/0x%llx %s\n", p->p_comm, proc_getpid(p), rv,
++			    exit_reason ? exit_reason->osr_namespace : 0, exit_reason ? exit_reason->osr_code : 0ULL, description ? description : "-");
++			if (current_proc() == p) {
++				sheng_dump_user_backtrace(p->p_comm);
++				extern void sheng_dump_user_strings(const char *tag);
++				sheng_dump_user_strings(p->p_comm);
++			}
++		}
++	}
+ 	if (__improbable(sheng_user_exit_hook != NULL) && (rv & 127)) {
+ 		sheng_user_exit_hook(proc_getpid(p), rv, exit_reason ? exit_reason->osr_namespace : 0,
+ 		    exit_reason ? exit_reason->osr_code : 0, p->p_name,
+diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -1053,4 +1053,34 @@
+ 
+ #if __arm64__
+ /* Print the current thread's user registers and frame-pointer chain (launchd bring-up diagnostics). */
++/* A daemon's fatal exit keeps its reason text in callee-saved registers. */
++void sheng_dump_user_strings(const char *tag);
++void
++sheng_dump_user_strings(const char *tag)
++{
++	arm_saved_state_t *ss = find_user_regs(current_thread());
++	if (ss == NULL) {
++		return;
++	}
++	for (int reg = 19; reg <= 28; reg++) {
++		uint64_t address = get_saved_state_reg(ss, reg) & 0x00007fffffffffffULL;
++		char text[200];
++		size_t used = 0;
++		if (address < 0x100000000ULL) {
++			continue;
++		}
++		int error = copyinstr((user_addr_t)address, text, sizeof(text), &used);
++		if ((error && error != 63 /* ENAMETOOLONG */) || used < 5) {
++			continue;
++		}
++		text[sizeof(text) - 1] = 0;
++		bool printable = true;
++		for (size_t i = 0; text[i]; i++) {
++			printable = printable && text[i] >= 32 && text[i] < 127;
++		}
++		if (printable) {
++			printf("sheng-str %s: x%d=%s\n", tag, reg, text);
++		}
++	}
++}
+ void sheng_dump_user_backtrace(const char *tag);

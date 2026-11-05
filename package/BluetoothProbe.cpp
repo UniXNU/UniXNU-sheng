@@ -29,8 +29,15 @@ extern "C" {
 volatile uint64_t native_bluetooth_stats[32];
 uint8_t native_bluetooth_boot_rx[512];
 volatile uint32_t native_bluetooth_boot_rx_length;
-/* log-bluetooth=2: pins before TX, RX bytes before TX, then pins and engine status when startup returns. */
-volatile uint32_t native_bluetooth_boot_state[10];
+uint8_t native_bluetooth_boot_tail[256];
+volatile uint32_t native_bluetooth_boot_tail_length;
+/* log-bluetooth=2: pins before TX, RX bytes before TX, then pins, engine status and download reports when startup returns. */
+volatile uint32_t native_bluetooth_boot_state[12];
+/* log-bluetooth=2: live pid and starts seen for bluetoothd, then for BlueTool. */
+volatile uint32_t native_bluetooth_processes[4];
+/* log-bluetooth=2: printable runs in controller output, which carry its assert text. */
+char *volatile native_bluetooth_boot_text;
+volatile uint32_t native_bluetooth_boot_text_length;
 }
 namespace {
 struct Region {IOMemoryMap *map;volatile uint32_t *va;};
@@ -126,6 +133,22 @@ size_t rxBytes(void *,const uint8_t *bytes,size_t n) {
             memcpy(native_bluetooth_boot_rx+at,bytes,count);
             __atomic_store_n(&native_bluetooth_boot_rx_length,at+(uint32_t)count,__ATOMIC_RELEASE);
         }
+        static char run[96];static unsigned runLength;
+        for(size_t i=0;i<n;i++) {
+            uint8_t c=bytes[i];
+            if(c>=32 && c<127 && runLength<sizeof(run)-1){run[runLength++]=(char)c;continue;}
+            if(runLength>=12 && memchr(run,' ',runLength)) {
+                uint32_t at=native_bluetooth_boot_text_length;
+                if(native_bluetooth_boot_text && at+runLength+1<8192) {
+                    memcpy(native_bluetooth_boot_text+at,run,runLength);native_bluetooth_boot_text[at+runLength]='|';
+                    __atomic_store_n(&native_bluetooth_boot_text_length,at+runLength+1,__ATOMIC_RELEASE);
+                }
+            }
+            runLength=0;
+        }
+        uint32_t tail=__atomic_load_n(&native_bluetooth_boot_tail_length,__ATOMIC_RELAXED);
+        for(size_t i=0;i<n;i++)native_bluetooth_boot_tail[(tail+i)%sizeof(native_bluetooth_boot_tail)]=bytes[i];
+        __atomic_store_n(&native_bluetooth_boot_tail_length,tail+(uint32_t)n,__ATOMIC_RELEASE);
     }
     bt.rx_sequence+=n;return qbt_receive(bt.core,bytes,n);
 }
@@ -134,6 +157,12 @@ size_t writeUart(void *,const uint8_t *p,size_t n){return qbt_geni_write(&bt.gen
 bool drained(void *){return bt.gated || qbt_geni_drained(&bt.geni);}
 int flow(void *,bool enabled){qbt_geni_set_flow(&bt.geni,enabled);return 0;}
 void pump(void *) {
+    if(bt.log>=2 && bt.initializing) {
+        struct qbt_stats stats;qbt_get_stats(bt.core,&stats);
+        native_bluetooth_stats[3]=stats.tx_bytes;native_bluetooth_stats[4]=stats.rx_bytes;
+        native_bluetooth_boot_state[10]=(uint32_t)stats.tlv_acks|((uint32_t)stats.tlv_sent<<16);
+        native_bluetooth_boot_state[11]=(uint32_t)stats.hardware_errors|((uint32_t)stats.last_hardware_error<<8)|((uint32_t)stats.tlv_final_status<<16);
+    }
     if(__atomic_exchange_n(&bt.rx_wake,0u,__ATOMIC_ACQ_REL) && bt.powered) {
         qbt_rx_wake(bt.core);
         /* The GPIO consumed the first IBS wake byte while the UART was gated. */
@@ -318,7 +347,8 @@ int powerOn() {
     e=sheng_wcn_power_get(SHENG_WCN_BLUETOOTH);if(e)return -e;
     bt.powered=true;bt.gated=true;
     native_bluetooth_stats[14]=3;
-    for(unsigned gpio=76;gpio<=79;gpio++)pin(gpio,(1u<<2)|(gpio>=78?3u:1u));
+    /* The controller leaves reset with RTS low: UART function only after it has settled. */
+    for(unsigned gpio=76;gpio<=79;gpio++)pin(gpio,gpio>=78?3u:1u);
     pin(kSwCtrl,1u);pin(kBtEnable,kBtEnableCfg,0);IOSleep(100);
     if(!sm8550_gcc_update32(bt.gcc.va+0x52018/4,0,1u))return -EIO;
     for(unsigned i=0;i<1000 && !(grd(nullptr,0)&(1u<<31));i++)IODelay(1);
@@ -333,7 +363,9 @@ int powerOn() {
     if(!bt.serial_irq){e=armcpu_spi_attach(SM8550_UART14_INTID,false,serialIrq,nullptr,nullptr,nullptr);if(e)return -EIO;bt.serial_irq=true;irqMask(nullptr,true);}
     if(!bt.wake_irq){e=armcpu_spi_share(240,rxIrq,nullptr);if(e)return -EIO;bt.wake_irq=true;}
     if(bt.log>=2){e=loopbackCheck();if(e)return e;}
-    disarmRxWake();pin(kBtEnable,kBtEnableCfg,1);IOSleep(60);
+    pin(kBtEnable,kBtEnableCfg,1);IOSleep(60);
+    for(unsigned gpio=76;gpio<=79;gpio++)pin(gpio,(1u<<2)|(gpio>=78?3u:1u));
+    disarmRxWake();
     e=qbt_geni_start(&bt.geni);if(e)return e;
     native_bluetooth_stats[14]=6;
     bt.initializing=true;
@@ -348,6 +380,9 @@ int powerOn() {
         static const uint32_t regs[]={0x40,0x610,0x640,0xc40,0xd40,0x800,0xd54};
         native_bluetooth_boot_state[2]=linePins();
         for(unsigned i=0;i<7;i++)native_bluetooth_boot_state[3+i]=bt.clocked?urd(nullptr,regs[i]):0;
+        struct qbt_stats stats;qbt_get_stats(bt.core,&stats);
+        native_bluetooth_boot_state[10]=(uint32_t)stats.tlv_acks|((uint32_t)stats.tlv_sent<<16);
+        native_bluetooth_boot_state[11]=(uint32_t)stats.hardware_errors|((uint32_t)stats.last_hardware_error<<8)|((uint32_t)stats.tlv_final_status<<16);
     }
     return e;
 }
@@ -441,6 +476,29 @@ void worker(void *,wait_result_t) {
     }
 }
 }
+struct proc;
+extern "C" {
+void proc_iterate(unsigned,int (*)(struct proc *,void *),void *,int (*)(struct proc *,void *),void *);
+int proc_pid(struct proc *);
+}
+int processSeen(struct proc *process,void *found) {
+    static const char *const names[]={"bluetoothd","BlueTool"};
+    const char *name=proc_best_name(process);
+    for(unsigned i=0;name && i<2;i++)if(!strcmp(name,names[i]))static_cast<int *>(found)[i]=proc_pid(process);
+    return 0;
+}
+void processWatch(void *,wait_result_t) {
+    thread_set_thread_name(current_thread(),"sheng-bluetooth-procs");
+    for(;;) {
+        int found[2]={0,0};
+        proc_iterate(1u|4u,processSeen,found,nullptr,nullptr);
+        for(unsigned i=0;i<2;i++) {
+            if(found[i] && (uint32_t)found[i]!=native_bluetooth_processes[i*2])native_bluetooth_processes[i*2+1]=native_bluetooth_processes[i*2+1]+1;
+            native_bluetooth_processes[i*2]=(uint32_t)found[i];
+        }
+        IOSleep(2000);
+    }
+}
 extern "C" void sheng_bluetooth_probe(void) {
     unsigned enabled=0;
     if(!PE_parse_boot_argn("sheng-bluetooth",&enabled,sizeof(enabled)) || !enabled)return;
@@ -448,7 +506,9 @@ extern "C" void sheng_bluetooth_probe(void) {
     native_bluetooth_stats[0]=1;
     if(!address()){native_bluetooth_stats[0]=3;native_bluetooth_stats[1]=(uint64_t)(int64_t)-ENOENT;return;}
     PE_parse_boot_argn("log-bluetooth",&bt.log,sizeof(bt.log));
+    if(bt.log>=2)native_bluetooth_boot_text=static_cast<char *>(IOMallocData(8192));
     thread_t thread=nullptr;
     if(kernel_thread_start(worker,nullptr,&thread)==KERN_SUCCESS)thread_deallocate(thread);
     else native_bluetooth_stats[0]=3;
+    if(bt.log>=2 && kernel_thread_start(processWatch,nullptr,&thread)==KERN_SUCCESS)thread_deallocate(thread);
 }
