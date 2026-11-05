@@ -12,3 +12,4 @@ sheng-bluetooth-runtime.patch
 sheng-wifi-association-event.patch
 sheng-main-thread-profile.patch
 sheng-cache-input-diagnostic.patch
+sheng-bluetooth-exit-diagnostic.patch
