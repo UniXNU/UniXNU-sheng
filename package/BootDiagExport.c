@@ -19,7 +19,7 @@ extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import)
  * reads one fixed file and stops after two minutes; ordinary boots do no I/O. */
 void boot_cache_loader_log_capture(unsigned now) {
   static int enabled = -1, last_error = -1;
-  static unsigned next_read;
+  static unsigned next_read, started;
   static uint64_t last_size = UINT64_MAX;
   static struct timespec last_modified;
   static char *buffer;
@@ -27,8 +27,10 @@ void boot_cache_loader_log_capture(unsigned now) {
   if (enabled < 0) {
     uint32_t value = 0;
     enabled = PE_parse_boot_argn("sheng-cache-log", &value, sizeof value) && value == 1;
+    started = now;
   }
   if (!enabled || !&native_wifi_logf) return;
+  now -= started;
   if (now > 120) { if (buffer) {IOFreeData(buffer, capacity); buffer = NULL;} return; }
   if (now < 10 || now < next_read) return;
   next_read = now + 4;

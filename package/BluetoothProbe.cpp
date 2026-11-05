@@ -215,6 +215,22 @@ int resources() {
     struct sm8550_qup_dma_io io={nullptr,srd,swr,delay,publish};
     int e=sm8550_qup_dma_attach(&io,&bt.domain,SM8550_QUP2_SID,pa,kDmaBytes,tpa,
         static_cast<uint64_t *>(bt.tables->getBytesNoCopy()),kTableBytes/4096);
+    if(e) {
+        uint32_t id0=srd(nullptr,0x20),id1=srd(nullptr,0x24);
+        unsigned slots=id0&255,banks=id1&255,pages=1u<<(((id1>>28)&7)+1),freeSlots=0,disabled=0,shown=0;
+        for(unsigned i=0;i<slots && i<128;i++)if(!(srd(nullptr,0x800+i*4)&0x80000000u))freeSlots++;
+        printf("[bluetooth dma] attach=%d id=%x/%x/%x scr0=%x slots=%u free=%u banks=%u pages=%u\n",
+            e,id0,id1,srd(nullptr,0x28),srd(nullptr,0),slots,freeSlots,banks,pages);
+        if((pages+banks)*4096<=0xd0000)for(unsigned i=1;i<banks && i<128;i++) {
+            uint32_t cb=(pages+i)*4096,control=srd(nullptr,cb);
+            if(!(control&1)) {
+                disabled++;
+                if(shown++<8)printf("[bluetooth dma] bank=%u sctlr=%x cbar=%x cba2r=%x fsr=%x\n",
+                    i,control,srd(nullptr,0x1000+i*4),srd(nullptr,0x1800+i*4),srd(nullptr,cb+0x58));
+            }
+        }
+        printf("[bluetooth dma] disabled=%u\n",disabled);
+    }
     sm8550_apps_smmu_unlock();if(e)return e;
     bt.resources=true;return 0;
 }
