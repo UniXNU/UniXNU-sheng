@@ -1730,7 +1730,9 @@ static uint32_t copy_msgbuf(uint8_t *out) {
   int size = m->msg_size, x = m->msg_bufx;
   if (x < 0 || x >= size) x = 0;
   uint32_t n = 0;
-  for (int i = 0; i < size && n < LogMsgBlocks * LogBlock; ++i) {
+  // A ring larger than the window keeps its newest bytes, which hold the end of a run.
+  int i = size > (int)(LogMsgBlocks * LogBlock) ? size - (int)(LogMsgBlocks * LogBlock) : 0;
+  for (; i < size && n < LogMsgBlocks * LogBlock; ++i) {
     char c = m->msg_bufc[(x + i) % size];
     if (c) out[n++] = (uint8_t)c;
   }
@@ -1899,7 +1901,11 @@ void boot_log_panic_flush(void) {
   const uint32_t cap = LogMsgBlocks * LogBlock;
   if (&boot_progress_panic_text && boot_progress_panic_text[0]) {
     uint32_t len = (uint32_t)strnlen(boot_progress_panic_text, 2048);
-    if (n > cap - len - 10) n = cap - len - 10;   // a full buffer loses its newest lines to the panic text
+    if (n > cap - len - 10) {   // a full buffer gives up its oldest lines to the panic text
+      const uint32_t drop = n - (cap - len - 10);
+      memmove(boot_log_panic_buffer, boot_log_panic_buffer + drop, n - drop);
+      n -= drop;
+    }
     memcpy(boot_log_panic_buffer + n, "\n[panic] ", 9);
     memcpy(boot_log_panic_buffer + n + 9, boot_progress_panic_text, len);
     n += 9 + len;
