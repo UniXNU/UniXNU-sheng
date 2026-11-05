@@ -217,8 +217,8 @@ int resources() {
         static_cast<uint64_t *>(bt.tables->getBytesNoCopy()),kTableBytes/4096);
     if(e) {
         const auto &d=bt.domain;
-        printf("[bluetooth dma] attach=%d exhausted=%u id=%x/%x/%x free=%u unused=%u configured=%u cbar=%x cba2r=%x\n",
-            e,d.exhausted,d.id0,d.id1,d.id2,d.free_slots,d.unused_banks,d.rejected_config,d.rejected_cbar,d.rejected_cba2r);
+        printf("[bluetooth dma] attach=%d exhausted=%u id=%x/%x/%x free=%u unused=%u configured=%u cbar=%x cba2r=%x sctlr=%x fsr=%x\n",
+            e,d.exhausted,d.id0,d.id1,d.id2,d.free_slots,d.unused_banks,d.rejected_config,d.rejected_cbar,d.rejected_cba2r,d.rejected_sctlr,d.rejected_fsr);
     }
     sm8550_apps_smmu_unlock();if(e)return e;
     bt.resources=true;return 0;
