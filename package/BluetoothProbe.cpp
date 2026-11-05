@@ -15,7 +15,8 @@
 #include "qbt_geni.h"
 #include "qbt_transport.h"
 #include "Sm8550GeniUart.h"
-#include "Sm8550QupDma.h"
+#include "SmmuBypass.h"
+#include "AppsSmmuLock.h"
 #include "WcnPower.h"
 #include "BluetoothFirmware.h"
 
@@ -29,8 +30,9 @@ struct Region {IOMemoryMap *map;volatile uint32_t *va;};
 struct Bluetooth {
     Region gcc,uart,wrapper,tlmm,smmu;
     IOService *radio;
-    IOBufferMemoryDescriptor *dma,*tables;
-    struct sm8550_qup_dma domain;
+    IOBufferMemoryDescriptor *dma;
+    struct smmu_plan domain;
+    uint64_t dma_address;
     struct qbt_geni geni;
     struct qbt *core;
     uint64_t rx_sequence;
@@ -40,7 +42,7 @@ struct Bluetooth {
     bool resources,powered,gated,clocked,serial_irq,wake_irq,service;
 } bt;
 constexpr unsigned kRx=79,kBtEnable=81;
-constexpr uint32_t kDmaBytes=32768,kTableBytes=16384;
+constexpr uint32_t kDmaBytes=32768;
 bool map(Region &r,uint64_t base,size_t bytes) {
     if(r.va)return true;
     IODeviceMemory *memory=IODeviceMemory::withRange(base,bytes);
@@ -65,10 +67,6 @@ void gwr(void *,uint32_t reg,uint32_t value){bt.gcc.va[reg/4]=value;barrier();}
 void delay(void *,unsigned us){IODelay(us);}
 void dmaBarrier(void *){barrier();}
 void dmaSync(void *,const struct qbt_dma_buffer *,size_t,bool,bool){barrier();} // QUP2 is dma-coherent.
-void publish(void *,void *data,size_t n) {
-    uintptr_t at=reinterpret_cast<uintptr_t>(data)&~63ULL,end=reinterpret_cast<uintptr_t>(data)+n;
-    for(;at<end;at+=64)__asm__ volatile("dc cvac, %0"::"r"(at):"memory");barrier();
-}
 uint32_t srd(void *,uint32_t reg){return bt.smmu.va[reg/4];}
 void swr(void *,uint32_t reg,uint32_t value){bt.smmu.va[reg/4]=value;barrier();}
 void irqMask(void *,bool masked) {
@@ -206,21 +204,20 @@ int resources() {
     if(!address())return -ENOENT;
     const IOOptionBits options=static_cast<IOOptionBits>(kIODirectionInOut)|static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous)|static_cast<IOOptionBits>(kIOMemoryMapperNone);
     if(!bt.dma)bt.dma=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,options,kDmaBytes,4096);
-    if(!bt.tables)bt.tables=IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,options,kTableBytes,4096);
-    if(!bt.dma || !bt.tables)return -ENOMEM;
-    IOByteCount contiguous=0,tableContiguous=0;
-    uint64_t pa=bt.dma->getPhysicalSegment(0,&contiguous,kIOMemoryMapperNone),tpa=bt.tables->getPhysicalSegment(0,&tableContiguous,kIOMemoryMapperNone);
-    if(!pa || !tpa || contiguous<kDmaBytes || tableContiguous<kTableBytes)return -EIO;
-    if(!sm8550_apps_smmu_lock())return -ENOMEM;
-    struct sm8550_qup_dma_io io={nullptr,srd,swr,delay,publish};
-    int e=sm8550_qup_dma_attach(&io,&bt.domain,SM8550_QUP2_SID,pa,kDmaBytes,tpa,
-        static_cast<uint64_t *>(bt.tables->getBytesNoCopy()),kTableBytes/4096);
-    if(e) {
-        const auto &d=bt.domain;
-        printf("[bluetooth dma] attach=%d exhausted=%u id=%x/%x/%x free=%u unused=%u configured=%u cbar=%x cba2r=%x sctlr=%x fsr=%x\n",
-            e,d.exhausted,d.id0,d.id1,d.id2,d.free_slots,d.unused_banks,d.rejected_config,d.rejected_cbar,d.rejected_cba2r,d.rejected_sctlr,d.rejected_fsr);
+    if(!bt.dma)return -ENOMEM;
+    IOByteCount contiguous=0;
+    uint64_t pa=bt.dma->getPhysicalSegment(0,&contiguous,kIOMemoryMapperNone);
+    if(!pa || contiguous<kDmaBytes)return -EIO;
+    AppsSmmuLock guard;if(!guard.ready())return -ENOMEM;
+    struct smmu_io io={nullptr,srd,swr};
+    bt.domain=smmu_plan_bypass(&io,SM8550_QUP2_SID,pa,kDmaBytes);
+    const char *error=bt.domain.error?bt.domain.error:smmu_configure_bypass(&io,&bt.domain,SM8550_QUP2_SID);
+    if(error) {
+        printf("[bluetooth dma] slot=%u bank=%u result=%s\n",bt.domain.slot,bt.domain.bank,error);
+        return -EIO;
     }
-    sm8550_apps_smmu_unlock();if(e)return e;
+    bt.dma_address=pa;
+    printf("[bluetooth dma] bypass slot=%u bank=%u pa=%llx bytes=%u\n",bt.domain.slot,bt.domain.bank,pa,kDmaBytes);
     bt.resources=true;return 0;
 }
 int stopEngine() {
@@ -240,7 +237,6 @@ int stopEngine() {
 }
 int powerOn() {
     if(bt.powered)return 0;
-    if(bt.domain.poisoned)return -EIO;
     native_bluetooth_stats[14]=1;int e=resources();if(e)return e;
     native_bluetooth_stats[14]=2;
     e=sheng_wcn_power_get(SHENG_WCN_BLUETOOTH);if(e)return -e;
@@ -258,8 +254,8 @@ int powerOn() {
     if(((urd(nullptr,0x68)>>8)&255)!=2)return -ENXIO;
     e=stopEngine();if(e)return e;
     uint8_t *bytes=static_cast<uint8_t *>(bt.dma->getBytesNoCopy());
-    struct qbt_dma_buffer tx={bytes,SM8550_QUP_DMA_IOVA,QBT_GENI_TX_SIZE},rx[QBT_GENI_RX_COUNT];
-    for(unsigned i=0;i<QBT_GENI_RX_COUNT;i++)rx[i]={bytes+4096+i*QBT_GENI_RX_SIZE,SM8550_QUP_DMA_IOVA+4096+i*QBT_GENI_RX_SIZE,QBT_GENI_RX_SIZE};
+    struct qbt_dma_buffer tx={bytes,bt.dma_address,QBT_GENI_TX_SIZE},rx[QBT_GENI_RX_COUNT];
+    for(unsigned i=0;i<QBT_GENI_RX_COUNT;i++)rx[i]={bytes+4096+i*QBT_GENI_RX_SIZE,bt.dma_address+4096+i*QBT_GENI_RX_SIZE,QBT_GENI_RX_SIZE};
     struct qbt_geni_ops ops={nullptr,urd,uwr,dmaBarrier,dmaSync,nowNs,irqMask,wake,rxBytes};
     e=qbt_geni_prepare(&bt.geni,&ops,&tx,rx);if(e)return e;
     native_bluetooth_stats[14]=5;
@@ -278,14 +274,6 @@ int powerOff() {
     if(!bt.powered)return 0;
     qbt_set_service(bt.core,false);bt.service=false;
     int e=0;
-    if(bt.domain.active) {
-        uint32_t cb=(bt.domain.pages+bt.domain.bank)*4096,fsr=srd(nullptr,cb+0x58);
-        if(fsr&0xc00001feu) {
-            native_bluetooth_stats[10]=fsr;qbt_fail(bt.core,-EIO);
-            if(fsr&(1u<<30))swr(nullptr,cb+8,1);
-            swr(nullptr,cb+0x58,fsr);e=-EIO;
-        }
-    }
     if(bt.geni.state!=QBT_GENI_OFF) {
         if(bt.gated){int resumed=clockVote(nullptr,true);if(!e)e=resumed;}
         if(bt.clocked){int shutdown=qbt_shutdown(bt.core);if(!e)e=shutdown;}
@@ -347,8 +335,6 @@ void worker(void *,wait_result_t) {
             native_bluetooth_stats[8]=bt.domain.slot;native_bluetooth_stats[9]=bt.domain.bank;
             native_bluetooth_stats[20]=(unsigned)bt.powered|((unsigned)bt.gated<<1)|((unsigned)bt.clocked<<2);
             native_bluetooth_stats[21]=sheng_wcn_power_owners();
-            if(bt.domain.active){uint32_t fsr=srd(nullptr,(bt.domain.pages+bt.domain.bank)*4096+0x58);native_bluetooth_stats[10]=fsr;
-                if(fsr&0xc00001feu){qbt_fail(bt.core,-EIO);(void)powerOff();powerResult(false,-EIO);}}
             health=t+1000000000ULL;
         }
         uint64_t deadline=bt.powered?qbt_deadline(bt.core):UINT64_MAX;

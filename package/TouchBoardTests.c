@@ -38,6 +38,15 @@ static void smmu_tests(void) {
     p = smmu_plan_bypass(&io, 0xa3, 0xc8000000ULL, 0x1000); CHECK(p.error);
     fresh(&f); f.reg[0x800 / 4] = 0x80000000u | 0xa3; f.reg[0xc00 / 4] = 1;
     p = smmu_plan_bypass(&io, 0xa3, 0xc8000000ULL, 0x1000); CHECK(p.error);
+    // UART14 joins the same firmware bypass bank with a 64-bit DMA address.
+    fresh(&f);
+    p = smmu_plan_bypass(&io, 0xa3, 0xc8000000ULL, 0x20000);
+    CHECK(!p.error && !smmu_configure_bypass(&io, &p, 0xa3));
+    unsigned shared_bank=p.bank, before=f.writes;
+    p = smmu_plan_bypass(&io, 0x423, 0x103000000ULL, 32768);
+    CHECK(!p.error && p.bank==shared_bank && p.bank_ready && !p.reuse);
+    CHECK(!smmu_configure_bypass(&io,&p,0x423) && f.writes==before+2);
+    CHECK(f.reg[0x800/4]==(0x80000000u|0xa3) && f.reg[(0x800+4*p.slot)/4]==(0x80000000u|0x423));
     // another stream already uses the bank but the bank is not a bypass bank: refused, nothing written
     fresh(&f); f.reg[0x800 / 4] = 0x80000000u | 0x60; f.reg[0xc00 / 4] = 3; f.reg[0x1000 / 4 + 3] = 0;
     p = smmu_plan_bypass(&io, 0xa3, 0xc8000000ULL, 0x1000); CHECK(p.error && f.writes == 0);
