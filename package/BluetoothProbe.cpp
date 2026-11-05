@@ -24,7 +24,14 @@ extern "C" int armcpu_spi_attach(uint32_t,bool,void(*)(void *),void *,uint32_t *
 extern "C" int armcpu_spi_share(uint32_t,void(*)(void *),void *);
 extern "C" int armcpu_spi_mask(uint32_t,bool);
 extern "C" volatile int native_gpu_addon_stage;
-extern "C" {volatile uint64_t native_bluetooth_stats[32];}
+extern "C" volatile uint32_t native_wifi_stats[29];
+extern "C" {
+volatile uint64_t native_bluetooth_stats[32];
+uint8_t native_bluetooth_boot_rx[512];
+volatile uint32_t native_bluetooth_boot_rx_length;
+/* log-bluetooth=2: pins before TX, RX bytes before TX, then pins and engine status when startup returns. */
+volatile uint32_t native_bluetooth_boot_state[10];
+}
 namespace {
 struct Region {IOMemoryMap *map;volatile uint32_t *va;};
 struct Bluetooth {
@@ -39,9 +46,11 @@ struct Bluetooth {
     uint32_t pending,rx_wake,power_request,started;
     unsigned log,baud;
     uint8_t address[6];
-    bool resources,powered,gated,clocked,serial_irq,wake_irq,service;
+    bool resources,powered,gated,clocked,serial_irq,wake_irq,service,initializing,loopback;
+    uint8_t loop_rx[16];unsigned loop_length;
 } bt;
-constexpr unsigned kRx=79,kBtEnable=81;
+constexpr unsigned kRx=79,kBtEnable=81,kSwCtrl=82;
+constexpr uint32_t kBtEnableCfg=(7u<<6)|(1u<<9); // bt-en-pins: 16 mA, no bias, output
 constexpr uint32_t kDmaBytes=32768;
 bool map(Region &r,uint64_t base,size_t bytes) {
     if(r.va)return true;
@@ -66,7 +75,21 @@ uint32_t grd(void *,uint32_t reg){return bt.gcc.va[reg/4];}
 void gwr(void *,uint32_t reg,uint32_t value){bt.gcc.va[reg/4]=value;barrier();}
 void delay(void *,unsigned us){IODelay(us);}
 void dmaBarrier(void *){barrier();}
-void dmaSync(void *,const struct qbt_dma_buffer *,size_t,bool,bool){barrier();} // QUP2 is dma-coherent.
+void dmaSync(void *,const struct qbt_dma_buffer *buffer,size_t bytes,bool device,bool tx) {
+    // Match the board's touch path: cached RAM behind the firmware bypass bank.
+    if(bytes && (device || !tx)) {
+        uint64_t ctr;__asm__ volatile("mrs %0, ctr_el0":"=r"(ctr));
+        size_t line=4u<<((ctr>>16)&15);
+        uintptr_t at=reinterpret_cast<uintptr_t>(buffer->bytes)&~(line-1);
+        uintptr_t end=reinterpret_cast<uintptr_t>(buffer->bytes)+bytes;
+        for(;at<end;at+=line) {
+            if(tx)__asm__ volatile("dc cvac, %0"::"r"(at):"memory");
+            else if(device)__asm__ volatile("dc civac, %0"::"r"(at):"memory");
+            else __asm__ volatile("dc ivac, %0"::"r"(at):"memory");
+        }
+    }
+    barrier();
+}
 uint32_t srd(void *,uint32_t reg){return bt.smmu.va[reg/4];}
 void swr(void *,uint32_t reg,uint32_t value){bt.smmu.va[reg/4]=value;barrier();}
 void irqMask(void *,bool masked) {
@@ -91,6 +114,19 @@ bool serialClock(bool enabled) {
     return false;
 }
 size_t rxBytes(void *,const uint8_t *bytes,size_t n) {
+    if(bt.loopback) {
+        size_t count=sizeof(bt.loop_rx)-bt.loop_length;if(count>n)count=n;
+        memcpy(bt.loop_rx+bt.loop_length,bytes,count);bt.loop_length+=(unsigned)count;
+        return n;
+    }
+    if(bt.log>=2 && bt.initializing) {
+        uint32_t at=__atomic_load_n(&native_bluetooth_boot_rx_length,__ATOMIC_RELAXED);
+        size_t count=sizeof(native_bluetooth_boot_rx)-at;if(count>n)count=n;
+        if(count) {
+            memcpy(native_bluetooth_boot_rx+at,bytes,count);
+            __atomic_store_n(&native_bluetooth_boot_rx_length,at+(uint32_t)count,__ATOMIC_RELEASE);
+        }
+    }
     bt.rx_sequence+=n;return qbt_receive(bt.core,bytes,n);
 }
 size_t nativeRx(void *,const uint8_t *bytes,size_t n){return qbt_transport_receive(bytes,(uint32_t)n);}
@@ -235,6 +271,46 @@ int stopEngine() {
     bt.geni.state=QBT_GENI_OFF;bt.geni.rx_busy=bt.geni.tx_busy=false;
     return 0;
 }
+uint32_t linePins() {
+    static const uint8_t pins[]={76,77,78,79,kBtEnable,kSwCtrl};
+    uint32_t bits=0;
+    for(unsigned i=0;i<sizeof(pins);i++)bits|=(bt.tlmm.va[(pins[i]*4096u+4)/4]&1u)<<i;
+    return bits;
+}
+int prepareEngine() {
+    uint8_t *bytes=static_cast<uint8_t *>(bt.dma->getBytesNoCopy());
+    struct qbt_dma_buffer tx={bytes,bt.dma_address,QBT_GENI_TX_SIZE},rx[QBT_GENI_RX_COUNT];
+    for(unsigned i=0;i<QBT_GENI_RX_COUNT;i++)rx[i]={bytes+4096+i*QBT_GENI_RX_SIZE,bt.dma_address+4096+i*QBT_GENI_RX_SIZE,QBT_GENI_RX_SIZE};
+    struct qbt_geni_ops ops={nullptr,urd,uwr,dmaBarrier,dmaSync,nowNs,irqMask,wake,rxBytes};
+    int e=qbt_geni_prepare(&bt.geni,&ops,&tx,rx);if(e)return e;
+    native_bluetooth_stats[14]=5;
+    uint32_t hz;struct sm8550_geni_clock_io clocks={nullptr,grd,gwr,delay};
+    e=sm8550_geni_uart14_source(&clocks,115200,&hz);if(e)return e;
+    e=qbt_geni_set_rate(&bt.geni,115200,hz,16);if(e)return e;
+    bt.baud=115200;return 0;
+}
+/* log-bluetooth=2, controller still in reset: GENI's internal loopback checks DMA,
+ * cache maintenance and packing without the controller. Stats[30] holds received
+ * length, bit 16 sent, bit 17 match; stats[31] the first received bytes. */
+int loopbackCheck() {
+    static const uint8_t pattern[16]={0x01,0x55,0xaa,0x00,0xff,0x04,0x0e,0x7e,0x81,0x42,0x24,0x18,0x10,0x20,0x40,0x80};
+    uwr(nullptr,0x22c,3);bt.loopback=true;bt.loop_length=0;
+    int e=qbt_geni_start(&bt.geni);
+    size_t sent=e?0:qbt_geni_write(&bt.geni,pattern,sizeof(pattern));
+    uint64_t end=nowNs(nullptr)+50000000ULL;
+    while(sent && bt.loop_length<sizeof(pattern) && bt.geni.state==QBT_GENI_RUN && nowNs(nullptr)<end) {
+        if(!qbt_geni_service(&bt.geni))IOSleep(1);
+    }
+    uint64_t first=0;memcpy(&first,bt.loop_rx,bt.loop_length<8?bt.loop_length:8);
+    native_bluetooth_stats[31]=first;
+    native_bluetooth_stats[30]=bt.loop_length|(sent?1u<<16:0)|(bt.loop_length==sizeof(pattern) && !memcmp(bt.loop_rx,pattern,sizeof(pattern))?1u<<17:0);
+    /* Stopping exercises the same cancel path as a baud change. */
+    e=bt.geni.state==QBT_GENI_RUN?quiesce():-EIO;
+    bt.loopback=false;uwr(nullptr,0x22c,0);
+    if(!e && bt.geni.state==QBT_GENI_STOPPED)return 0;
+    e=stopEngine();if(e)return e;
+    return prepareEngine();
+}
 int powerOn() {
     if(bt.powered)return 0;
     native_bluetooth_stats[14]=1;int e=resources();if(e)return e;
@@ -243,7 +319,7 @@ int powerOn() {
     bt.powered=true;bt.gated=true;
     native_bluetooth_stats[14]=3;
     for(unsigned gpio=76;gpio<=79;gpio++)pin(gpio,(1u<<2)|(gpio>=78?3u:1u));
-    pin(kBtEnable,1u|(1u<<9),0);IOSleep(100);
+    pin(kSwCtrl,1u);pin(kBtEnable,kBtEnableCfg,0);IOSleep(100);
     if(!sm8550_gcc_update32(bt.gcc.va+0x52018/4,0,1u))return -EIO;
     for(unsigned i=0;i<1000 && !(grd(nullptr,0)&(1u<<31));i++)IODelay(1);
     if(!(grd(nullptr,0)&(1u<<31)) || !serialClock(true))return -EIO;
@@ -253,22 +329,27 @@ int powerOn() {
     if(bt.wrapper.va[1]<0x20050000)return -ENOTSUP;
     if(((urd(nullptr,0x68)>>8)&255)!=2)return -ENXIO;
     e=stopEngine();if(e)return e;
-    uint8_t *bytes=static_cast<uint8_t *>(bt.dma->getBytesNoCopy());
-    struct qbt_dma_buffer tx={bytes,bt.dma_address,QBT_GENI_TX_SIZE},rx[QBT_GENI_RX_COUNT];
-    for(unsigned i=0;i<QBT_GENI_RX_COUNT;i++)rx[i]={bytes+4096+i*QBT_GENI_RX_SIZE,bt.dma_address+4096+i*QBT_GENI_RX_SIZE,QBT_GENI_RX_SIZE};
-    struct qbt_geni_ops ops={nullptr,urd,uwr,dmaBarrier,dmaSync,nowNs,irqMask,wake,rxBytes};
-    e=qbt_geni_prepare(&bt.geni,&ops,&tx,rx);if(e)return e;
-    native_bluetooth_stats[14]=5;
-    uint32_t hz;struct sm8550_geni_clock_io clocks={nullptr,grd,gwr,delay};
-    e=sm8550_geni_uart14_source(&clocks,115200,&hz);if(e)return e;
-    e=qbt_geni_set_rate(&bt.geni,115200,hz,16);if(e)return e;
-    bt.baud=115200;
+    e=prepareEngine();if(e)return e;
     if(!bt.serial_irq){e=armcpu_spi_attach(SM8550_UART14_INTID,false,serialIrq,nullptr,nullptr,nullptr);if(e)return -EIO;bt.serial_irq=true;irqMask(nullptr,true);}
     if(!bt.wake_irq){e=armcpu_spi_share(240,rxIrq,nullptr);if(e)return -EIO;bt.wake_irq=true;}
-    disarmRxWake();pin(kBtEnable,1u|(1u<<9),1);IOSleep(60);
+    if(bt.log>=2){e=loopbackCheck();if(e)return e;}
+    disarmRxWake();pin(kBtEnable,kBtEnableCfg,1);IOSleep(60);
     e=qbt_geni_start(&bt.geni);if(e)return e;
     native_bluetooth_stats[14]=6;
-    return qbt_boot(bt.core,3200000,bt.address);
+    bt.initializing=true;
+    if(bt.log>=2) {
+        /* Bytes seen here precede the first command: controller output, not a reply. */
+        for(unsigned i=0;i<20;i++){pump(nullptr);IOSleep(1);}
+        native_bluetooth_boot_state[0]=linePins();
+        native_bluetooth_boot_state[1]=__atomic_load_n(&native_bluetooth_boot_rx_length,__ATOMIC_ACQUIRE);
+    }
+    e=qbt_boot(bt.core,3200000,bt.address);bt.initializing=false;
+    if(bt.log>=2) {
+        static const uint32_t regs[]={0x40,0x610,0x640,0xc40,0xd40,0x800,0xd54};
+        native_bluetooth_boot_state[2]=linePins();
+        for(unsigned i=0;i<7;i++)native_bluetooth_boot_state[3+i]=bt.clocked?urd(nullptr,regs[i]):0;
+    }
+    return e;
 }
 int powerOff() {
     if(!bt.powered)return 0;
@@ -279,7 +360,7 @@ int powerOff() {
         if(bt.clocked){int shutdown=qbt_shutdown(bt.core);if(!e)e=shutdown;}
     }
     if(bt.clocked && bt.geni.state!=QBT_GENI_OFF){int stopped=quiesce();if(!e)e=stopped;}
-    irqMask(nullptr,true);disarmRxWake();pin(kBtEnable,1u|(1u<<9),0);IOSleep(100);
+    irqMask(nullptr,true);disarmRxWake();pin(kBtEnable,kBtEnableCfg,0);IOSleep(100);
     int retired=bt.clocked?stopEngine():0;if(!e)e=retired;
     if(!retired)bt.gated=serialClock(false);
     bt.powered=false;__atomic_store_n(&bt.rx_wake,0u,__ATOMIC_RELEASE);
@@ -310,6 +391,16 @@ void worker(void *,wait_result_t) {
     struct qbt_transport_ops transport={nullptr,wake,requestPower};
     int e=qbt_transport_init(&transport);if(e){native_bluetooth_stats[0]=3;return;}
     while(native_gpu_addon_stage<1)waitUntil(nullptr,nowNs(nullptr)+10000000ULL);
+    /* Wi-Fi settles WLAN_EN and the shared supplies first; its failure stage is negative. */
+    unsigned wifi=0;PE_parse_boot_argn("sheng-wifi",&wifi,sizeof(wifi));
+    if(wifi>=2) {
+        uint64_t end=nowNs(nullptr)+15000000000ULL;
+        while(nowNs(nullptr)<end) {
+            int32_t stage=(int32_t)native_wifi_stats[0];
+            if(stage<0 || stage>=17)break;
+            waitUntil(nullptr,nowNs(nullptr)+10000000ULL);
+        }
+    }
     e=powerOn();if(e)(void)powerOff();powerResult(true,e);
     uint64_t health=nowNs(nullptr)+1000000000ULL,closeAt=0;
     for(;;) {
@@ -336,6 +427,10 @@ void worker(void *,wait_result_t) {
             native_bluetooth_stats[8]=bt.domain.slot;native_bluetooth_stats[9]=bt.domain.bank;
             native_bluetooth_stats[20]=(unsigned)bt.powered|((unsigned)bt.gated<<1)|((unsigned)bt.clocked<<2);
             native_bluetooth_stats[21]=sheng_wcn_power_owners();
+            for(unsigned i=0;i<4;i++)native_bluetooth_stats[22+i]=bt.geni.fault_irq[i];
+            native_bluetooth_stats[26]=stats.malformed;native_bluetooth_stats[27]=stats.unmatched_events;
+            native_bluetooth_stats[28]=bt.geni.stats.rx_dma;native_bluetooth_stats[29]=bt.geni.stats.tx_dma;
+            native_bluetooth_stats[15]=bt.geni.stats.line_errors;native_bluetooth_stats[16]=bt.geni.stats.dma_errors;
             health=t+1000000000ULL;
         }
         uint64_t deadline=bt.powered?qbt_deadline(bt.core):UINT64_MAX;
