@@ -19,10 +19,10 @@ static const char policy_watchdogd[]="<key>com.apple.watchdogd</key><true/>";
 // sheng-disable-jobs=<label>[,<label>...] (restricted label characters, bounded length).
 static const char policy_tail[]="</dict></plist>\n";
 // sheng-lite=1: jobs that only reach for the network, iCloud or the photo library and have nothing to do on this tablet (no radios, no accounts),
-// all of which start at the first boot of a fresh Data and compete with SpringBoard for the CPU and for memory. The first four are the
+// all of which start at the first boot of a fresh Data and compete with SpringBoard for the CPU and for memory. The first three are the
 // cycle of synchronous XPC waits the isolation work found. Labels are the ones in the target's own LaunchDaemons.
 static const char lite_jobs[]=
- "com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,"
+ "com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,"
  "com.apple.photoanalysisd,com.apple.mediaanalysisd,com.apple.mediastream.mstreamd,com.apple.icloud.searchpartyd,"
  "com.apple.findmy.findmybeaconingd,com.apple.familycircled,com.apple.financed,com.apple.softwareupdateservicesd,"
  "com.apple.ndoagent,com.apple.biomesyncd,com.apple.email.maild,com.apple.amsengagementd,com.apple.adid,com.apple.eyereliefd,"
