@@ -64,6 +64,20 @@ static void aks_publish(void) {
     for (; i < 47; ++i) boot_progress_ext[1][i] = ' ';
     boot_progress_ext[1][47] = 0;
 }
+// The identity that keys software wrapping. Zero when the platform has none, which fails wrapping.
+size_t native_aks_device_id(uint8_t *out, size_t capacity) {
+    IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
+    OSData *id = chosen ? OSDynamicCast(OSData, chosen->getProperty("unique-chip-id")) : nullptr;
+    size_t n = 0;
+    if (id && id->getLength() >= 8 && id->getLength() <= capacity) {
+        const uint8_t *bytes = static_cast<const uint8_t *>(id->getBytesNoCopy());
+        bool nonzero = false;
+        for (unsigned i = 0; i < id->getLength(); ++i) { out[i] = bytes[i]; nonzero |= bytes[i] != 0; }
+        if (nonzero) n = id->getLength();
+    }
+    if (chosen) chosen->release();
+    return n;
+}
 void native_aks_opened(void) {
     native_aks_opens = native_aks_opens + 1;
     aks_publish();
