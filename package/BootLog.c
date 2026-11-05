@@ -18,6 +18,7 @@
 #include <IOKit/IOLib.h>
 extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
 extern void boot_cache_loader_log_capture(unsigned) __attribute__((weak_import));
+extern uint32_t boot_cache_input_ready(void) __attribute__((weak_import));
 
 #if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
 extern void boot_process_start(void);
@@ -1783,7 +1784,7 @@ static void writer(void *arg, wait_result_t result) {
     h.diag_first = diag_first; h.diag_bytes = diag_bytes;
     IOLockUnlock(export_lock);
     if (diag == 1 && &boot_diag_shot_tick) boot_diag_shot_tick(now);
-    if (diag_at && now >= diag_at && !boot_diag_status) {
+    if (((diag_at && now >= diag_at) || (&boot_cache_input_ready && boot_cache_input_ready())) && !boot_diag_status) {
       thread_t diag;
       boot_diag_status = 1;
       if (kernel_thread_start_priority(diag_thread, NULL, MINPRI_KERNEL, &diag) == KERN_SUCCESS) thread_deallocate(diag);
