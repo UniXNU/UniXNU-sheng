@@ -206,6 +206,7 @@ extern volatile uint32_t native_touch_edge_stats[4] __attribute__((weak_import))
 extern volatile uint32_t native_touch_edge_install[3] __attribute__((weak_import));
 extern volatile uint32_t native_touch_hid_multi[3] __attribute__((weak_import));
 extern volatile int32_t native_backlight_request[6] __attribute__((weak_import));
+extern volatile uint32_t native_usb_stats[54] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_reassert_ticks __attribute__((weak_import));
 extern volatile uint64_t native_adreno_cache_stats[5] __attribute__((weak_import));
 // NativeAdrenoPublish.cpp: per process name that opened the GPU, and the processes that asked the Metal discovery for its plugin.
@@ -1337,6 +1338,27 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // send refusals.
   if (&native_battery_stats && native_battery_stats[0]) {
     char row[200];
+    if (&native_usb_stats) {
+      // QcomDwc3: stage, core id, hardware parameters 0, 3, 7, GDSCs, SMMU, repeater, rails, session bits, interrupts, power calls.
+      snprintf(row, sizeof row, "[usb] st=%d id=%x hw=%x/%x/%x gdsc=%x/%x smmu=%x rpt=%x rails=%x vbus=%x irq=%u on=%u off=%u", (int)native_usb_stats[0],
+               native_usb_stats[1], native_usb_stats[2], native_usb_stats[3], native_usb_stats[4], native_usb_stats[5], native_usb_stats[6],
+               native_usb_stats[7], native_usb_stats[8], native_usb_stats[9], native_usb_stats[10], native_usb_stats[11], native_usb_stats[12],
+               native_usb_stats[13]);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[usb core] reset=%x dsts=%x dcfg=%x gctl=%x phy=%x start=%u power=%x load=%x", native_usb_stats[14], native_usb_stats[15],
+               native_usb_stats[16], native_usb_stats[17], native_usb_stats[18], native_usb_stats[19], native_usb_stats[20], native_usb_stats[21]);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[usb diag] bus=%x/%x guctl1=%x gfsr=%x dsts=%x ep=%x evcount=%x ep0=%x fsr=%x evsz=%x", native_usb_stats[22],
+               native_usb_stats[23], native_usb_stats[24], native_usb_stats[25], native_usb_stats[26], native_usb_stats[27], native_usb_stats[28],
+               native_usb_stats[29], native_usb_stats[30], native_usb_stats[31]);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[usb ss] retimer=%x pcs=%x reverse=%u vbus=%x ltssm=%x/%x pipe=%x cycle=%u", native_usb_stats[32], native_usb_stats[33], native_usb_stats[34], native_usb_stats[35], native_usb_stats[36], native_usb_stats[37], native_usb_stats[38], native_usb_stats[39]);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[usb ucsi] state=%x status=%x cci=%x changes=%x", native_usb_stats[40], native_usb_stats[41], native_usb_stats[42], native_usb_stats[43]);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[usb host] role=%x n=%u xhci=%x cmd=%x sts=%x port=%x/%x hcs=%x dev=%u last=%x", native_usb_stats[44], native_usb_stats[45], native_usb_stats[46], native_usb_stats[47], native_usb_stats[48], native_usb_stats[49], native_usb_stats[50], native_usb_stats[51], native_usb_stats[52], native_usb_stats[53]);
+      at = put(out, at, cap, row, sizeof row);
+    }
     snprintf(row, sizeof row, "[battery] st=%d pct=%d mv=%d ma=%d temp=%d fl=%x cyc=%d ans=%d to=%x ntf=%d usb=%d full=%d design=%d cycles=%d drop=%x refuse=%d",
              native_battery_stats[0], native_battery_stats[1], native_battery_stats[2], native_battery_stats[3], native_battery_stats[4],
              native_battery_stats[5], native_battery_stats[6], native_battery_stats[7], native_battery_stats[8], native_battery_stats[9],
