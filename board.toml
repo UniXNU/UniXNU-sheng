@@ -94,7 +94,7 @@ CI_ENABLE_METAL_GPU = "0"
 "confirm_args" = ["sheng-data-reset=1", "sheng-data-reset=2"]
 
 ["payload"."adt"]
-"chip_id" = "207"
+"chip_id" = "8142"
 "owned_memory_size" = "0x130000000"
 "packed_data_ramdisk" = true
 "persistent_data" = true
