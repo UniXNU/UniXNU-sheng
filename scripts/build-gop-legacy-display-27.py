@@ -507,6 +507,154 @@ board_objects += [Path(line.split(' ', 1)[1]) for line in run(['python3', ROOT /
 board_objects += [Path(line.split(' ', 1)[1]) for line in run(['python3', ROOT / 'scripts/build-qca-bluetooth.py', BLUETOOTH,
     board_dir / 'qca-bluetooth', '--tree', ROOT], text=True).splitlines() if line.startswith('OBJ ')]
 input_objects += board_objects
+# USB device mode: the native SM8550 subclass of the original AppleUSBXDCI of this fileset.
+usb_abi = json.loads(Path(__file__).resolve().with_name('usb-xdci-24A446.json').read_text())
+usb_slots = [(int(t, 16), int(d, 16)) for t, d in usb_abi['slots']]
+usb_methods = {int(k): v for k, v in usb_abi['methods'].items()}
+usb_pure = {i for i, (t, _) in enumerate(usb_slots) if t == slots[214][0]}
+USB = DEVICE / 'drivers/QcomDwc3'
+require((USB / 'QcomDwc3.cpp').exists(), 'QcomDwc3 module directory')
+USB_OUT = board_dir / 'qcom-dwc3'
+USB_OUT.mkdir(parents=True, exist_ok=True)
+usb_names = {179: 'XDCI_KEEP_CONFIGURATIONS', 227: 'XDCI_DESIRED_POWER', 267: 'XDCI_TRANSPORT_ACTIVE', 268: 'XDCI_POWER_ON', 269: 'XDCI_POWER_OFF', 270: 'XDCI_PARAMETERS',
+             275: 'XDCI_CONTROLLER_RESET', 277: 'XDCI_PERIODIC_USAGE', 278: 'XDCI_PERIODIC_SET'}
+usb_header = '''// Generated from the reviewed AppleUSBXDCI fixture; opaque private storage only.
+#pragma once
+#include <IOKit/IOService.h>
+'''
+for slot, macro in usb_names.items():
+    usb_header += f'#define {macro} {usb_methods[slot]["name"]}\n'
+usb_header += f'''class AppleUSBXDCI : public IOService {{
+ OSDeclareAbstractStructors(AppleUSBXDCI)
+ unsigned char originalPrivate[{usb_abi['instance_size']}-sizeof(IOService)];
+public:
+ void free() override;
+ bool init(OSDictionary *properties=nullptr) override;
+ IOReturn setProperties(OSObject *) override;
+ bool start(IOService *) override;
+ void stop(IOService *) override;
+ bool terminate(IOOptionBits options=0) override;
+ IOWorkLoop *getWorkLoop() const override;
+ IOReturn callPlatformFunction(const OSSymbol *,bool,void *,void *,void *,void *) override;
+ IOReturn setPowerState(unsigned long,IOService *) override;
+ unsigned long maxCapabilityForDomainState(IOPMPowerFlags) override;
+ unsigned long initialPowerStateForDomainState(IOPMPowerFlags) override;
+ IOReturn powerStateWillChangeTo(IOPMPowerFlags,unsigned long,IOService *) override;
+ IOReturn powerStateDidChangeTo(IOPMPowerFlags,unsigned long,IOService *) override;
+'''
+for i in range(168, len(usb_slots)):
+    m = usb_methods[i]
+    suffix = '=0' if i in usb_pure else ''
+    usb_header += f' virtual {m["returns"]} {m["name"]}({m["parameters"]}){suffix};\n'
+usb_header += f'}};\nstatic_assert(sizeof(AppleUSBXDCI)=={usb_abi["instance_size"]},"Original controller instance size");\n'
+(USB_OUT / 'OriginalUsbXdciABI.h').write_text(usb_header)
+# Host mode: the native subclass of the original AppleUSBXHCI, in the same object. IOService slots the original overrides are declared so
+# that the native vtable reaches them.
+xhci_abi = json.loads(Path(__file__).resolve().with_name('usb-xhci-24A446.json').read_text())
+xhci_slots = [(int(t, 16), int(d, 16)) for t, d in xhci_abi['slots']]
+xhci_methods = {int(k): v for k, v in xhci_abi['methods'].items()}
+xhci_names = {188: 'XHCI_DESIRED_POWER', 315: 'XHCI_READ64', 317: 'XHCI_WRITE64'}
+xhci_header = '''// Generated from the reviewed AppleUSBXHCI fixture; opaque private storage only.
+#pragma once
+#include <IOKit/IOService.h>
+'''
+for slot, macro in xhci_names.items():
+    xhci_header += f'#define {macro} {xhci_methods[slot]["name"]}\n'
+xhci_header += f'''class AppleUSBXHCI : public IOService {{
+ OSDeclareAbstractStructors(AppleUSBXHCI)
+ unsigned char originalPrivate[{xhci_abi['instance_size']}-sizeof(IOService)];
+public:
+ void free() override;
+ bool init(OSDictionary *properties=nullptr) override;
+ IOReturn setProperties(OSObject *) override;
+ bool didTerminate(IOService *,IOOptionBits,bool *) override;
+ void systemWillShutdown(IOOptionBits) override;
+ void registerService(IOOptionBits options=0) override;
+ bool start(IOService *) override;
+ void stop(IOService *) override;
+ bool open(IOService *,IOOptionBits options=0,void *arg=nullptr) override;
+ void close(IOService *,IOOptionBits options=0) override;
+ bool handleOpen(IOService *,IOOptionBits,void *) override;
+ void handleClose(IOService *,IOOptionBits) override;
+ bool handleIsOpen(const IOService *) const override;
+ bool terminate(IOOptionBits options=0) override;
+ bool matchPropertyTable(OSDictionary *,SInt32 *) override;
+ bool attach(IOService *) override;
+ IOWorkLoop *getWorkLoop() const override;
+ IOReturn message(UInt32,IOService *,void *arg=nullptr) override;
+ void PMstop() override;
+ IOReturn setPowerState(unsigned long,IOService *) override;
+ unsigned long maxCapabilityForDomainState(IOPMPowerFlags) override;
+ unsigned long initialPowerStateForDomainState(IOPMPowerFlags) override;
+ IOReturn powerStateWillChangeTo(IOPMPowerFlags,unsigned long,IOService *) override;
+ IOReturn powerStateDidChangeTo(IOPMPowerFlags,unsigned long,IOService *) override;
+'''
+for i in range(168, len(xhci_slots)):
+    m = xhci_methods[i]
+    xhci_header += f' virtual {m["returns"]} {m["name"]}({m["parameters"]});\n'
+xhci_header += f'}};\nstatic_assert(sizeof(AppleUSBXHCI)=={xhci_abi["instance_size"]},"Original controller instance size");\n'
+(USB_OUT / 'OriginalUsbXhciABI.h').write_text(xhci_header)
+usb_flags = ('-I', str(USB_OUT), '-I', str(USB), '-I', str(KITS))
+compile_cpp(USB / 'QcomDwc3.cpp', USB_OUT / 'QcomDwc3.o', usb_flags)
+compile_cpp(KITS / 'UsbProbe.cpp', USB_OUT / 'UsbProbe.o', usb_flags)
+usb_raw = (USB_OUT / 'QcomDwc3.o').read_bytes()
+usb_found = object_symbols(usb_raw)
+usb_bindings = {n: int(v, 16) + slide for n, v in usb_abi['bindings'].items()}
+usb_vt = '__ZTV12QcomDwc3Xdci'
+usb_entries = object_vtable(usb_raw, usb_found, usb_vt, len(usb_slots))
+require(all(usb_entries), f'{usb_vt}: at least the {len(usb_slots)} AppleUSBXDCI entries')
+for i, (name, word) in enumerate(usb_entries):
+    require(word >> 63 and word >> 48 & 1 and word >> 49 & 3 == 0 and (word >> 32) & 0xffff == usb_slots[i][1],
+            f'{usb_vt} slot {i} ({name}) signed with the original diversity {usb_slots[i][1]:#x}')
+    if '12AppleUSBXDCI' in name:
+        require(i not in usb_pure, f'{usb_vt} slot {i} ({name}) implements an abstract original slot')
+        require(usb_bindings.setdefault(name, usb_slots[i][0] + slide) == usb_slots[i][0] + slide, f'{name}: one original address')
+    elif not name.startswith(('__ZN12QcomDwc3Xdci', '__ZNK12QcomDwc3Xdci')):
+        require(i < 168, f'{usb_vt} slot {i} ({name}) is inherited from IOService')
+usb_slot_by_diversity = {d: i for i, (_, d) in enumerate(usb_slots)}
+for name in sorted({n for n, _, k in usb_found if k == 1 and '12AppleUSBXDCI' in n} - set(usb_bindings)):
+    slot = usb_slot_by_diversity.get(discriminator(name[1:]))
+    require(slot is not None and slot not in usb_pure, f'{name}: an original concrete AppleUSBXDCI slot')
+    usb_bindings[name] = usb_slots[slot][0] + slide
+# Every inherited slot must be what the original has: a vtable slot of the base class that the native class leaves to IOService is a bug.
+xhci_bindings = {n: int(v, 16) + slide for n, v in xhci_abi['bindings'].items()}
+xhci_vt = '__ZTV12QcomDwc3Xhci'
+xhci_entries = object_vtable(usb_raw, usb_found, xhci_vt, len(xhci_slots))
+require(all(xhci_entries), f'{xhci_vt}: at least the {len(xhci_slots)} AppleUSBXHCI entries')
+for i, (name, word) in enumerate(xhci_entries):
+    require(word >> 63 and word >> 48 & 1 and word >> 49 & 3 == 0 and (word >> 32) & 0xffff == xhci_slots[i][1],
+            f'{xhci_vt} slot {i} ({name}) signed with the original diversity {xhci_slots[i][1]:#x}')
+    if '12AppleUSBXHCI' in name:
+        require(xhci_bindings.setdefault(name, xhci_slots[i][0] + slide) == xhci_slots[i][0] + slide, f'{name}: one original address')
+    elif not name.startswith(('__ZN12QcomDwc3Xhci', '__ZNK12QcomDwc3Xhci')):
+        require(i < 168, f'{xhci_vt} slot {i} ({name}) is inherited from IOService')
+# Targets below the kernel's text are the original's overrides in its kexts.
+xhci_io = {i for i, (t, _) in enumerate(xhci_slots[:168]) if t < 0xfffffe000b000000 and i not in (0, 1, 7)}
+for i in sorted(xhci_io):
+    require('12AppleUSBXHCI' in xhci_entries[i][0] or 'QcomDwc3Xhci' in xhci_entries[i][0], f'{xhci_vt} slot {i} ({xhci_entries[i][0]}) reaches the original override')
+xhci_slot_by_diversity = {d: i for i, (_, d) in enumerate(xhci_slots)}
+for name in sorted({n for n, _, k in usb_found if k == 1 and '12AppleUSBXHCI' in n} - set(xhci_bindings)):
+    slot = xhci_slot_by_diversity.get(discriminator(name[1:]))
+    require(slot is not None, f'{name}: an original concrete AppleUSBXHCI slot')
+    xhci_bindings[name] = xhci_slots[slot][0] + slide
+usb_bindings.update(xhci_bindings)
+USB_DATA = {'__ZN12AppleUSBXDCI10gMetaClassE', '__ZTV12AppleUSBXDCI', '__ZN12AppleUSBXHCI10gMetaClassE', '__ZTV12AppleUSBXHCI'}
+usb_text, usb_addresses = '.text\n.p2align 2\n', ''
+for name, va in sorted(usb_bindings.items()):
+    if name in USB_DATA:
+        usb_addresses += f'.globl {name}\n.set {name}, {va:#x}\n'
+    else:
+        usb_addresses += f'.globl {name}.original\n.set {name}.original, {va:#x}\n'
+        usb_text += f'.globl {name}\n{name}:\n bti c\n b {name}.original\n'
+(USB_OUT / 'usb-bindings.S').write_text(usb_text)
+(USB_OUT / 'usb-addresses.S').write_text(usb_addresses)
+for stem in ('usb-bindings', 'usb-addresses'):
+    run(['xcrun', 'clang', '-target', TRIPLE, '-isysroot', sdk, '-c', USB_OUT / (stem + '.S'), '-o', USB_OUT / (stem + '.o')])
+usb_late = USB_OUT / 'QcomDwc3.late.o'
+run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_QcomDwc3.cpp',
+     USB_OUT / 'QcomDwc3.o', usb_late])
+input_objects += [usb_late, USB_OUT / 'usb-bindings.o', USB_OUT / 'usb-addresses.o', USB_OUT / 'UsbProbe.o']
+print(f'USB: {len(usb_bindings)} original bindings, {usb_vt} and {xhci_vt} match the original diversities')
 print(f'Board drivers: {len(board_objects)} objects')
 archive = OUT / 'libNativeLegacyDisplay.late.a'
 archive.unlink(missing_ok=True)
@@ -523,7 +671,8 @@ sources += [Path(name) for name in json.loads((board_dir / 'qca-bluetooth/report
 for directory in ('include', 'src', 'shim', 'out/linux'):
     sources += sorted((BLUETOOTH / directory).rglob('*.h'))
 sources += [ROOT / 'kits/Sm8550Platform' / name for name in ('Sm8550GeniUart.h', 'Sm8550QupDma.h')]
-sources += [KITS / name for name in ('SmmuBypass.h', 'AppsSmmuLock.h')]
+sources += [KITS / name for name in ('SmmuBypass.h', 'AppsSmmuLock.h', 'UsbProbe.cpp')]
+sources += [USB / 'QcomDwc3.cpp', USB / 'QcomEusb2Phy.h', USB / 'QcomQmpUsb3.h', USB / 'QcomUcsi.h', ROOT / 'scripts/usb-xdci-24A446.json', ROOT / 'scripts/usb-xhci-24A446.json']
 
 
 def source_name(path):
