@@ -16,3 +16,6 @@
 [submodule "drivers/QcaBluetooth"]
 	path = drivers/QcaBluetooth
 	url = https://github.com/UniXNU/QcaBluetooth.git
+[submodule "drivers/QcomDwc3"]
+	path = drivers/QcomDwc3
+	url = https://github.com/UniXNU/QcomDwc3.git
