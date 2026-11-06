@@ -14,3 +14,5 @@ sheng-main-thread-profile.patch
 sheng-cache-input-diagnostic.patch
 sheng-bluetooth-exit-diagnostic.patch
 zzzzzzzzzz-sheng-sigp-reinit-assert.patch
+sheng-appsync-runtime.patch
+sheng-appsync-user-trust.patch
