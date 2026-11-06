@@ -421,7 +421,9 @@ extern uint64_t sheng_prof_ring[1024] __attribute__((weak_import));
 extern uint32_t sheng_prof_head __attribute__((weak_import));
 extern uint32_t sheng_prof_cpu[8] __attribute__((weak_import));
 extern void proc_name(int pid, char *buf, int size);
-static uint64_t prof_snap[1024], prof_rank[2048];
+// Run-time blocks: the kernel's __DATA has no room for these (prelink: native __DATA overlaps a retained segment).
+static uint64_t *prof_snap, *prof_rank;
+static char *compose_spawn;
 static void prof_sort(uint64_t *v, size_t n) {
   for (size_t start = n / 2; start-- > 0;)
     for (size_t root = start;;) {size_t c = 2 * root + 1; if (c >= n) break; if (c + 1 < n && v[c + 1] > v[c]) ++c; if (v[root] >= v[c]) break;
@@ -780,7 +782,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   if (&sheng_prof_head && &sheng_prof_ring) {
     const uint32_t head = sheng_prof_head;
     const size_t n = head < 1024 ? head : 1024;
-    if (n) {
+    if (n && prof_snap && prof_rank) {
       memcpy(prof_snap, sheng_prof_ring, n * sizeof(uint64_t));
       prof_sort(prof_snap, n);
       size_t procs = 0;
@@ -1675,8 +1677,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // Which processes were started and ended (BootProgress.c census) and the throw site of the last uncaught exception (kits BootFaultProbe.c).
   if (&boot_progress_spawn_rows) {
-    static char spawn[16384];
-    const size_t n = boot_progress_spawn_rows(spawn, sizeof spawn);
+    char *const spawn = compose_spawn;
+    const size_t n = spawn ? boot_progress_spawn_rows(spawn, 16384) : 0;
     if (n) {
       at = put(out, at, cap, "[spawn]", 8);
       for (char *line = spawn; *line;) {
@@ -1929,6 +1931,9 @@ void boot_log_tick(unsigned now) {
   boot_log_buffer = (uint8_t *)IOMallocAligned(LogMsgBlocks * LogBlock, LogBlock);
   if (!boot_log_buffer) return;
   boot_log_panic_buffer = (uint8_t *)IOMallocAligned(LogMsgBlocks * LogBlock, LogBlock);
+  prof_snap = (uint64_t *)IOMalloc(1024 * sizeof(uint64_t));
+  prof_rank = (uint64_t *)IOMalloc(2048 * sizeof(uint64_t));
+  compose_spawn = (char *)IOMalloc(16384);
   export_lock = IOLockAlloc();
 #if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
   uint32_t diag = 0;
