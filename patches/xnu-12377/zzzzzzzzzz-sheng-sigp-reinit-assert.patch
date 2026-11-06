@@ -1,0 +1,12 @@
+--- a/osfmk/arm/cpu_common.c
++++ b/osfmk/arm/cpu_common.c
+@@ -942,7 +942,8 @@
+ {
+ 	if (enabled) {
+ 		assert((getCpuDatap()->cpu_signal & SIGPdisabled) == 0);
+-	} else {
++	} else if (os_atomic_load(&sheng_sigp_recovered, relaxed) == 0) {
++		/* sheng (UniXNU): sheng_sigp_recover can enable a core that is on its way here, and a signal may then be pending. */
+ 		assert3u(getCpuDatap()->cpu_signal, ==, SIGPdisabled);
+ 	}
+ }
