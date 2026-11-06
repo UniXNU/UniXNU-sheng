@@ -364,7 +364,7 @@ next_action = ["Run a sustained transfer and an app installation.", "Test the re
 
 [[area.evidence]]
 kind = "device"
-reference = "drivers/QcomDwc3/README.md"
+reference = "https://github.com/UniXNU/QcomDwc3/blob/e4efe95c903a737e0f5955e5b50a8fb4d2a7d718/README.md"
 command = "fastboot boot boot.img"
 revision = "1edc1ca7fc87defa8b2231254667ad4085320706"
 result = "05ac:12ab at Device Speed 4 with a USB 3 cable; Trust accepted on the panel; a Mac reported Device Paired, then AMDeviceValidatePairing and AMDeviceStartSession succeeded."
