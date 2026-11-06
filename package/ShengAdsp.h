@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define SHENG_ADSP_MAX_MESSAGE 512u
+#define SHENG_ADSP_MAX_MESSAGE 560u
 
 typedef struct ShengAdspChannel ShengAdspChannel;
 typedef struct {
