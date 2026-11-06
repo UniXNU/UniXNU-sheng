@@ -788,6 +788,7 @@ bool micRail() {
     native_mic_stats[2] = 1;
     if (!mapRegion(0x17a20000ULL, 0x10000, rsc)) return false;
     const QcomRscLayout layout = qcom_rsc_layout(rd32(rsc.va, 0));
+    AppsSmmuLock tcsOwner;   // TCS 2 is shared with the USB rails
     auto send = [&](uint32_t address, uint32_t value) {
         QcomRpmhWrite writes[16];
         const unsigned n = qcom_rpmh_active_request(&layout, 2, &address, &value, 1, writes, 16);
