@@ -266,16 +266,16 @@ result = "Boot 5cfa7b18a recorded a responsive desktop through 360 s with deferr
 
 [[area.evidence]]
 kind = "host"
-reference = "https://github.com/UniXNU/AdrenoMetal/tree/ce637016441143cb0ec65f2a17a3d070a033ae70/bridge/patches"
+reference = "https://github.com/UniXNU/AdrenoMetal/tree/c333f988df1196a19abbe756f6e199984300a487/bridge/patches"
 command = "python3 scripts/check-metal2vulkan-pin.py --latest; python3 scripts/check-native-metal-frontend-host.py"
-revision = "18eb56f095500b4d41d3365c7f8d123ad20eab0b"
+revision = "642c4fef77c28c5f9f32a3eb862fe8bea9ed0339"
 result = "The patch series check passes for 25 patches over metal2vulkan 963f0e64. The frontend host check passes through the scanout presenter on Apple M1 through MoltenVK with the lowering thread, commit submission and warm pass enabled. The Turnip host simulation does not link, so its driver cache and plugin bridge phases did not run."
 
 [[area.evidence]]
 kind = "device"
-reference = "https://github.com/UniXNU/AdrenoMetal/blob/a722f998f0d2db79bc111ac5a6d29570b6e6e703/bridge/NativeMetalObjects.rs"
+reference = "https://github.com/UniXNU/AdrenoMetal/blob/6d7f73437087c57ee54a41adceb1735daaea405e/bridge/NativeMetalObjects.rs"
 command = "fastboot boot m2v-flow-off.img; fastboot boot m2v-flow-on.img"
-revision = "9a280c64484941379473c8201325d379d89c9364"
+revision = "8d96e320996cdf33aa739ad8bf336cff0459a268"
 result = "iPadOS 27 build 24A446, same manual sequence in each boot. sheng-metal-flow=0: fps average 72.1 and 68.2, low 41.5 and 35.2. sheng-metal-flow=1: fps average 67.4 and 73.2, low 30.5 and 32.3. No swap-to-GPU delay data. A further sheng-metal-flow=1 boot did not reach the desktop: backboardd stopped at 4 commits about 81 s after the boot marker, with the warm pass at 1271 records and no panic. No stacks were captured, so its cause is unknown. In all sheng-metal-flow=1 boots the warm pass added no driver data."
 
 [[area]]
