@@ -1,0 +1,179 @@
+diff --git a/bsd/kern/appsync_trust.inc b/bsd/kern/appsync_trust.inc
+new file mode 100644
+index 0000000..70471d8
+--- /dev/null
++++ b/bsd/kern/appsync_trust.inc
+@@ -0,0 +1,99 @@
++/* User applications acquire boot-lifetime trust when XNU loads their signature.
++ * Call only with the CDHash/hash type from cs_blob_init_validated, never user data.
++ * The original AMFI and VM page-hash checks still run after this registration. */
++static bool
++appsync_user_code_path(const char *path)
++{
++	if (path == NULL) {
++		return false;
++	}
++	const char *part;
++	if (strncmp(path, "/private/var/", 13) == 0) {
++		part = path + 13;
++	} else if (strncmp(path, "/var/", 5) == 0) {
++		part = path + 5;
++	} else {
++		return false;
++	}
++	if (strnstr(part, "/../", strlen(part)) || strnstr(part, "/./", strlen(part))) {
++		return false;
++	}
++	const char *end;
++	while ((end = strchr(part, '/')) != NULL) {
++		if (end - part > 4 && memcmp(end - 4, ".app", 4) == 0 && end[1]) {
++			return true;
++		}
++		part = end + 1;
++	}
++	return false;
++}
++
++kern_return_t
++appsync_trust_user_code(const char *path, const uint8_t cdhash[20], uint8_t hash_type)
++{
++	uint32_t enabled = 0;
++	PE_parse_boot_argn("appsync", &enabled, sizeof(enabled));
++	if (enabled != 1 || !appsync_user_code_path(path)) {
++		return KERN_SUCCESS;
++	}
++#if CONFIG_SPTM || PMAP_CS_PPL_MONITOR
++	return KERN_NOT_SUPPORTED;
++#else
++	if (!cdhash || hash_type < 1 || hash_type > 4 || !amfi || !trust_cache_rt) {
++		return KERN_INVALID_ARGUMENT;
++	}
++	/* Query first to avoid allocating on repeated exec/mmap. Recheck under the
++	 * exclusive lock below so racing first mappings cannot insert duplicates. */
++	TrustCacheQueryToken_t token = {0};
++	if (xnu_query_trust_cache(kTCQueryTypeAll, cdhash, &token) == KERN_SUCCESS) {
++		return KERN_SUCCESS;
++	}
++	const size_t size = sizeof(TrustCacheModule2_t) + sizeof(TrustCacheEntry2_t);
++	TrustCache_t *cache = kalloc_type(TrustCache_t, Z_WAITOK_ZERO);
++	uint8_t *bytes = kalloc_data(size, Z_WAITOK_ZERO);
++	if (!cache || !bytes) {
++		if (bytes) kfree_data(bytes, size);
++		if (cache) kfree_type(TrustCache_t, cache);
++		return KERN_RESOURCE_SHORTAGE;
++	}
++	TrustCacheModule2_t *module = (TrustCacheModule2_t *)bytes;
++	module->version = 2;
++	memcpy(module->uuid, cdhash, sizeof(module->uuid));
++	module->uuid[0] ^= 0xa5;
++	module->uuid[15] ^= hash_type;
++	module->numEntries = 1;
++	memcpy(module->entries[0].CDHash, cdhash, 20);
++	module->entries[0].hashType = hash_type;
++
++	static uint32_t user_modules;
++	bool inserted = false;
++	kern_return_t result = KERN_FAILURE;
++	lck_rw_lock_exclusive(&trust_cache_rt_lock);
++	TCReturn_t status = amfi->TrustCache.query(trust_cache_rt, kTCQueryTypeAll, cdhash, &token);
++	if (status.error == kTCReturnSuccess) {
++		result = KERN_SUCCESS;
++	} else if (status.error == kTCReturnNotFound && user_modules < 65536) {
++		status = amfi->TrustCache.loadModule(trust_cache_rt, kTCTypeEngineering,
++		    cache, (uintptr_t)bytes, size);
++		if (status.error == kTCReturnSuccess) {
++			++user_modules;
++			inserted = true;
++			result = KERN_SUCCESS;
++		}
++	} else if (user_modules >= 65536) {
++		result = KERN_RESOURCE_SHORTAGE;
++	}
++	lck_rw_unlock_exclusive(&trust_cache_rt_lock);
++	/* The runtime owns successfully linked storage for the rest of this boot. */
++	if (!inserted) {
++		kfree_data(bytes, size);
++		kfree_type(TrustCache_t, cache);
++	} else {
++		printf("[appsync-trust] loaded user code %s\n", path);
++	}
++	if (result != KERN_SUCCESS) {
++		printf("[appsync-trust] registration failed %d for %s\n", result, path);
++	}
++	return result;
++#endif
++}
+diff --git a/bsd/kern/kern_trustcache.c b/bsd/kern/kern_trustcache.c
+index 111a523..80850c4 100644
+--- a/bsd/kern/kern_trustcache.c
++++ b/bsd/kern/kern_trustcache.c
+@@ -553,7 +553,8 @@ LCK_GRP_DECLARE(trust_cache_lck_grp, "trust_cache_lck_grp");
+ decl_lck_rw_data(, trust_cache_rt_lock);
+ 
+ /* Immutable part of the runtime */
+-SECURITY_READ_ONLY_LATE(TrustCacheRuntime_t) trust_cache_rt_storage;
++/* Not read only: AMFI links a module loaded after lockdown (appsync_trust_user_code) into a list head stored here. */
++TrustCacheRuntime_t trust_cache_rt_storage;
+ SECURITY_READ_ONLY_LATE(TrustCacheRuntime_t*) trust_cache_rt = &trust_cache_rt_storage;
+ 
+ /* Mutable part of the runtime */
+@@ -810,6 +811,8 @@ xnu_check_trust_cache_runtime_for_uuid(
+ 
+ #endif /* CONFIG_SPTM */
+ 
++#include "appsync_trust.inc"
++
+ kern_return_t
+ check_trust_cache_runtime_for_uuid(
+ 	const uint8_t check_uuid[kUUIDSize])
+diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
+index 8ae337d..c469410 100644
+--- a/bsd/kern/ubc_subr.c
++++ b/bsd/kern/ubc_subr.c
+@@ -44,6 +44,8 @@
+ #include <sys/mount_internal.h>
+ #include <sys/vnode_internal.h>
+ #include <sys/ubc_internal.h>
++#include <sys/trust_caches.h>
++#include <pexpert/pexpert.h>
+ #include <sys/ucred.h>
+ #include <sys/proc_internal.h>
+ #include <sys/kauth.h>
+@@ -4836,6 +4838,22 @@ ubc_cs_blob_add(
+ 	tmp_blob.csb_ro_addr = blob_ro;
+ 	tmp_blob.csb_vnode = vp;
+ 
++	/* Register installed or staged user code before AMFI queries the cache.
++	 * cs_blob_init_validated has checked the signature structure and computed
++	 * this CDHash. VM still verifies executable page hashes when they fault. */
++	uint32_t appsync_enabled = 0;
++	PE_parse_boot_argn("appsync", &appsync_enabled, sizeof(appsync_enabled));
++	if (appsync_enabled == 1) {
++		int path_length = MAXPATHLEN;
++		char *path = kalloc_data(MAXPATHLEN, Z_WAITOK);
++		if (!path) { error = ENOMEM; goto out; }
++		errno_t path_error = vn_getpath(vp, path, &path_length);
++		kern_return_t trusted = path_error ? KERN_FAILURE :
++		    appsync_trust_user_code(path, tmp_blob.csb_cdhash, cs_hash_type(tmp_blob.csb_hashtype));
++		kfree_data(path, MAXPATHLEN);
++		if (!path_error && trusted != KERN_SUCCESS) { error = EACCES; goto out; }
++	}
++
+ 	/* AMFI needs to see the current blob state at the RO address */
+ 	zalloc_ro_update_elem(ZONE_ID_CS_BLOB, blob_ro, &tmp_blob);
+ 
+diff --git a/bsd/sys/trust_caches.h b/bsd/sys/trust_caches.h
+index 565b8e4..ee64e02 100644
+--- a/bsd/sys/trust_caches.h
++++ b/bsd/sys/trust_caches.h
+@@ -152,6 +152,10 @@ load_trust_cache_with_type(
+  * be checked by querying the macro "XNU_HAS_LEGACY_TRUST_CACHE_LOADING". Using this KPI
+  * on an unsupported platform will panic the system.
+  */
++/* UniXNU: validated user application CodeDirectories, enabled by appsync=1. */
++kern_return_t
++appsync_trust_user_code(const char *path, const uint8_t cdhash[20], uint8_t hash_type);
++
+ kern_return_t
+ load_legacy_trust_cache(
+ 	const uint8_t *module_data, const size_t module_size);
