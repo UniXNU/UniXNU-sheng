@@ -1,9 +1,9 @@
 diff --git a/bsd/kern/appsync_trust.inc b/bsd/kern/appsync_trust.inc
 new file mode 100644
-index 0000000..70471d8
+index 0000000..bb89b9f
 --- /dev/null
 +++ b/bsd/kern/appsync_trust.inc
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,111 @@
 +/* User applications acquire boot-lifetime trust when XNU loads their signature.
 + * Call only with the CDHash/hash type from cs_blob_init_validated, never user data.
 + * The original AMFI and VM page-hash checks still run after this registration. */
@@ -32,6 +32,18 @@ index 0000000..70471d8
 +		part = end + 1;
 +	}
 +	return false;
++}
++
++/* True when appsync is enabled and path is a user application .app under /var.
++ * Used to keep such apps from being treated as platform binaries: they are
++ * trust-cached only so their ad-hoc signature validates, exactly as a real
++ * third-party app would run. */
++bool
++appsync_is_user_code(const char *path)
++{
++	uint32_t enabled = 0;
++	PE_parse_boot_argn("appsync", &enabled, sizeof(enabled));
++	return enabled == 1 && appsync_user_code_path(path);
 +}
 +
 +kern_return_t
@@ -103,8 +115,55 @@ index 0000000..70471d8
 +	return result;
 +#endif
 +}
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 04a4604..86da94e 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -116,6 +116,7 @@
+ #include <sys/spawn_internal.h>
+ #include <sys/process_policy.h>
+ #include <sys/codesign.h>
++#include <sys/trust_caches.h>          /* appsync_is_user_code() */
+ #include <sys/random.h>
+ #include <crypto/sha1.h>
+ 
+@@ -2102,6 +2103,34 @@ grade:
+ 		goto badtoolate;
+ 	}
+ 
++	/*
++	 * An appsync-trusted third-party app is in the engineering trust cache
++	 * only so that its ad-hoc signature validates, and AMFI then reports it
++	 * as a platform binary. A genuine third-party app never is one. Platform
++	 * status selects the platform-only exec setup: the platform restrictions
++	 * level (the hardened IPC policy that kills the app with EXC_GUARD when
++	 * its crash reporter installs a default-behavior exception port), task
++	 * platform status and the platform-only library mapping rule. Treat the
++	 * main executable as an ordinary third-party program for all of these.
++	 * The validated code signatures are unchanged. An Apple platform binary
++	 * is never an appsync user app, so this never affects one.
++	 */
++	if (load_result.platform_binary) {
++		uint32_t appsync_enabled = 0;
++		PE_parse_boot_argn("appsync", &appsync_enabled, sizeof(appsync_enabled));
++		if (appsync_enabled == 1 && imgp->ip_vp != NULL) {
++			int as_path_len = MAXPATHLEN;
++			char *as_path = kalloc_data(MAXPATHLEN, Z_WAITOK);
++			if (as_path != NULL) {
++				if (vn_getpath(imgp->ip_vp, as_path, &as_path_len) == 0 &&
++				    appsync_is_user_code(as_path)) {
++					load_result.platform_binary = FALSE;
++				}
++				kfree_data(as_path, MAXPATHLEN);
++			}
++		}
++	}
++
+ 	assert(imgp->ip_free_map == NULL);
+ 
+ 	/*
 diff --git a/bsd/kern/kern_trustcache.c b/bsd/kern/kern_trustcache.c
-index 111a523..80850c4 100644
+index 111a523..db3a6b4 100644
 --- a/bsd/kern/kern_trustcache.c
 +++ b/bsd/kern/kern_trustcache.c
 @@ -553,7 +553,8 @@ LCK_GRP_DECLARE(trust_cache_lck_grp, "trust_cache_lck_grp");
@@ -127,7 +186,7 @@ index 111a523..80850c4 100644
  check_trust_cache_runtime_for_uuid(
  	const uint8_t check_uuid[kUUIDSize])
 diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
-index 8ae337d..c469410 100644
+index 8ae337d..5702ffb 100644
 --- a/bsd/kern/ubc_subr.c
 +++ b/bsd/kern/ubc_subr.c
 @@ -44,6 +44,8 @@
@@ -162,17 +221,36 @@ index 8ae337d..c469410 100644
  	/* AMFI needs to see the current blob state at the RO address */
  	zalloc_ro_update_elem(ZONE_ID_CS_BLOB, blob_ro, &tmp_blob);
  
+@@ -4909,6 +4927,14 @@ ubc_cs_blob_add(
+ 		tmp_blob.csb_platform_path = 0;
+ 	}
+ 
++	/* An appsync-trusted third-party app is only in the trust cache so its
++	 * ad-hoc signature validates, after which AMFI reports it as a platform
++	 * binary. The validated blob is kept exactly as AMFI leaves it so dyld's
++	 * platform library mapping stays self-consistent; exec_mach_imgact
++	 * instead clears the platform status of the load result after
++	 * load_machfile, so the app runs as an ordinary third-party app without
++	 * the platform restrictions level or the hardened IPC policy. */
++
+ 	if ((flags & MAC_VNODE_CHECK_DYLD_SIM) && !tmp_blob.csb_platform_binary) {
+ 		printf("dyld simulator runtime is not apple signed: proc: %d\n",
+ 		    proc_getpid(current_proc()));
 diff --git a/bsd/sys/trust_caches.h b/bsd/sys/trust_caches.h
-index 565b8e4..ee64e02 100644
+index 565b8e4..e30c88b 100644
 --- a/bsd/sys/trust_caches.h
 +++ b/bsd/sys/trust_caches.h
-@@ -152,6 +152,10 @@ load_trust_cache_with_type(
+@@ -152,6 +152,14 @@ load_trust_cache_with_type(
   * be checked by querying the macro "XNU_HAS_LEGACY_TRUST_CACHE_LOADING". Using this KPI
   * on an unsupported platform will panic the system.
   */
 +/* UniXNU: validated user application CodeDirectories, enabled by appsync=1. */
 +kern_return_t
 +appsync_trust_user_code(const char *path, const uint8_t cdhash[20], uint8_t hash_type);
++
++/* UniXNU: whether a path is an appsync-managed user application (see above). */
++bool
++appsync_is_user_code(const char *path);
 +
  kern_return_t
  load_legacy_trust_cache(
