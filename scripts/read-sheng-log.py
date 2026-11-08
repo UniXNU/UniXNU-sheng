@@ -34,6 +34,7 @@ EXPORT = struct.Struct('<4I')   # version 2: export_first, export_blocks, export
 EXPORT_FIELDS = ('export_first', 'export_blocks', 'export_bytes', 'export_generation')
 EXPORT3 = struct.Struct('<I')   # version 3: export_below (the export region ends that many blocks below the window)
 DIAG4 = struct.Struct('<II')    # version 4: diag_first, diag_bytes (package/BootDiagExport.c, in the same region)
+MSG5 = struct.Struct('<4I')     # version 5: msg_mode (0 linear, 1 stream ring), msg_resyncs, msg_head_lo, msg_head_hi
 LOG_BLOCKS = 8192               # the window the reader dumps (package/linux-log/init, NativeUfs kLogReserveBlocks)
 
 
@@ -98,7 +99,23 @@ def header(blob):
         (h['export_below'],) = EXPORT3.unpack_from(blob, HEADER.size + EXPORT.size)
     if h['version'] >= 4:
         h['diag_first'], h['diag_bytes'] = DIAG4.unpack_from(blob, HEADER.size + EXPORT.size + EXPORT3.size)
+    if h['version'] >= 5:
+        h['msg_mode'], h['msg_resyncs'], low, high = MSG5.unpack_from(blob, HEADER.size + EXPORT.size + EXPORT3.size + DIAG4.size)
+        h['msg_head'] = low | high << 32
     return h
+
+
+def messages(blob, h):
+    """The kernel message buffer, oldest byte first. Version 5 in stream mode keeps a ring: the newest min(msg_head, area) bytes end
+    at msg_head modulo the area. Every other header holds the linear form, msg_bytes long."""
+    area = blob[h['msg_first'] * BLOCK:(h['msg_first'] + h['msg_blocks']) * BLOCK]
+    if h.get('msg_mode') != 1:
+        return area[:h['msg_bytes']]
+    head, cap = h['msg_head'], len(area)
+    if head <= cap:
+        return area[:head]
+    at = head % cap
+    return area[at:] + area[:at]
 
 
 def decode(blob, out):
@@ -117,7 +134,7 @@ def decode(blob, out):
             value = value.split('\0')[0]
         lines.append(f'{key}={value}')
     (run / 'header.txt').write_text('\n'.join(lines) + '\n')
-    msg = blob[h['msg_first'] * BLOCK:(h['msg_first'] + h['msg_blocks']) * BLOCK][:h['msg_bytes']]
+    msg = messages(blob, h)
     (run / 'msgbuf.txt').write_bytes(msg)
     count, written = h['slot_count'], h['slots_written']
     first = max(0, written - count)

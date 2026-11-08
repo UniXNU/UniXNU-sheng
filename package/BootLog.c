@@ -3,11 +3,14 @@
 // banner, the GPU rows, a caught panic message) and the kernel message buffer are written to the last 32 MiB of userdata through
 // NativeUfs's bounded log window, so a run can be read back afterwards (scripts/read-sheng-log.py over the Linux log reader).
 //
-// Window layout (4096-byte blocks): 0 header, 1..32 the kernel message buffer (oldest first), 33.. text slots of 8 blocks in a ring,
-// then the export (version 3, int-150): the newest complete blob that user space handed over (boot_log_export_put: the Metal plugin's
-// pipeline caches, so the next image can start with them) lies in NativeUfs's export region, the 256 MiB below the window, which the
-// reader fetches on its own. Its two halves alternate, so the header always names a blob that is wholly on the medium. (Version 2 kept a
-// 16 MiB area at the window's tail; the UI's pipeline caches outgrew it in int-148 and int-149.)
+// Window layout (4096-byte blocks): 0 header, 1..32 the kernel message buffer, 33.. text slots of 16 blocks in a ring, then the
+// export: the newest complete blob that user space handed over (boot_log_export_put: the Metal plugin's pipeline caches, so the next
+// image can start with them) lies in NativeUfs's export region, the 256 MiB below the window, which the reader fetches on its own. Its
+// two halves alternate, so the header always names a blob that is wholly on the medium.
+// A round writes only what changed: the blocks of a slot its text uses (the rest of the slot keeps a NUL-terminated older text that
+// the reader ignores) and the message buffer blocks that new kernel messages reached. Version 5 keeps the message area as a ring of
+// the message stream (msg_mode 1): msg_head bytes were appended in all, the newest min(msg_head, area) of them end at msg_head modulo
+// the area. msg_mode 0 is the linear form (oldest first, msg_bytes long) that the panic flush and sheng-diag=1 write.
 // The header is written last in each round, so a reader never trusts a slot or an export the header does not count yet.
 #include "BootLatencyFiles.h"
 #include <kern/thread.h>
@@ -291,6 +294,9 @@ struct boot_log_header {
   uint32_t export_below;
   // version 4: the diagnostic file export (BootDiagExport.c) at block diag_first of the export region, diag_bytes long (0 = none)
   uint32_t diag_first, diag_bytes;
+  // version 5: the message area's form (0 linear, 1 stream ring), the times the stream restarted from a fresh copy (the kernel ring
+  // moved or was replaced), and the stream bytes appended in all (low and high word)
+  uint32_t msg_mode, msg_resyncs, msg_head_lo, msg_head_hi;
 };
 // Writer state for the board page: 0 off, 1 waiting for the window, 2 writing, 3 stopped after errors, 4 stopped (GPT changed);
 // 5 in a header written by boot_log_panic_flush.
@@ -301,7 +307,9 @@ volatile uint64_t boot_log_first_lba;
 static int boot_log_started;
 static uint8_t *boot_log_buffer;   // LogMsgBlocks blocks: the message buffer, then reused for a slot and the header
 static uint8_t *boot_log_panic_buffer;   // LogMsgBlocks blocks for boot_log_panic_flush, which must not touch the writer's buffer
+static uint8_t *boot_log_msg_ring;   // LogMsgBlocks blocks: the medium's message area as the writer last left it (stream ring)
 static struct boot_log_header *volatile boot_log_live;   // the writer's header once its window is open
+static volatile int boot_log_panicked;   // set by boot_log_panic_flush: the writer no longer writes
 
 // The export: boot_log_export_put takes the blob's pieces in order (any thread) and writes them through a staging buffer straight into
 // the half of the export region that does not hold the last complete blob; once the last piece is on the medium that blob becomes the
@@ -1751,6 +1759,53 @@ static uint32_t copy_msgbuf(uint8_t *out) {
   return n;
 }
 
+// The message stream (msg_mode 1). The kernel ring is read where the last round stopped: msg_bufx is the next byte the kernel writes,
+// so the bytes from the last round's index up to it are new. The first round, and any round that finds another ring (size or buffer
+// changed), appends the whole ring oldest first instead. More than a ring of messages between two rounds loses the older part.
+// written: the stream offset up to which the medium holds the stream (a failed write leaves its bytes for the next round).
+static struct {const char *bufc; int size, bufx, synced; uint64_t head, written;} msg_stream;
+static void msg_append(uint8_t c) {
+  if (!c) return;
+  const uint64_t cap = (uint64_t)LogMsgBlocks * LogBlock;
+  boot_log_msg_ring[msg_stream.head % cap] = c;
+  ++msg_stream.head;
+}
+// Appends the kernel messages since the last round; returns the number of bytes appended.
+static uint64_t msg_stream_round(uint32_t *resyncs) {
+  struct boot_log_msgbuf *m = msgbufp;
+  const uint64_t before = msg_stream.head;
+  if (!m || !m->msg_bufc || m->msg_size <= 0) return 0;
+  const int size = m->msg_size;
+  int x = m->msg_bufx;
+  if (x < 0 || x >= size) x = 0;
+  if (!msg_stream.synced || msg_stream.bufc != m->msg_bufc || msg_stream.size != size) {
+    if (msg_stream.synced) ++*resyncs;
+    const int window = (int)(LogMsgBlocks * LogBlock);
+    for (int i = size > window ? size - window : 0; i < size; ++i) msg_append((uint8_t)m->msg_bufc[(x + i) % size]);
+    msg_stream.bufc = m->msg_bufc; msg_stream.size = size; msg_stream.synced = 1;
+  } else {
+    for (int i = msg_stream.bufx; i != x; i = i + 1 == size ? 0 : i + 1) msg_append((uint8_t)m->msg_bufc[i]);
+  }
+  msg_stream.bufx = x;
+  return msg_stream.head - before;
+}
+// Writes the blocks of the message area that the bytes not yet on the medium reached (at most the whole area, in up to two pieces).
+static int msg_stream_write(void) {
+  if (msg_stream.written == msg_stream.head) return 1;
+  uint64_t first = msg_stream.written / LogBlock, end = (msg_stream.head + LogBlock - 1) / LogBlock;
+  if (end - first > LogMsgBlocks) first = end - LogMsgBlocks;
+  int ok = 1;
+  while (ok && first < end) {
+    const uint32_t at = (uint32_t)(first % LogMsgBlocks);
+    uint32_t n = (uint32_t)(end - first);
+    if (n > LogMsgBlocks - at) n = LogMsgBlocks - at;
+    ok = native_ufs_log_write(LogMsgFirst + at, n, boot_log_msg_ring + (uint64_t)at * LogBlock);
+    first += n;
+  }
+  if (ok) msg_stream.written = msg_stream.head;
+  return ok;
+}
+
 // Log groups (boot arguments log-gpu, log-display, log-wifi, log-audio, log-input, log-power, log-sys; each =1 turns its rows on, all are off
 // without them). A slot's text is a list of sections: a line that starts with "[tag]" opens one and the lines after it (until the next
 // "[") belong to it. The slot's own head line and the panic text are always kept; sheng-diag has its own switch and writes other files.
@@ -1816,7 +1871,7 @@ static void writer(void *arg, wait_result_t result) {
   static struct boot_log_header h;
   memset(&h, 0, sizeof h);
   memcpy(h.magic, "SHLOG001", 8);
-  h.version = 4; h.header_bytes = sizeof h;
+  h.version = 5; h.header_bytes = sizeof h;
   h.export_blocks = export_region; h.export_below = export_region; h.boot_id = log_ticks(); h.first_lba = first; h.window_blocks = (uint32_t)blocks;
   h.msg_first = LogMsgFirst; h.msg_blocks = LogMsgBlocks; h.slot_first = LogSlotFirst; h.slot_blocks = LogSlotBlocks; h.slot_count = slot_count;
   h.gpt_open = h.gpt_last = &native_ufs_store_gpt_check ? native_ufs_store_gpt_check() : 0xff;
@@ -1849,16 +1904,32 @@ static void writer(void *arg, wait_result_t result) {
     const unsigned now = (unsigned)((log_ticks() - start) / f);
     if (&boot_cache_loader_log_capture) boot_cache_loader_log_capture(now);
     int ok = 1;
+    if (boot_log_panicked) return;   // the panic flush owns the window from now on
     // Text slot, then the message buffer, then the header that makes both visible.
     memset(boot_log_buffer, 0, LogSlotBlocks * LogBlock);
-    if(diag==1)snprintf((char *)boot_log_buffer,LogSlotBlocks*LogBlock,
+    size_t text;
+    if(diag==1)text=(size_t)snprintf((char *)boot_log_buffer,LogSlotBlocks*LogBlock,
       "#slot %u t=%us tag=%s latency-issues=7 export-at=%us\n",h.slots_written,now,
       &boot_progress_tag?boot_progress_tag():"",diag_at);
-    else log_groups_filter((char *)boot_log_buffer, compose((char *)boot_log_buffer, LogSlotBlocks * LogBlock, h.slots_written, now));
-    ok &= native_ufs_log_write(LogSlotFirst + (uint64_t)(h.slots_written % slot_count) * LogSlotBlocks, LogSlotBlocks, boot_log_buffer);
-    h.msg_bytes = copy_msgbuf(boot_log_buffer);
-    if(diag==1)h.msg_bytes=bl_latency_messages((char *)boot_log_buffer,h.msg_bytes);
-    ok &= native_ufs_log_write(LogMsgFirst, LogMsgBlocks, boot_log_buffer);
+    else text = log_groups_filter((char *)boot_log_buffer, compose((char *)boot_log_buffer, LogSlotBlocks * LogBlock, h.slots_written, now));
+    // The used blocks and the one holding the terminating NUL; the slot's later blocks keep an older text behind that NUL.
+    uint32_t slot_used = (uint32_t)(text / LogBlock + 1);
+    if (slot_used > LogSlotBlocks) slot_used = LogSlotBlocks;
+    ok &= native_ufs_log_write(LogSlotFirst + (uint64_t)(h.slots_written % slot_count) * LogSlotBlocks, slot_used, boot_log_buffer);
+    if (diag == 1 || !boot_log_msg_ring) {
+      // sheng-diag=1 keeps only the latency lines, so its message area stays linear and is written whole.
+      h.msg_bytes = copy_msgbuf(boot_log_buffer);
+      if(diag==1)h.msg_bytes=bl_latency_messages((char *)boot_log_buffer,h.msg_bytes);
+      ok &= native_ufs_log_write(LogMsgFirst, LogMsgBlocks, boot_log_buffer);
+      h.msg_mode = 0;
+    } else {
+      msg_stream_round(&h.msg_resyncs);
+      ok &= msg_stream_write();
+      // The header names only what is on the medium.
+      const uint64_t cap = (uint64_t)LogMsgBlocks * LogBlock, head = msg_stream.written;
+      h.msg_mode = 1; h.msg_head_lo = (uint32_t)head; h.msg_head_hi = (uint32_t)(head >> 32);
+      h.msg_bytes = (uint32_t)(head < cap ? head : cap);
+    }
     if (ok) ++h.slots_written;
     else ++h.write_errors;
     // The newest complete export is already on the medium; the header names it.
@@ -1876,6 +1947,7 @@ static void writer(void *arg, wait_result_t result) {
     h.uptime_s = now; h.rounds = ++boot_log_rounds; h.state = boot_log_state;
     // Every 30 rounds the GPT is read back; any change stops the writer for good.
     if (&native_ufs_store_gpt_check && !(h.rounds % 30)) h.gpt_last = native_ufs_store_gpt_check();
+    if (boot_log_panicked) return;
     memset(boot_log_buffer, 0, LogBlock);
     memcpy(boot_log_buffer, &h, sizeof h);
     ok &= native_ufs_log_write(0, 1, boot_log_buffer);
@@ -1908,6 +1980,7 @@ void boot_log_panic_flush(void) {
   struct boot_log_header *live = boot_log_live;
   if (done || !live || !boot_log_panic_buffer || !&native_ufs_log_panic || !native_ufs_log_panic()) return;
   done = 1;
+  boot_log_panicked = 1;
   uint32_t n = copy_msgbuf(boot_log_panic_buffer);
   const uint32_t cap = LogMsgBlocks * LogBlock;
   if (&boot_progress_panic_text && boot_progress_panic_text[0]) {
@@ -1923,7 +1996,7 @@ void boot_log_panic_flush(void) {
     boot_log_panic_buffer[n++] = '\n';
   }
   struct boot_log_header h = *live;
-  h.msg_bytes = n; h.rounds++; h.state = 5;
+  h.msg_bytes = n; h.msg_mode = 0; h.rounds++; h.state = 5;   // the linear form, whole area
   native_ufs_log_write(LogMsgFirst, LogMsgBlocks, boot_log_panic_buffer);
   memset(boot_log_panic_buffer, 0, LogBlock);
   memcpy(boot_log_panic_buffer, &h, sizeof h);
@@ -1953,6 +2026,9 @@ void boot_log_tick(unsigned now) {
   boot_log_buffer = (uint8_t *)IOMallocAligned(LogMsgBlocks * LogBlock, LogBlock);
   if (!boot_log_buffer) return;
   boot_log_panic_buffer = (uint8_t *)IOMallocAligned(LogMsgBlocks * LogBlock, LogBlock);
+  // Without the ring the writer falls back to the linear message area, written whole every round.
+  boot_log_msg_ring = (uint8_t *)IOMallocAligned(LogMsgBlocks * LogBlock, LogBlock);
+  if (boot_log_msg_ring) memset(boot_log_msg_ring, 0, LogMsgBlocks * LogBlock);
   prof_snap = (uint64_t *)IOMalloc(1024 * sizeof(uint64_t));
   prof_rank = (uint64_t *)IOMalloc(2048 * sizeof(uint64_t));
   compose_spawn = (char *)IOMalloc(16384);
