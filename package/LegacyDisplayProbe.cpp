@@ -508,6 +508,7 @@ extern void sheng_battery_probe(void);
 extern void sheng_audio_probe(void);
 extern void sheng_buttons_probe(void);
 extern void sheng_backlight_probe(void);
+extern "C" void sheng_keyboard_probe(void) __attribute__((weak_import));
 extern "C" void sheng_dpu_probe(void);
 void native_legacy_display_late_probe(void) {
     native_keystore_probe();
@@ -522,6 +523,7 @@ void native_legacy_display_late_probe(void) {
     sheng_audio_probe();
     sheng_buttons_probe();
     sheng_backlight_probe();
+    if (sheng_keyboard_probe) sheng_keyboard_probe();
     sheng_dpu_probe();
     native_hid_input_probe();
     IOService *display=pendingLegacyDisplay;if(!display)return;pendingLegacyDisplay=nullptr;
