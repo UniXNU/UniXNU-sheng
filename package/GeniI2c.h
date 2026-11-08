@@ -3,7 +3,8 @@
  * starts a transfer, then feeds the engine's M_IRQ status (from its interrupt handler or a timer poll) until the transfer is done or
  * failed, and calls the timeout step when its deadline passes. Nothing here waits or spins: every call does a few register accesses and
  * returns. A register write is one 2-byte write {register, value}; a register read is a 1-byte write {register} that holds the stop
- * condition, then a 1-byte read. A transfer that stops answering is cancelled, then aborted, as the engine documents. */
+ * condition, then a 1-byte read. A transfer that stops answering is cancelled, then aborted, as the engine documents. Buffered transfers
+ * move any length through the FIFO: each TX watermark event fills the free FIFO words, each RX watermark or last event empties it. */
 #ifndef GENI_I2C_H
 #define GENI_I2C_H
 #include <stdint.h>
@@ -31,9 +32,16 @@ extern "C" {
 #define GENI_M_IRQ_CLEAR 0x618u
 #define GENI_TX_FIFO 0x700u
 #define GENI_RX_FIFO 0x780u
+#define GENI_TX_FIFO_STATUS 0x800u
 #define GENI_RX_FIFO_STATUS 0x804u
 #define GENI_TX_WATERMARK 0x80cu
+#define GENI_RX_WATERMARK 0x810u
+#define GENI_RX_RFR_WATERMARK 0x814u
 #define GENI_SE_IRQ_EN 0xe1cu
+#define GENI_HW_PARAM_0 0xe24u          /* bits 21:16 TX FIFO depth in words */
+#define GENI_HW_PARAM_1 0xe28u          /* bits 21:16 RX FIFO depth in words */
+#define GENI_TX_FIFO_WORDS(status) ((status) & 0x0fffffffu)
+#define GENI_RX_FIFO_WORDS(status) ((status) & 0x01ffffffu)
 
 /* M_IRQ bits. */
 #define GENI_M_CMD_DONE (1u << 0)
@@ -43,6 +51,8 @@ extern "C" {
 #define GENI_M_CMD_CANCEL (1u << 4)
 #define GENI_M_CMD_ABORT (1u << 5)
 #define GENI_M_GP_IRQ (0x3fu << 9)      /* I2C: NACK, bus error, arbitration lost and the like */
+#define GENI_M_RX_WATERMARK (1u << 26)
+#define GENI_M_RX_LAST (1u << 27)
 #define GENI_M_TX_WATERMARK (1u << 30)
 #define GENI_M_ERRORS (GENI_M_CMD_OVERRUN | GENI_M_ILLEGAL_CMD | GENI_M_CMD_FAILURE | GENI_M_GP_IRQ)
 /* What the engine is set to raise its line for. */
@@ -75,6 +85,11 @@ typedef struct {
     uint32_t rx;                     /* the bytes read, first byte in bits 7:0 */
     uint32_t error_status;           /* the M_IRQ status of the last failure */
     uint32_t done, failed, timeouts, stray;
+    /* Buffered transfers: the owner's buffers (its own until the transfer ends), the bytes moved so far, the FIFO depths in words. */
+    const uint8_t *tx_buffer;
+    uint8_t *rx_buffer;
+    uint32_t tx_done, rx_done, rx_total;
+    uint32_t tx_fifo_words, rx_fifo_words;
 } GeniI2c;
 
 /* Checks the engine runs the I2C firmware with its clock and timing set (the boot loader's), selects FIFO mode with 8-bit packing and
@@ -86,6 +101,10 @@ int geni_i2c_start_read(GeniI2c *g, uint8_t reg);
  * bytes into g->rx. */
 int geni_i2c_start_write_bytes(GeniI2c *g, const uint8_t *bytes, uint32_t length);
 int geni_i2c_start_read_bytes(GeniI2c *g, const uint8_t *bytes, uint32_t length, uint32_t read_length);
+/* Buffered forms of any length: write length bytes from bytes; or write command_length (1..8) bytes holding the stop condition, then
+ * read length bytes into buffer. RX watermark and last interrupts are enabled for the read only. */
+int geni_i2c_start_write_buffer(GeniI2c *g, const uint8_t *bytes, uint32_t length);
+int geni_i2c_start_read_buffer(GeniI2c *g, const uint8_t *command, uint32_t command_length, uint8_t *buffer, uint32_t length);
 /* Feeds M_IRQ status bits (already cleared by whoever read them). Returns GeniPending, GeniDone (read value in g->data) or GeniFailed. */
 int geni_i2c_event(GeniI2c *g, uint32_t status);
 /* Reads and clears the status itself, then as geni_i2c_event (for a timer poll; the interrupt handler does the same in its context). */
