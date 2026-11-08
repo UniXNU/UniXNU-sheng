@@ -111,6 +111,9 @@ extern volatile uint64_t native_ufs_block_reads __attribute__((weak_import)), na
     native_ufs_verify_ticks __attribute__((weak_import));
 extern volatile int native_staged_apps_stage __attribute__((weak_import));
 extern volatile int32_t native_buttons_stats[10] __attribute__((weak_import));
+extern volatile int32_t native_keyboard_stats[16] __attribute__((weak_import));
+extern volatile int32_t native_keyboard_accel[4] __attribute__((weak_import));
+extern volatile int32_t native_keyboard_hid_stats[6] __attribute__((weak_import));
 extern volatile int32_t native_backlight_stats[16] __attribute__((weak_import));
 extern volatile int native_staged_apps_dirs __attribute__((weak_import));
 extern volatile int native_staged_apps_files __attribute__((weak_import));
@@ -562,6 +565,25 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     snprintf(row, sizeof row, "B st=%d irq=%d rep=%d mask=%x apid=%d/%d off=%d pdc=%x err=%d spur=%d", native_buttons_stats[0], native_buttons_stats[1],
              native_buttons_stats[2], native_buttons_stats[3], native_buttons_stats[4], native_buttons_stats[5], native_buttons_stats[6],
              native_buttons_stats[7], native_buttons_stats[8], native_buttons_stats[9]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // Keyboard cover (KeyboardProbe.cpp): stage (7 serving, negative the failed step) and its detail, engine protocol and clock, boot ROM
+  // states, image load ms, controller interrupts, frames, keyboard/consumer/touchpad reports, attach state, hall state, input enabled,
+  // I2C failures and the last error, engine interrupts, commands, authentication requests; then the HID device (KeyboardCover.cpp):
+  // starts, reports, failed reports, outputs, feature reads, last failure; the cover's accelerometer.
+  if (&native_keyboard_stats) {
+    char row[240];
+    int n = snprintf(row, sizeof row, "K st=%d err=%x se=%x rom=%x fw=%dms irq=%d fr=%d rep=%x att=%x hall=%x en=%d i2c=%d/%x bus=%d cmd=%d auth=%x",
+                     native_keyboard_stats[0], native_keyboard_stats[1], native_keyboard_stats[2], native_keyboard_stats[3], native_keyboard_stats[4],
+                     native_keyboard_stats[5], native_keyboard_stats[6], native_keyboard_stats[7], native_keyboard_stats[8], native_keyboard_stats[9],
+                     native_keyboard_stats[10], native_keyboard_stats[11], native_keyboard_stats[13], native_keyboard_stats[12],
+                     native_keyboard_stats[14], native_keyboard_stats[15]);
+    if (n > 0 && (size_t)n < sizeof row && &native_keyboard_hid_stats)
+      n += snprintf(row + n, sizeof row - (size_t)n, " hid=%d/%d/%d/%d/%d/%x", native_keyboard_hid_stats[0], native_keyboard_hid_stats[1],
+                    native_keyboard_hid_stats[2], native_keyboard_hid_stats[3], native_keyboard_hid_stats[4], native_keyboard_hid_stats[5]);
+    if (n > 0 && (size_t)n < sizeof row && &native_keyboard_accel)
+      snprintf(row + n, sizeof row - (size_t)n, " acc=%d,%d,%d/%d", native_keyboard_accel[0], native_keyboard_accel[1], native_keyboard_accel[2],
+               native_keyboard_accel[3]);
     at = put(out, at, cap, row, sizeof row);
   }
   // Panel brightness (AppleARMBacklight.cpp): stage (3 published, negative the failed step), requests, last level, the levels read back from
