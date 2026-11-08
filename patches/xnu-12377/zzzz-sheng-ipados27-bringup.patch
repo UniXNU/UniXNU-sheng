@@ -1570,7 +1570,7 @@ index 8d11b54..6b12ab1 100644
  #else /* XNU_KERNEL_PRIVATE */
  
 diff --git a/osfmk/vm/vm_dyld_pager.c b/osfmk/vm/vm_dyld_pager.c
-index d3cd6e8..17a842c 100644
+index d3cd6e8..a8ba8cf 100644
 --- a/osfmk/vm/vm_dyld_pager.c
 +++ b/osfmk/vm/vm_dyld_pager.c
 @@ -145,12 +145,12 @@ const struct memory_object_pager_ops dyld_pager_ops = {
@@ -1613,8 +1613,7 @@ index d3cd6e8..17a842c 100644
  	switch (key) {
  	case ptrauth_key_asia:
  	case ptrauth_key_asda:
--		if (pager->dyld_a_key == 0 || arm_user_jop_disabled()) {
-+		if (arm_user_jop_disabled()) {
+ 		if (pager->dyld_a_key == 0 || arm_user_jop_disabled()) {
  			*signedAddr = unsignedAddr;
  		} else {
  			*signedAddr = (uintptr_t)pmap_sign_user_ptr((void *)unsignedAddr, key, extendedDiscriminator, pager->dyld_a_key);
@@ -1896,37 +1895,6 @@ index d3cd6e8..17a842c 100644
  	return retval;
  }
  
-diff --git a/osfmk/vm/vm_shared_region.c b/osfmk/vm/vm_shared_region.c
-index 451f335..09532fc 100644
---- a/osfmk/vm/vm_shared_region.c
-+++ b/osfmk/vm/vm_shared_region.c
-@@ -3335,7 +3335,7 @@ vm_shared_region_slide_page_v3(
- 				discriminator = __builtin_ptrauth_blend_discriminator((void*)(((uintptr_t)uservaddr) + pageOffset), discriminator);
- 			}
- 
--			if (jop_key != 0 && si->si_ptrauth && !arm_user_jop_disabled()) {
-+			if (si->si_ptrauth && !arm_user_jop_disabled()) {
- #if CONFIG_SPTM
- 				pmap_batch_sign_user_ptr(rebaseLocation, (void *)value, key, discriminator, jop_key);
- #else /* CONFIG_SPTM */
-@@ -3554,7 +3554,7 @@ vm_shared_region_slide_page_v5(
- 				discriminator = __builtin_ptrauth_blend_discriminator((void*)(((uintptr_t)uservaddr) + pageOffset), discriminator);
- 			}
- 
--			if (jop_key != 0 && si->si_ptrauth && !arm_user_jop_disabled()) {
-+			if (si->si_ptrauth && !arm_user_jop_disabled()) {
- #if CONFIG_SPTM
- 				pmap_batch_sign_user_ptr(rebaseLocation, (void *)value, key, discriminator, jop_key);
- #else /* CONFIG_SPTM */
-@@ -3644,7 +3644,7 @@ vm_shared_region_slide_part_v5(
- 					uintptr_t pageOffset = rebaseLocation - page_content;
- 					discriminator = __builtin_ptrauth_blend_discriminator((void*)(((uintptr_t)uservaddr) + pageOffset), discriminator);
- 				}
--				if (jop_key != 0 && si->si_ptrauth && !arm_user_jop_disabled()) {
-+				if (si->si_ptrauth && !arm_user_jop_disabled()) {
- #if CONFIG_SPTM
- 					pmap_batch_sign_user_ptr(rebaseLocation, (void *)value, key, discriminator, jop_key);
- #else /* CONFIG_SPTM */
 diff --git a/osfmk/vm/vm_shared_region_pager.c b/osfmk/vm/vm_shared_region_pager.c
 index 543e621..1571e29 100644
 --- a/osfmk/vm/vm_shared_region_pager.c
