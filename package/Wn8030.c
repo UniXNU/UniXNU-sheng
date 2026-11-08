@@ -131,3 +131,17 @@ void wn8030_release_reports(uint8_t keyboard[WN8030_KEYBOARD_REPORT], uint8_t co
     zero(consumer, WN8030_CONSUMER_REPORT); consumer[0] = WN8030_CONSUMER_ID;
     zero(touchpad, WN8030_TOUCHPAD_REPORT); touchpad[0] = WN8030_TOUCHPAD_ID;
 }
+
+unsigned wn8030_touchpad_report(const uint8_t in[WN8030_TOUCHPAD_REPORT], uint8_t out[WN8030_TOUCHPAD_REPORT])
+{
+    unsigned lifted = 0;
+    for (uint32_t i = 0; i < WN8030_TOUCHPAD_REPORT; ++i) out[i] = in[i];
+    for (uint32_t f = 0; f < WN8030_TOUCHPAD_FINGERS; ++f) {
+        uint8_t *p = out + 2 + 6 * f;
+        uint32_t y = (uint32_t)p[4] | (uint32_t)p[5] << 8;
+        if (y > WN8030_TOUCHPAD_Y_MAX) y = WN8030_TOUCHPAD_Y_MAX;
+        put_le16(p + 4, WN8030_TOUCHPAD_Y_MAX - y);
+        if ((p[0] & 1u) && !(p[0] & 4u)) {p[0] = (uint8_t)(p[0] & ~3u); ++lifted;}
+    }
+    return lifted;
+}

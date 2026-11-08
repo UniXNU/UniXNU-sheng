@@ -124,6 +124,31 @@ int main(int argc, char **argv)
     for (unsigned i = 1; i < 21; ++i) CHECK(!tp[i]);
     CHECK(!cs[1] && !cs[2]);
 
+    /* Touchpad reports: Y from the other edge, X, ids, buttons and count unchanged; a touching palm goes out lifted. */
+    {
+        uint8_t in[21] = {0x19, 0x01}, out[21];
+        const struct {uint8_t flags, id; uint16_t x, y;} fingers[3] = {{0x07, 3, 100, 0}, {0x03, 4, 3047, 2031}, {0x00, 0, 5, 3000}};
+        for (unsigned f = 0; f < 3; ++f) {
+            uint8_t *p = in + 2 + 6 * f;
+            p[0] = fingers[f].flags; p[1] = fingers[f].id;
+            p[2] = (uint8_t)fingers[f].x; p[3] = (uint8_t)(fingers[f].x >> 8);
+            p[4] = (uint8_t)fingers[f].y; p[5] = (uint8_t)(fingers[f].y >> 8);
+        }
+        in[20] = 2;
+        CHECK(wn8030_touchpad_report(in, out) == 1);
+        CHECK(out[0] == 0x19 && out[1] == 0x01 && out[20] == 2);
+        CHECK(out[2] == 0x07 && out[3] == 3 && (out[4] | out[5] << 8) == 100 && (out[6] | out[7] << 8) == 2031);
+        CHECK(out[8] == 0x00 && out[9] == 4 && (out[10] | out[11] << 8) == 3047 && (out[12] | out[13] << 8) == 0);   /* palm: lifted */
+        CHECK(out[14] == 0x00 && (out[18] | out[19] << 8) == 0);   /* an idle slot past the range clamps to the edge */
+        in[8] = 0x06;   /* in range, confident, not touching: unchanged */
+        CHECK(wn8030_touchpad_report(in, out) == 0 && out[8] == 0x06);
+        for (unsigned y = 0; y <= 2031; ++y) {
+            in[6] = (uint8_t)y; in[7] = (uint8_t)(y >> 8);
+            wn8030_touchpad_report(in, out);
+            CHECK((unsigned)(out[6] | out[7] << 8) == 2031 - y);
+        }
+    }
+
     /* The pinned image, when given. */
     if (argc > 1) {
         uint32_t bytes = 0;
