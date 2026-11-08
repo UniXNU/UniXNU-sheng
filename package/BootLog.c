@@ -93,6 +93,22 @@ extern volatile int native_cryptex_os_status __attribute__((weak_import));
 extern volatile int native_gestalt_cache_status __attribute__((weak_import));
 extern volatile int native_ls_store_status __attribute__((weak_import));
 extern volatile uint64_t native_data_persist_present __attribute__((weak_import));
+// Data disk I/O (RamBlock NativeRamBlock.cpp) and the store window's commands (ShengUfs NativeUfs.cpp), in mach_absolute_time ticks.
+extern volatile uint64_t native_data_io_reads __attribute__((weak_import)), native_data_io_read_bytes __attribute__((weak_import)),
+    native_data_io_read_ticks __attribute__((weak_import)), native_data_io_writes __attribute__((weak_import)),
+    native_data_io_write_bytes __attribute__((weak_import)), native_data_io_write_ticks __attribute__((weak_import)),
+    native_data_io_gate_ticks __attribute__((weak_import)), native_data_io_max_ticks __attribute__((weak_import)),
+    native_data_flushes __attribute__((weak_import)), native_data_flush_ticks __attribute__((weak_import)),
+    native_data_flush_blocks __attribute__((weak_import)), native_data_timer_flushes __attribute__((weak_import));
+extern volatile uint32_t native_data_write_back __attribute__((weak_import));
+extern volatile uint64_t native_ufs_store_rd_ops __attribute__((weak_import)), native_ufs_store_rd_ticks __attribute__((weak_import)),
+    native_ufs_store_wr_ops __attribute__((weak_import)), native_ufs_store_wr_ticks __attribute__((weak_import)),
+    native_ufs_store_sync_ops __attribute__((weak_import)), native_ufs_store_sync_ticks __attribute__((weak_import)),
+    native_ufs_store_max_ticks __attribute__((weak_import));
+// Command slots (ShengUfs RootCommands.h) and the root windows' reads: their count, transport time and integrity check time (CNTPCT ticks).
+extern void native_ufs_slot_stats(uint32_t *, uint32_t *, uint64_t *) __attribute__((weak_import));
+extern volatile uint64_t native_ufs_block_reads __attribute__((weak_import)), native_ufs_read_ticks __attribute__((weak_import)),
+    native_ufs_verify_ticks __attribute__((weak_import));
 extern volatile int native_staged_apps_stage __attribute__((weak_import));
 extern volatile int32_t native_buttons_stats[10] __attribute__((weak_import));
 extern volatile int32_t native_backlight_stats[16] __attribute__((weak_import));
@@ -470,6 +486,36 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              (unsigned long long)native_data_persist_syncs, (unsigned long long)native_data_persist_errors, (unsigned long long)native_data_persist_pages);
     at = put(out, at, cap, "[data]", 8);
     at = put(out, at, cap, row, sizeof row);
+    // Disk requests (count/MiB/ms, gate wait, longest in us), synchronize (count/ms/bitmap blocks, timer-started), store commands.
+    if (&native_data_io_reads && &native_data_write_back) {
+      uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
+#define BL_MS(t) ((unsigned long long)((t) * 1000ULL / f))
+#define BL_US(t) ((unsigned long long)((t) * 1000000ULL / f))
+      char io[560];
+      int n = snprintf(io, sizeof io, "DIO wb=%u rd=%llu/%lluM/%llums wr=%llu/%lluM/%llums gate=%llums max=%lluus fl=%llu/%llums/%llu tf=%llu",
+               native_data_write_back, (unsigned long long)native_data_io_reads, (unsigned long long)(native_data_io_read_bytes >> 20),
+               BL_MS(native_data_io_read_ticks), (unsigned long long)native_data_io_writes, (unsigned long long)(native_data_io_write_bytes >> 20),
+               BL_MS(native_data_io_write_ticks), BL_MS(native_data_io_gate_ticks), BL_US(native_data_io_max_ticks),
+               (unsigned long long)native_data_flushes, BL_MS(native_data_flush_ticks), (unsigned long long)native_data_flush_blocks,
+               (unsigned long long)native_data_timer_flushes);
+      if (&native_ufs_store_rd_ops && n > 0 && (size_t)n < sizeof io)
+        snprintf(io + n, sizeof io - (size_t)n, " ufs r=%llu/%llums w=%llu/%llums s=%llu/%llums umax=%lluus",
+                 (unsigned long long)native_ufs_store_rd_ops, BL_MS(native_ufs_store_rd_ticks), (unsigned long long)native_ufs_store_wr_ops,
+                 BL_MS(native_ufs_store_wr_ticks), (unsigned long long)native_ufs_store_sync_ops, BL_MS(native_ufs_store_sync_ticks),
+                 BL_US(native_ufs_store_max_ticks));
+      n = (int)strnlen(io, sizeof io);
+      if (&native_ufs_slot_stats && (size_t)n < sizeof io) {
+        uint32_t slots = 0, peak = 0; uint64_t waits = 0;
+        native_ufs_slot_stats(&slots, &peak, &waits);
+        n += snprintf(io + n, sizeof io - (size_t)n, " q=%u/%u/%llu", slots, peak, (unsigned long long)waits);
+      }
+      if (&native_ufs_block_reads && &native_ufs_read_ticks && &native_ufs_verify_ticks && n > 0 && (size_t)n < sizeof io)
+        snprintf(io + n, sizeof io - (size_t)n, " root=%llu/%llums v=%llums", (unsigned long long)native_ufs_block_reads,
+                 BL_MS(native_ufs_read_ticks), BL_MS(native_ufs_verify_ticks));
+#undef BL_MS
+#undef BL_US
+      at = put(out, at, cap, io, sizeof io);
+    }
   }
   // The payload's GPU addon (kern_exec.c native_gpu_addon_install): files in it (-1 none), written, already equal, failed, last error; then
   // the stage/status of the boot-time addon mounts (stage 5 = mounted and both entries visible): plugin, launchd job, wallpaper, audio, wallpaper floating layer
