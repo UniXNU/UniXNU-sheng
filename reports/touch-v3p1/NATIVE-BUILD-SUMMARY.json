@@ -1,0 +1,19 @@
+{
+  "schema": "unixnu.touch-native-evidence.v1",
+  "scope": "Historical successful V3.1 build; current upstream adaptation is a separate source integration",
+  "public_build_url": "https://github.com/ZTH-CCMT/unixnu-sheng-gpu-build/actions/runs/42335343954",
+  "public_source_url": "https://github.com/ZTH-CCMT/unixnu-sheng-gpu-build/commit/22b9b6bc23ecbf7037e93f3b01100aa4a7c3f872",
+  "source_commit": "22b9b6bc23ecbf7037e93f3b01100aa4a7c3f872",
+  "source_go_sha256": "aadd585d533ff0e847a21cf5410602ceeb5926e0dc5e35b9de0c58bfd5e453ac",
+  "boot": {
+    "sha256": "655f1a996ca34bfc066ad27d686dfa20a4f5cce76ee98e55d723340b2d8bedc8",
+    "bytes": 186097664
+  },
+  "payload_sha256": "7d74f2d16300727624bf37eb7ace7c152acb58d7067a4616414b5ed3c03e8226",
+  "raw_kernel_sha256": "ed81dc983d040accdadf84a7feafc7d13c8fe47eb9713fadcba1a30a4e0c19db",
+  "sealed_fat_kernel_sha256": "136861d2d80d768fcefde0acd52a679f1298b2cb5a2fe65e6ae61f4bf3d46cb5",
+  "actual_kernel_review_sha256": "957ffcb54d5b295f529eaaccaee6b9a00039fd0adaaa8b8b6267038a4220a125",
+  "source_binding_sha256": "f0abfafc2df17b8191dd1a6b4ff67e69003cf37f6401e27202c5d1b801555403",
+  "memory_bytes": 5100273664,
+  "binaries_included": false
+}

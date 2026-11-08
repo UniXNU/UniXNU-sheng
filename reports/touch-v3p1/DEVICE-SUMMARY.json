@@ -1,0 +1,31 @@
+{
+  "schema": "unixnu.touch-device-evidence.v1",
+  "scope": "User observations on the historical V3.1 image; not a latest-upstream device test",
+  "boot_sha256": "655f1a996ca34bfc066ad27d686dfa20a4f5cce76ee98e55d723340b2d8bedc8",
+  "observations": [
+    {
+      "date": "2026-11-07",
+      "result": "User reported positive normal-speed Settings sidebar taps and completely accurate continuous scrolling and slow slider dragging.",
+      "status": "BASIC_TOUCH_PASS_USER_REPORTED",
+      "machine_sensor_trace_captured": false
+    },
+    {
+      "date": "2026-11-07",
+      "result": "A later attempt with the same image self-restarted to Android. Cause unknown; no captured panic establishes a cause.",
+      "status": "LATER_BOOT_SELF_RESTART_CAUSE_UNKNOWN"
+    },
+    {
+      "date": "2026-11-07",
+      "result": "Same-image retry initiated; final UI outcome was not reported.",
+      "status": "RETRY_OUTCOME_UNKNOWN"
+    }
+  ],
+  "not_qualified": [
+    "long-duration stability",
+    "multiple users or units",
+    "complete stylus support",
+    "multi-contact stress",
+    "Wi-Fi join and performance"
+  ],
+  "private_raw_logs_photos_and_device_identity_included": false
+}

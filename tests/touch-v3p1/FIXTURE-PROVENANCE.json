@@ -1,0 +1,78 @@
+{
+  "schema": "unixnu.contribution-fixtures.v1",
+  "sensor_capture_files_included": false,
+  "device_identity_read": false,
+  "astra_fixtures_unchanged": true,
+  "files": {
+    "fixtures/test_astra_core.cpp": {
+      "original_sha256": "bfa07a95fe56d388d0c82b04628b067b46dcdeca6e2d755190ed6dccc4f4ce54",
+      "copied_sha256": "bfa07a95fe56d388d0c82b04628b067b46dcdeca6e2d755190ed6dccc4f4ce54",
+      "copy": "byte-identical generated/synthetic fixture; no capture input"
+    },
+    "fixtures/test_astra_coverage.cpp": {
+      "original_sha256": "4a21a86510f96b563b2ae8d54049fcd2d616c90fc407d146bcdef1620bec8953",
+      "copied_sha256": "4a21a86510f96b563b2ae8d54049fcd2d616c90fc407d146bcdef1620bec8953",
+      "copy": "byte-identical generated/synthetic fixture; no capture input"
+    },
+    "fixtures/test_astra_engine.cpp": {
+      "original_sha256": "6cf24ccc063f97bee696088b857294b1d70931f44a76dec52bddb4a962cf0bdd",
+      "copied_sha256": "6cf24ccc063f97bee696088b857294b1d70931f44a76dec52bddb4a962cf0bdd",
+      "copy": "byte-identical generated/synthetic fixture; no capture input"
+    },
+    "fixtures/test_astra_formula_config.cpp": {
+      "original_sha256": "2a3ccaef415f101e65845413c72ca89d0edc7f5c8f46e13f64616c73ba6cf16c",
+      "copied_sha256": "2a3ccaef415f101e65845413c72ca89d0edc7f5c8f46e13f64616c73ba6cf16c",
+      "copy": "byte-identical generated/synthetic fixture; no capture input"
+    },
+    "fixtures/test_astra_nuisance_counterexample.cpp": {
+      "original_sha256": "68c1c141ab68eebad2d4f17a2aaa57feb0ec4bee567a8592cc25f3c9a15aa8ec",
+      "copied_sha256": "68c1c141ab68eebad2d4f17a2aaa57feb0ec4bee567a8592cc25f3c9a15aa8ec",
+      "copy": "byte-identical generated/synthetic fixture; no capture input"
+    },
+    "fixtures/test_astra_partial.cpp": {
+      "original_sha256": "cd1ffa9a2a09e8afbf0d351c70b1ef47f9f9409d1bb21514dd0fe8e69f727196",
+      "copied_sha256": "cd1ffa9a2a09e8afbf0d351c70b1ef47f9f9409d1bb21514dd0fe8e69f727196",
+      "copy": "byte-identical generated/synthetic fixture; no capture input"
+    },
+    "fixtures/test_astra_probe.cpp": {
+      "original_sha256": "6a5347897f137713a34939eb12e210accf943da174d643eef2a5168479614dd0",
+      "copied_sha256": "6a5347897f137713a34939eb12e210accf943da174d643eef2a5168479614dd0",
+      "copy": "byte-identical generated/synthetic fixture; no capture input"
+    },
+    "fixtures/test_astra_quantization.cpp": {
+      "original_sha256": "1e5a42a813d0957f37e97dc8ac5ec451ce01ea208f489fbe6607800609f829da",
+      "copied_sha256": "1e5a42a813d0957f37e97dc8ac5ec451ce01ea208f489fbe6607800609f829da",
+      "copy": "byte-identical generated/synthetic fixture; no capture input"
+    },
+    "fixtures/test_astra_region.cpp": {
+      "original_sha256": "f44a01d1b5af95f3bd9af1c16d93ab2af0639f75b52e0906e0ce60ef57013d0a",
+      "copied_sha256": "f44a01d1b5af95f3bd9af1c16d93ab2af0639f75b52e0906e0ce60ef57013d0a",
+      "copy": "byte-identical generated/synthetic fixture; no capture input"
+    },
+    "fixtures/test_astra_timeline.cpp": {
+      "original_sha256": "d5a99a70fdd67d4d594a85b1e768b39130f80fbe3caf995e6bfcf7958b7314e0",
+      "copied_sha256": "d5a99a70fdd67d4d594a85b1e768b39130f80fbe3caf995e6bfcf7958b7314e0",
+      "copy": "byte-identical generated/synthetic fixture; no capture input"
+    },
+    "fixtures/hid/extracted_touchsend.template.cpp": {
+      "source_fixture_sha256": "dda2672f6a0dce9c65051c170ae9dd754fa48be9348333bf768c96b0fecfdde4",
+      "copied_sha256": "a93ba30aa1c5b82677143c38808b3466b986474e2dd8726c4f0d382fef2f6e38",
+      "changes": [
+        "Current production body extracted at runtime instead of stored NewDevice body",
+        "Time and ACK platform stubs",
+        "One additional original-time/ACK assertion; old14regressions retained"
+      ],
+      "synthetic_only": true
+    },
+    "fixtures/hid/pure_c_compile.c": {
+      "copied_sha256": "4fd85381da8c970b763b2f1f11d6ee51b302e60d483201b2d0728ec3644ad2d3",
+      "synthetic_only": true,
+      "copy": "existing public fixture/baseline, unchanged"
+    },
+    "fixtures/hid/touchSend.baseline.cpp.txt": {
+      "copied_sha256": "364d5744d3ee4145f349eddc5ad8cd37e744d15593239fb5d1487937eedfec7e",
+      "synthetic_only": true,
+      "copy": "existing public fixture/baseline, unchanged"
+    }
+  }
+}

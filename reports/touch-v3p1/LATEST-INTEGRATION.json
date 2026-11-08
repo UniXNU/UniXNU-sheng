@@ -1,0 +1,88 @@
+{
+  "schema": "unixnu.touch-latest-integration-evidence.v1",
+  "repositories": {
+    "novatek": {
+      "url": "https://github.com/UniXNU/ShengNovatekTouch",
+      "commit": "69fdd6223ed2572aa8bd8351e77c53a238276130",
+      "path": "device/drivers/ShengNovatekTouch"
+    },
+    "hid": {
+      "url": "https://github.com/UniXNU/ShengHidInput",
+      "commit": "71a40e76daeae1bb4127546f96ffa7339c7a06ff",
+      "path": "device/drivers/ShengHidInput"
+    },
+    "board": {
+      "url": "https://github.com/UniXNU/UniXNU-sheng",
+      "commit": "689400177f93219a38bd7cf5ae2e9f5782adc594",
+      "path": "device"
+    },
+    "core": {
+      "url": "https://github.com/UniXNU/UniXNU",
+      "commit": "5dc00d201496a1e7a72d1f5db23f041eb94ace1c",
+      "path": "UniXNU"
+    }
+  },
+  "changed_file_count": 19,
+  "patches": [
+    {
+      "file": "01-novatek-core.patch",
+      "repository": "novatek",
+      "base_commit": "69fdd6223ed2572aa8bd8351e77c53a238276130",
+      "sha256": "4b9ebfafc22c11ec2a0941649d60006a62c0abfc637205cf10a160108b470e6e"
+    },
+    {
+      "file": "02-hid-report-continuity.patch",
+      "repository": "hid",
+      "base_commit": "71a40e76daeae1bb4127546f96ffa7339c7a06ff",
+      "sha256": "ff89e8f7c1d2e746425971deef4bec60effc41c39190d22213f80aab3e269d0d"
+    },
+    {
+      "file": "03-board-touch-runtime.patch",
+      "repository": "board",
+      "base_commit": "689400177f93219a38bd7cf5ae2e9f5782adc594",
+      "sha256": "d84268085cbe0b676b67543de440833b14ba3dde4a70839dc14d87dab9b74d72"
+    },
+    {
+      "file": "04-source-object-compilation.patch",
+      "repository": "core",
+      "base_commit": "5dc00d201496a1e7a72d1f5db23f041eb94ace1c",
+      "sha256": "37113f4aabf60f96a3a877253aea333e30cf721a0e41b1d4ea00522f65a1c016"
+    },
+    {
+      "file": "05-board-late-archive.patch",
+      "repository": "board",
+      "base_commit": "689400177f93219a38bd7cf5ae2e9f5782adc594",
+      "sha256": "ea81cd905acece5ddb7e36118ea24c35c24ab380ea93e4c6f2f7624534693616"
+    }
+  ],
+  "changed19": {
+    "device/drivers/ShengHidInput/NativeHidInput.cpp": "0bd4448b846bde02f9f17c3c4f9a62cef1505c782a4f67cf9779cf36478e0cec",
+    "device/drivers/ShengHidInput/NativeHidTouchPlan.h": "b11592c16e451d7e37c7e3cb8505503e2737659a3c27648a64ec1016f8b2fd07",
+    "device/drivers/ShengNovatekTouch/NvtCoverage.c": "90fc8983092cec95dfd38f8846f164de0070e061881344743d2d4cce918884f2",
+    "device/drivers/ShengNovatekTouch/NvtCoverage.h": "2248985f573d2220b47cc70d744227b4a1e20778bce8eb323441279d17bd7529",
+    "device/drivers/ShengNovatekTouch/NvtPartialMathInline.h": "5570490c39f124dcd447ed65e559c57f4a685b211b461612d796371ca178db76",
+    "device/drivers/ShengNovatekTouch/NvtPartialObservation.c": "7f7ea44e52ee01b902d3a417c7fd8290cb56d8954c7f125ac8438b7024406e04",
+    "device/drivers/ShengNovatekTouch/NvtPartialObservation.h": "34bb1a2fe26130dd1efd71ac2727b26d53d6a90d2754f359576b7d811667eed6",
+    "device/drivers/ShengNovatekTouch/NvtProtocol.c": "e36aca444f6fe955325a6a0c43383c209ffd538a2ee1b98042e3ae9a6b0ff6b0",
+    "device/drivers/ShengNovatekTouch/NvtProtocol.h": "49a2d6b1d021968825685c1f3e0b76dd366e020d53c815cb8b164e6043729553",
+    "device/drivers/ShengNovatekTouch/NvtShapeMetricsInline.h": "9b6d755a41819e1f1666a21da183b8e8ed4da9a0f075ca9315caf6f187524ed7",
+    "device/drivers/ShengNovatekTouch/NvtTouchCore.c": "a067b9ef18fa9f312732fcfc89890230293f595cb03d09a360b1c1e019f0391b",
+    "device/drivers/ShengNovatekTouch/NvtTouchCore.h": "81a58af8dd0beb99029130842597a27a57269a1bae0a86b5c249b02dd0b05a1e",
+    "device/drivers/ShengNovatekTouch/Test/nvt-protocol.c": "fa515bb6008f7909c0ca118fdef0f87d3032fa2c02dc8552852ada9101d8c80a",
+    "device/package/TouchAstraProfile.h": "629a0ac74419565b06519c14722082b464280b3036e87d24b790507501744b8f",
+    "device/package/TouchEngine.h": "4003ba3fd5cdd8e76b6ebf4263c0e9c86607ad49aa581b57f7278f715495b937",
+    "device/package/TouchProbe.cpp": "6adfe9dae0df1d6cf1b1ae55aee2730a72ded7af0340d081235a45dbeb195d69",
+    "device/package/TouchReportTimeline.h": "4a654d48aef1930f270b32c16b75d60c8ac2a82d10f9619863e4f8fde128d95d",
+    "UniXNU/scripts/build-sheng-source-drivers.py": "8f140d9817c0945a9e15b484de7f9daeda17518b9709975a7c025b19793bcf22",
+    "device/scripts/build-gop-legacy-display-27.py": "377ac6beb1b8684e792fb116f96bbbfe7ff11ec43046b42df9e5f5aa34598cb0"
+  },
+  "replay_statement": "Five patches reconstruct all 32 selected source files at expected byte hashes.",
+  "algorithm_bytes_retained": true,
+  "board_adaptation": "TouchProbe adds the author shared SMMU/shared IRQ integration; builders retain current consumer inputs.",
+  "bootlog_printer_excluded": true,
+  "new_native_build_performed": false,
+  "new_device_run_performed": false,
+  "review_bundle_replay_result_sha256": "fda80f6474df34d54a16880414680b0841ed3d9ddf5b5e5a90fccbfe57bf7eef",
+  "review_bundle_replay_manifest_sha256": "a3c0b1021716100ac609da21b94798f064c48c0712ac60057bc69897dff274c4",
+  "review_bundle_note": "Replay receipts identify the reviewed cross-repository source cohort; source paths include their repository prefix."
+}

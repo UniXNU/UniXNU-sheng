@@ -1,0 +1,55 @@
+{
+  "schema": "unixnu.touch-host-evidence.v2",
+  "scope": "Fresh local execution of the repository-layout board runner against the reviewed current board/central source trees; no remote branch/gitlink/native claim.",
+  "source_set": "reports/touch-v3p1/LATEST-INTEGRATION.json changed19",
+  "source_pins_verified_before_and_after": true,
+  "groups": 10,
+  "named_checks": 122,
+  "status": "PASS",
+  "separate_suites": [
+    {
+      "suite": "public_protocol_chip_model",
+      "status": "PASS_SYNTHETIC_MODEL_ONLY",
+      "firmware_file_used": false
+    },
+    {
+      "suite": "actual_V3p1_HID_sender_with_platform_stubs",
+      "status": "PASS_HOST_SYNTHETIC_NOT_HARDWARE",
+      "named_checks": 15,
+      "generated_set_transitions": 9936
+    },
+    {
+      "suite": "author_baseline_core_fixture",
+      "status": "PASS_HOST_AUTHOR_FIXTURE",
+      "compile_returncode": 0,
+      "returncode": 0,
+      "fixture_revision": "69fdd6223ed2572aa8bd8351e77c53a238276130",
+      "baseline_fixture_byte_identical": true,
+      "fixture_sha256": "fead815efcdd41a7bf76187b7ecafda845e2fabf9d8f3268d6b425a6c36a3b9c"
+    }
+  ],
+  "current_author_fixture_commit": "69fdd6223ed2572aa8bd8351e77c53a238276130",
+  "results": "tests/touch-v3p1/results/host-results.json",
+  "results_sha256": "11c2f2981d389718f4a04c4a32a1939e2ec38eaa6e131b291d0d9a504620f4dd",
+  "probe_helper_equivalence": "tests/touch-v3p1/results/probe-helper-equivalence.json",
+  "platform_limits": [
+    "Host/synthetic tests do not execute physical SPI/SMMU/shared IRQ or actual iOS HID delivery.",
+    "Latest board native build and device behavior are separate from the original successful V3.1 cohort."
+  ],
+  "environment": {
+    "host_system": "Linux",
+    "host_machine": "x86_64",
+    "cc": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "cxx": "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "python": "3.12.3",
+    "sanitizers": [
+      "address",
+      "undefined"
+    ]
+  },
+  "no_cloud_or_device_action": true,
+  "runner_sha256": "2e02d41cfee6e9c6d523f8b27f24cdabe75e242ff942c1f3f7715a2fb2963d08",
+  "fresh_results": true,
+  "prior_frozen_results_reused_as_current": false,
+  "runner": "tools/run_touch_v3p1_host.py"
+}

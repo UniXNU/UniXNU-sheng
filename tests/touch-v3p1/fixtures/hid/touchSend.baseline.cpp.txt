@@ -1,0 +1,52 @@
+    void touchSend() {
+        NativeHidInput *self=this;
+        if(!self->hasEventDriverCached())return;
+        uint32_t before=native_touch_seq;
+        if((before&1) || before==self->lastSeq)return;
+        __asm__ volatile("dmb ish":::"memory");
+        unsigned count=native_touch_count;if(count>TOUCH_FINGERS)count=TOUCH_FINGERS;
+        int ids[TOUCH_FINGERS],xs[TOUCH_FINGERS],ys[TOUCH_FINGERS];
+        for(unsigned i=0;i<count;++i){ids[i]=native_touch_ids[i];xs[i]=native_touch_xs[i];ys[i]=native_touch_ys[i];}
+        __asm__ volatile("dmb ish":::"memory");
+        if(native_touch_seq!=before)return;      // torn read: retry on the next tick
+        self->lastSeq=before;
+        // Sizes follow the axis maxima of the touch core: 30480 long, 20320 short, mapped to the same 0..32767 range.
+        unsigned char report[1+TOUCH_FINGERS*6+1]={3};
+        unsigned slot=0;
+        int nextIds[TOUCH_FINGERS],nextX[TOUCH_FINGERS],nextY[TOUCH_FINGERS];
+        for(unsigned i=0;i<count && slot<TOUCH_FINGERS;++i,++slot) {
+            unsigned x=transformCoordinate(xs[i],30480),y=transformCoordinate(ys[i],20320);
+            unsigned char *f=report+1+slot*6;
+            f[0]=3;f[1]=(unsigned char)(ids[i]&0xff);f[2]=(unsigned char)x;f[3]=(unsigned char)(x>>8);f[4]=(unsigned char)y;f[5]=(unsigned char)(y>>8);   // tip, valid
+            nextIds[slot]=ids[i];nextX[slot]=(int)x;nextY[slot]=(int)y;
+        }
+        const unsigned downCount=slot;
+        if(downCount>=2)edge::native_touch_hid_multi[0]=edge::native_touch_hid_multi[0]+1;
+        if(downCount>edge::native_touch_hid_multi[1])edge::native_touch_hid_multi[1]=downCount;
+        // Identifiers that were down and are gone: tip up at the last known position. They are matched by identifier, not by slot:
+        // the producer packs its fingers, so when one lifts the others move down a slot and a slot match would lift a finger still
+        // down and leave the lifted one stuck.
+        for(unsigned j=0;j<TOUCH_FINGERS;++j) {
+            const int id=self->prevIds[j];
+            if(id<0)continue;
+            bool kept=false;
+            for(unsigned i=0;i<downCount && !kept;++i)kept=(ids[i]&0xff)==(id&0xff);
+            if(kept || slot>=TOUCH_FINGERS)continue;
+            unsigned char *f=report+1+slot*6;
+            f[0]=2;f[1]=(unsigned char)(id&0xff);   // tip up, valid
+            f[2]=(unsigned char)self->prevX[j];f[3]=(unsigned char)(self->prevX[j]>>8);
+            f[4]=(unsigned char)self->prevY[j];f[5]=(unsigned char)(self->prevY[j]>>8);
+            ++slot;edge::native_touch_hid_multi[2]=edge::native_touch_hid_multi[2]+1;
+        }
+        for(unsigned j=0;j<TOUCH_FINGERS;++j) {
+            self->prevIds[j]=j<downCount?nextIds[j]:-1;
+            if(j<downCount){self->prevX[j]=nextX[j];self->prevY[j]=nextY[j];}
+        }
+        if(!slot)return;
+        report[1+TOUCH_FINGERS*6]=(unsigned char)slot;
+        IOBufferMemoryDescriptor *buffer=IOBufferMemoryDescriptor::withBytes(report,sizeof(report),kIODirectionNone);
+        IOReturn result=buffer?self->submitReport(buffer):kIOReturnNoMemory;
+        OSSafeReleaseNULL(buffer);
+        native_hid_input_observed(6,result);
+        native_touch_hid_reports=native_touch_hid_reports+1;
+    }

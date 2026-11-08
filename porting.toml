@@ -185,12 +185,12 @@ status = "implemented"
 components = ["ShengHidInput", "ShengNovatekTouch", "QcomGeniSpi"]
 paths = ["drivers/ShengHidInput", "drivers/ShengNovatekTouch", "package/*Touch*", "package/*Hid*", "package/*Button*", "scripts/*touch*", "scripts/*hid*"]
 inputs = ["Novatek NT36532 sensor, GENI SPI controller, pin configuration, reset/interrupt lines, firmware and touch coordinate geometry."]
-configuration = ["Select ShengHidInput, ShengNovatekTouch and QcomGeniSpi; sheng-touch=4 and sheng-touch-hid=1 select board integration."]
-procedure = ["Read TouchBoard.h and verify the SPI clock and mode against the controller setup.", "Validate protocol reports, contact tracking and coordinate orientation before publishing HID events."]
-findings = ["backboardd caches the event service's usage pair when it first sees the service, and drops every touch if that pair is not 0x0d/4. The DriverKit driver writes 1/6 and registers the service, so HidInputProbe checks every 2 ms until the service has been registered for 10 s.", "The shared SMMU fixture adds UART14 stream 0x423 beside touch without modifying its route and accepts a 64-bit DMA buffer address.", "The arm64e HID adapter uses the same fixed-target stub contract as the display adapter. Host verification checks all 51 IOHIDFamily stub destinations after fileset placement.", "Controller transfer logic, sensor protocol and board sensor geometry are separate inputs.", "Track contact IDs across movement and lift events; a register read alone covers only transport access.", "sheng_buttons_press() holds a button mask for a given time through the HID sink, for unattended tests (the audio lock sound test uses it).", "iPadOS 26 source-interface build: IOHIDDevice reports and independent touch/button, GENI SPI, Novatek and firmware archives compile. Four host model suites pass ASan/UBSan. The source path does not patch a foreign vtable.", "On arm64e the event driver's vtable is copied and every slot is re-signed with the 220 discriminators read from the 24A446 kernelcache; each slot is checked against the original table first, and AppleUserHIDEventService, this device's event driver, takes the copy as well. A search over 16-bit values can accept a second discriminator with the same 24-bit signature and stops touch events.", "With latency capture enabled, the HID input path records the time of each touch report handed to the event driver; these times bound the analysed touch windows. Contact IDs and coordinates are not recorded."]
-completion = ["Touches map to the display, simultaneous contacts keep stable IDs, release events arrive, and buttons produce expected HID reports."]
-limits = ["Sensor firmware and board dimensions remain sheng inputs.", "23F84 HID linking/startup and edge gestures remain unqualified. Apple IOHIDFamily 2238.120.5 omits event-type/struct headers and the complete device build needs private reporting/analytics dependencies."]
-next_action = ["Attach contact and orientation observations when firmware or geometry changes."]
+configuration = ["Select ShengHidInput, ShengNovatekTouch and QcomGeniSpi; sheng-touch=4 and sheng-touch-hid=1 select board integration.", "Typed/timed Novatek observer, board TouchEngine/TouchReportTimeline/TouchAstraProfile and timestamp/ACK HID producer are selected together.", "The numeric partial-observation profile is experimental reproduction input, not measured NT36532 calibration."]
+procedure = ["Read TouchBoard.h and verify the SPI clock and mode against the controller setup.", "Validate protocol reports, contact tracking and coordinate orientation before publishing HID events.", "Select matching ShengNovatekTouch and ShengHidInput revisions plus source transport compilation and the board late-archive consumer.", "Run the board touch host entry and record the effective module revisions for the coordinated native build."]
+findings = ["backboardd caches the event service's usage pair when it first sees the service, and drops every touch if that pair is not 0x0d/4. The DriverKit driver writes 1/6 and registers the service, so HidInputProbe checks every 2 ms until the service has been registered for 10 s.", "The shared SMMU fixture adds UART14 stream 0x423 beside touch without modifying its route and accepts a 64-bit DMA buffer address.", "The arm64e HID adapter uses the same fixed-target stub contract as the display adapter. Host verification checks all 51 IOHIDFamily stub destinations after fileset placement.", "Controller transfer logic, sensor protocol and board sensor geometry are separate inputs.", "Track contact IDs across movement and lift events; a register read alone covers only transport access.", "sheng_buttons_press() holds a button mask for a given time through the HID sink, for unattended tests (the audio lock sound test uses it).", "iPadOS 26 source-interface build: IOHIDDevice reports and independent touch/button, GENI SPI, Novatek and firmware archives compile. Four host model suites pass ASan/UBSan. The source path does not patch a foreign vtable.", "On arm64e the event driver's vtable is copied and every slot is re-signed with the 220 discriminators read from the 24A446 kernelcache; each slot is checked against the original table first, and AppleUserHIDEventService, this device's event driver, takes the copy as well. A search over 16-bit values can accept a second discriminator with the same 24-bit signature and stops touch events.", "With latency capture enabled, the HID input path records the time of each touch report handed to the event driver; these times bound the analysed touch windows. Contact IDs and coordinates are not recorded.", "P/stylus fields do not pass through full-M matrix decoding. Only actual current mutual samples provide full-local-region or qualified existing-contact partial observations.", "Contact generations and original receive times survive confirmation and ordered HID publication. Presence and missing coverage do not invent position renewal or a lift.", "The current shared SMMU lock, shared IRQ preference and HID digitizer guard are retained; the two new observer objects enter the actual late archive."]
+completion = ["Touches map to the display, simultaneous contacts keep stable IDs, release events arrive, and buttons produce expected HID reports.", "Record accurate taps, continuous drag and release with exact source/image identity; distinguish host models from device evidence."]
+limits = ["Sensor firmware and board dimensions remain sheng inputs.", "23F84 HID linking/startup and edge gestures remain unqualified. Apple IOHIDFamily 2238.120.5 omits event-type/struct headers and the complete device build needs private reporting/analytics dependencies.", "The successful V3.1 basic touch comparison was user-observed on one device. A later same-image boot self-restarted to Android for an unknown reason.", "The latest source integration passes local host/replay checks; shared SMMU/IRQ target behavior and a fresh native/device run are separate verification.", "No full pen, long-duration, multi-user or general Wi-Fi/system qualification is claimed."]
+next_action = ["Attach contact and orientation observations when firmware or geometry changes.", "Keep actual resulting component revision links when the coordinated changes are committed; no new PR commit is assigned by this draft.", "Record the next coordinated native kernel build and focused tap/drag/lift device observation without replacing historical evidence."]
 
 [[area.evidence]]
 kind = "source"
@@ -229,6 +229,29 @@ reference = "reports/ipados27-touch-frame-gaps.md"
 command = "fastboot boot sch2.img"
 revision = "8ec842f38c21ef1d73e12000fae16df7442e0c73"
 result = "Five fingers retained distinct IDs through a 250 ms pause. All 57 rapid typing contacts released. Both App Switcher gestures failed and rapid taps sometimes selected alternate characters."
+
+[[area.evidence]]
+kind = "source"
+reference = "package/TouchEngine.h"
+result = "Typed frame scheduling, actual-row observation and generation-bound partial updates; full source identities are in reports/touch-v3p1/LATEST-INTEGRATION.json."
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/touch-v3p1/HOST-SUMMARY.json"
+command = "python3 -B tools/run_touch_v3p1_host.py --unixnu-root ../UniXNU --out ../touch-v3p1-host-work --report-dir ../touch-v3p1-host-reports --legacy-author-core"
+result = "Latest 19-file source set: ten groups/122 checks pass under ASan/UBSan; separate HID 15 checks/9936 generated transitions, public protocol model, pure-C header and unchanged author fixture pass. Target SMMU/IRQ and native ABI are outside these host models."
+
+[[area.evidence]]
+kind = "source"
+reference = "https://github.com/ZTH-CCMT/unixnu-sheng-gpu-build/commit/22b9b6bc23ecbf7037e93f3b01100aa4a7c3f872"
+revision = "22b9b6bc23ecbf7037e93f3b01100aa4a7c3f872"
+result = "Historical successful V3.1 build source. Native build run 42335343954 and exact raw/sealed-kernel/boot hashes are recorded in reports/touch-v3p1/NATIVE-BUILD-SUMMARY.json. This revision is not a new upstream PR commit."
+
+[[area.evidence]]
+kind = "device"
+reference = "reports/touch-v3p1/DEVICE-SUMMARY.json"
+revision = "22b9b6bc23ecbf7037e93f3b01100aa4a7c3f872"
+result = "2026-11-07, original V3.1 boot SHA256 655f1a996ca34bfc066ad27d686dfa20a4f5cce76ee98e55d723340b2d8bedc8: user reported accurate Settings taps, continuous scrolling and slow dragging. A later same-image self-restart has unknown cause; final retry outcome not reported. No V3.1 raw sensor trace was captured in the successful comparison."
 
 [[area]]
 id = "gpu"

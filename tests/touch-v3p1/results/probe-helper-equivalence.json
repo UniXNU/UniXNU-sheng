@@ -1,0 +1,52 @@
+{
+  "schema": "unixnu.probe-helper-equivalence.v1",
+  "reference_source_sha256": "064e19b5a6cc59219a564353ee75298e6ef889d52abc9c2a01c6954e42623c15",
+  "integrated_source_sha256": "6adfe9dae0df1d6cf1b1ae55aee2730a72ded7af0340d081235a45dbeb195d69",
+  "declarations_equal": true,
+  "declaration_text_sha256": "8a79949562b82d5f5ba1489a7e43911aa8c68e3c2c0a344326204b7b56dee230",
+  "functions": [
+    {
+      "signature": "void trackStrokes(",
+      "equal": true,
+      "text_sha256": "e44f8b822f67a762f2d13d53b4d31c4d937a5e8bbe39db88cb1406eaa26425f8"
+    },
+    {
+      "signature": "bool publishAt(",
+      "equal": true,
+      "text_sha256": "fda996cf5677a8aa8b835d66cb5241f853a5dbf9d07615db7b5e5ae8aead7a50"
+    },
+    {
+      "signature": "static uint64_t touchUs(",
+      "equal": true,
+      "text_sha256": "e3817ca60e675f14d55a37cd0ea51da958432242be91014476114243bfa2cef9"
+    },
+    {
+      "signature": "static void aggressiveStats(",
+      "equal": true,
+      "text_sha256": "29183a8a668a08e50b35e469bb2590080690b62d0ea9b3df03ee282bbc0530b8"
+    },
+    {
+      "signature": "static bool sendTimeline(",
+      "equal": true,
+      "text_sha256": "70262effa0182a246e1119ce8f3b1e3f124746b23a069aa29c17feb2ab7067fc"
+    },
+    {
+      "signature": "static bool captureTimeline(",
+      "equal": true,
+      "text_sha256": "2807131feb8be6b582ff98901dd52e0156343fa07d23eecbf3db4a07fbabb10d"
+    },
+    {
+      "signature": "static unsigned inputWaitMs(",
+      "equal": true,
+      "text_sha256": "1e006029b51c7e9177623768e035aa424e75f27d5e8db47a3aafd6e268d641d1"
+    },
+    {
+      "signature": "static void expireTouchStream(",
+      "equal": true,
+      "text_sha256": "860ddeb175b2c394ea81e07dd4f4659494097e6fdc6f6d434d8a49aa5180627e"
+    }
+  ],
+  "actual_extracted_output_sha256": "eab242643e83aec8c271c0c42f0f1ce3e5575851ef36e92a8c97d2ac1b6ed4bf",
+  "status": "PASS_EXTRACTED_TEXT_EQUIVALENT",
+  "limit": "Author SPI/SMMU coordination outside the selected helpers is not dynamically exercised."
+}

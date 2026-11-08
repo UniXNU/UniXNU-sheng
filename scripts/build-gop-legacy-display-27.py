@@ -465,8 +465,49 @@ run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--global
      SRC / 'NativeHidInput.o', hid_late])
 hid_probe = ROOT / 'kits/sheng/HidInputProbe.cpp'
 compile_cpp(hid_probe, OUT / 'HidInputProbe.o')
-input_objects = [hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o'] + \
-    [SRC / (stem + '.o') for stem in ('TouchProbe', 'ButtonProbe', 'GeniSpi', 'NvtProtocol', 'NvtTouchCore', 'NvtFirmware')]
+def select_touch_transport(src, device):
+    report_path = src / 'report.json'
+    report = json.loads(report_path.read_text())
+    require(report.get('compile_pass') is True, 'Touch transport compilation did not pass')
+    component = report['components']['ShengInputTransport']
+    transport_archive = Path(component['archive'])
+    require(sha(transport_archive) == component['archive_sha256'], 'Touch transport archive changed after compile')
+    expected = {'TouchProbe', 'ButtonProbe', 'GeniSpi', 'NvtProtocol', 'NvtTouchCore',
+                'NvtPartialObservation', 'NvtCoverage', 'NvtFirmware'}
+    objects, evidence = [], {}
+    for item in component['objects']:
+        source, obj = Path(item['source']), Path(item['object'])
+        stem = source.stem
+        require(stem in expected and stem not in evidence, 'Unexpected/duplicate touch transport unit: ' + stem)
+        require(obj.resolve() == (src / (stem + '.o')).resolve(), 'Touch transport object path differs: ' + stem)
+        if stem in ('NvtPartialObservation', 'NvtCoverage'):
+            require(source.resolve() == (device / 'drivers/ShengNovatekTouch' / (stem + '.c')).resolve(),
+                    'Touch transport source path differs: ' + stem)
+        require(sha(source) == item['source_sha256'] and sha(obj) == item['object_sha256'],
+                'Touch transport source/object changed: ' + stem)
+        evidence[stem] = {key: item[key] for key in ('source', 'source_sha256', 'object', 'object_sha256')}
+        objects.append(obj)
+    require(set(evidence) == expected, 'Missing compiled touch transport units: ' + ', '.join(sorted(expected - set(evidence))))
+    return objects, {'source_report_sha256': sha(report_path),
+                     'transport_archive_sha256': sha(transport_archive), 'objects': evidence}
+
+
+def verify_touch_late_archive(archive, evidence):
+    members = run(['xcrun', 'ar', 't', archive], text=True).splitlines()
+    for stem in evidence['objects']:
+        require(members.count(stem + '.o') == 1, 'Late archive omits/duplicates touch object: ' + stem)
+    # nm inspects definitions from the archive that the final XNU link actually force-loads.
+    definitions = {name.removeprefix('_') for name in run(['xcrun', 'nm', '-j', '-gU', archive], text=True).splitlines()}
+    required = {'nvt_partial_reset', 'nvt_partial_configure', 'nvt_partial_bind_template',
+                'nvt_partial_seed', 'nvt_partial_measure', 'nvt_partial_math_evaluate', 'nvt_coverage_negative'}
+    require(required <= definitions, 'Late archive lacks touch definitions: ' + ', '.join(sorted(required - definitions)))
+    evidence.update(late_archive_sha256=sha(archive), late_archive_members=members,
+                    defined_symbols=sorted(required), status='COMPILED_OBJECTS_IN_ACTUAL_LATE_ARCHIVE')
+    return evidence
+
+
+touch_transport, touch_link_evidence = select_touch_transport(SRC, DEVICE)
+input_objects = [hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o'] + touch_transport
 print(f'HID: {len(hid_bindings)} original IOHIDDevice bindings, vtables {hid_vtables} match the original diversities')
 # The iPadOS 17 board drivers, unchanged: CPU frequency, WiFi, audio DSP (and the battery manager on it), speaker and microphone,
 # brightness, battery and panel timing. Their classes derive from xnu's own (IOService, IOUserClient, IOPMPowerSource), so the native
@@ -660,6 +701,8 @@ archive = OUT / 'libNativeLegacyDisplay.late.a'
 archive.unlink(missing_ok=True)
 run(['xcrun', 'ar', 'rcs', archive, late, OUT / 'original-bindings.o', OUT / 'original-addresses.o', OUT / 'LegacyDisplayProbe.o', OUT / 'LegacyDisplaySupport27.o', gop_late,
      OUT / 'KeyStoreProbe.o', keyevents_late, *input_objects])
+touch_link_evidence = verify_touch_late_archive(archive, touch_link_evidence)
+(OUT / 'touch-link-evidence.json').write_text(json.dumps(touch_link_evidence, indent=2) + '\n')
 sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'drivers/GopFramebuffer/NativeLegacyRequest.h',
            ROOT / 'drivers/GopFramebuffer/NativeGOPPresenter.cpp', ROOT / 'drivers/GopFramebuffer/NativeGOPWire.h',
            ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source,
@@ -684,7 +727,7 @@ def source_name(path):
 
 (OUT / 'build-report.json').write_text(json.dumps(dict(
     source_sha256={source_name(p): sha(p) for p in sources}, generated_abi_sha256=sha(OUT / 'OriginalLegacyFramebufferABI.h'),
-    kernelcache_sha256=abi['kernelcache_sha256'], compiled_object_sha256=sha(obj), archive_sha256=sha(archive),
+    kernelcache_sha256=abi['kernelcache_sha256'], compiled_object_sha256=sha(obj), archive_sha256=sha(archive), touch_source_link=touch_link_evidence,
     bindings={n: hex(v) for n, v in bindings.items()}, virtual_entries=len(slots), owned_entries=owned,
     inherited_native_entries=native, original_bindings='fixed-collection-addresses', original_instructions_modified=False), indent=2) + '\n')
 print(f'Built the owned Legacy backend on the iPadOS 27 class: {len(owned)} owned, {len(native)} native, {len(bindings)} original bindings')

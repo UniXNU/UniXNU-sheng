@@ -1,0 +1,9 @@
+NativeNovatekTouch
+
+The touch-processing constants, axis mapping tables and the overall frame layout in NvtTouchCore are taken from
+the study of xiaomi-sheng-thp (https://github.com/ianchb/xiaomi-sheng-thp, Apache License 2.0). This library is
+an independent, simplified C reimplementation of finger touch only (no stylus, palm classification or smoothing
+filter) and is distributed under the same license.
+
+The NT36xxx bus protocol facts (register framing, reset values, event-buffer layout) were derived from reading the
+Linux driver drivers/input/touchscreen/nt36532e (GPL-2.0-or-later, Novatek, Inc.). No code is copied from it.

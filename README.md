@@ -107,3 +107,9 @@ observations separately, with source revisions and commands.
 ## GPU frame diagnostics
 
 `sheng-gpu-trace=1 sheng-diag-export=240` exports the latency capture at 240 seconds of boot-log time. It does not schedule a reboot. The capture holds the render server's frame trace, GPU submission and display arrival, large GPU allocations, CPU occupancy, render thread waits, faults, shared-region unnests and the touch report times. `scripts/read-sheng-log.py` extracts the files and runs the decoders; the `*.touch.*` outputs keep only the touch windows. See [GPU frame diagnostics](https://unixnu.com/porting/gpu-diagnostics).
+
+## Typed touch processing
+
+The stage-4 touch path uses TouchEngine, TouchReportTimeline and an explicit TouchAstraProfile. It distinguishes ordinary matrices from special P frames, uses actual covered mutual samples, and preserves original observation times through contact confirmation and HID publication. The current shared SMMU lock, shared IRQ attachment and digitizer usage-pair guard remain in place.
+
+The corresponding ShengNovatekTouch and ShengHidInput changes and the UniXNU source compilation change must be selected together. The board late archive includes NvtPartialObservation.o and NvtCoverage.o in addition to the existing transport. No partition, firmware inventory, unrelated system feature or BootLog printer change is required by this touch integration. Update the input area of porting.toml with the matching source, host and device evidence.
