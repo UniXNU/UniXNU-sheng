@@ -160,7 +160,7 @@ result = "Source-interface compile audit with uncommitted workspace changes; sou
 kind = "device"
 reference = "package/SourceStorage.cpp"
 command = "boot with sheng-ufs-bench=1 and read the UFS log; ufsbench on the Linux reader over the same LBAs; three runs each"
-revision = "2e591444ee77995a10dfbffc952279698bd8b003"
+revision = "fd420df000f43213d9cd019725abff0849c98c72"
 result = "Every read test (4 KiB to 1 MiB, queue depth 1, 8 and 32, random and sequential) matches or exceeds the mainline Linux 7.2 ufshcd-qcom driver on the same tablet; worst ratio 1.013 (4 KiB at queue depth 8). 1000 zero-copy reads match the data-area path."
 
 [[area]]
