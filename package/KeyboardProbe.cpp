@@ -5,7 +5,8 @@
 // and tablet-mode hall sensors on GPIO 171 and 172 (active low, pull-up). One kernel thread brings it up in order:
 //   1  pins: reset and sleep held low, I2C function, inputs
 //   2  supplies through active TCS 2 of the apps RSC (shared with the microphone and USB rails, under AppsSmmuLock)
-//   3  QUP2 clocks (core, AHB, SE1) and the GENI I2C engine from the 19.2 MHz DFS level (sheng-keyboard-khz, default 100)
+//   3  QUP2 clocks (core, AHB, SE1) and the GENI I2C engine from the 19.2 MHz DFS level (sheng-keyboard-khz, default 1000: a frame read
+//      must not hold the bus long, or the controller merges touch frames)
 //   4  the engine interrupt (SPI 583) and the TLMM summary interrupt (SPI 208, shared) for GPIO 62, 171 and 172
 //   5  controller power-on: reset released, 20 ms, sleep released; boot ROM id 0xc8 in state 0
 //   6  the RAM image (the pinned MCU_Upgrade.bin): header, 99 data blocks, verify, boot
@@ -591,10 +592,10 @@ extern "C" void sheng_keyboard_probe(void) {
     bzero(kb, sizeof *kb);
     kb->busLock = IOSimpleLockAlloc();
     if (!kb->busLock) {IOFreeType(kb, Keyboard); fail(8, -12); return;}
-    unsigned khz = 100, backlight = 0;
+    unsigned khz = 1000, backlight = 0;
     PE_parse_boot_argn("sheng-keyboard-khz", &khz, sizeof khz);
     PE_parse_boot_argn("sheng-keyboard-backlight", &backlight, sizeof backlight);
-    kb->khz = khz == 400 || khz == 1000 ? khz : 100;
+    kb->khz = khz == 100 || khz == 400 ? khz : 1000;
     kb->backlight = static_cast<uint8_t>(backlight > WN8030_BACKLIGHT_MAX ? WN8030_BACKLIGHT_MAX : backlight);
     gKb = kb;
     thread_t thread = nullptr;
