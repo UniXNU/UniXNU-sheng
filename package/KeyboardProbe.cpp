@@ -53,10 +53,12 @@ extern "C" const uint32_t native_keyboard_firmware_size;
 // interrupts, [6] frames read, [7] keyboard | consumer << 8 | touchpad << 16 reports passed (low 8 bits each), [8] attached (1/0) |
 // attaches << 8 | HID devices that failed to start << 24, [9] lid closed | tablet mode << 1 | hall interrupts << 8, [10] input enabled,
 // [11] I2C failures, [12] engine interrupts, [13] last I2C error | its M_IRQ status << 8, [14] commands sent, [15] authentication
-// requests | other frames << 16
-extern "C" {volatile int32_t native_keyboard_stats[16];}
+// requests | other frames << 16, [16] touching palms sent as lifted
+extern "C" {volatile int32_t native_keyboard_stats[17];}
 // The cover's last accelerometer sample (x, y, z in 1/256 g, tablet axes) and the number of samples.
 extern "C" {volatile int32_t native_keyboard_accel[4];}
+// The range of the controller's own touchpad coordinates over every touching contact: X min, X max, Y min, Y max (-1 before the first).
+extern "C" {volatile int32_t native_keyboard_touch_range[4] = {-1, -1, -1, -1};}
 
 namespace {
 constexpr uint64_t kGcc = 0x00100000ULL, kTlmm = 0x0f100000ULL, kSe = 0x00884000ULL, kRsc = 0x17a20000ULL, kCmdDb = 0x81c60000ULL;
@@ -481,7 +483,21 @@ void handleFrame() {
     switch (wn8030_parse(kb->frame, &f)) {
     case Wn8030Keyboard: case Wn8030Consumer: case Wn8030Touchpad:
         if (kb->hid && kb->inputEnabled) {
-            sheng_keyboard_cover_input(kb->hid, f.report, f.length);
+            uint8_t touchpad[WN8030_TOUCHPAD_REPORT];
+            if (f.kind == Wn8030Touchpad) {
+                for (uint32_t i = 0; i < WN8030_TOUCHPAD_FINGERS; ++i) {
+                    const uint8_t *finger = f.report + 2 + 6 * i;
+                    if (!(finger[0] & 1u)) continue;
+                    const int32_t x = finger[2] | finger[3] << 8, y = finger[4] | finger[5] << 8;
+                    volatile int32_t *r = native_keyboard_touch_range;
+                    if (r[0] < 0 || x < r[0]) r[0] = x;
+                    if (x > r[1]) r[1] = x;
+                    if (r[2] < 0 || y < r[2]) r[2] = y;
+                    if (y > r[3]) r[3] = y;
+                }
+                bump(16, (int32_t)wn8030_touchpad_report(f.report, touchpad));
+            }
+            sheng_keyboard_cover_input(kb->hid, f.kind == Wn8030Touchpad ? touchpad : f.report, f.length);
             bump(7, f.kind == Wn8030Keyboard ? 1 : f.kind == Wn8030Consumer ? 0x100 : 0x10000);
         }
         break;

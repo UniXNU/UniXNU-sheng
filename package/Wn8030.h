@@ -46,6 +46,10 @@ enum {Wn8030RomIdle = 0, Wn8030RomHeader = 1, Wn8030RomVerified = 3};
 #define WN8030_KEYBOARD_REPORT 9u
 #define WN8030_CONSUMER_REPORT 3u
 #define WN8030_TOUCHPAD_REPORT 21u
+/* Touchpad report: buttons, three fingers of {flags (bit 0 tip, 1 in range, 2 confidence), contact id, X, Y (little-endian)}, count. */
+#define WN8030_TOUCHPAD_FINGERS 3u
+#define WN8030_TOUCHPAD_X_MAX 3047u
+#define WN8030_TOUCHPAD_Y_MAX 2031u
 #define WN8030_KEYBOARD_ID 0x05u
 #define WN8030_CONSUMER_ID 0x06u
 #define WN8030_TOUCHPAD_ID 0x19u
@@ -90,6 +94,11 @@ uint32_t wn8030_data_command(uint8_t out[1 + WN8030_DATA_COMMAND_BYTES], const u
 
 /* Classifies one frame read from register 0x4c. */
 int wn8030_parse(const uint8_t frame[WN8030_FRAME_BYTES], Wn8030Frame *out);
+
+/* The touchpad report as the host's device takes it: Y counted from the other edge (the controller's Y grows toward the hinge) and a
+ * touching contact without confidence (a palm) sent as lifted, since iPadOS's trackpad filter fails on a touching palm that is the last
+ * contact of a frame. Returns the number of contacts sent as lifted. */
+unsigned wn8030_touchpad_report(const uint8_t in[WN8030_TOUCHPAD_REPORT], uint8_t out[WN8030_TOUCHPAD_REPORT]);
 
 /* The reports that release every key, consumer usage and finger (input gated off). */
 void wn8030_release_reports(uint8_t keyboard[WN8030_KEYBOARD_REPORT], uint8_t consumer[WN8030_CONSUMER_REPORT],

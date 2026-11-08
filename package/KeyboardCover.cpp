@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // The sheng keyboard cover as one HID device: keyboard (report 5), consumer keys (report 6), keyboard power (report 7) and the
 // touchpad (report 0x19), compiled against the selected IOHIDFamily source interface. KeyboardProbe.cpp creates it when the cover
-// attaches, terminates it when the cover detaches and hands it the controller's input reports unchanged.
+// attaches, terminates it when the cover detaches and hands it the controller's input reports; only the touchpad report is rewritten
+// (Y from the other edge, palms lifted: wn8030_touchpad_report).
 //
 // One device with a Keyboard, a Touch Pad and Finger collections is what iPadOS's SmartCoverServiceFilter matches (all three usage
 // pairs on one service, a transport without "test"): it turns the touchpad's finger collections into pointer, scroll, scale, rotate
