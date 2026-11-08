@@ -398,6 +398,13 @@ next_action = ["Complete the pending device checks and tune packet processing, s
 
 [[area.evidence]]
 kind = "host"
+reference = "scripts/build-wifi-userspace.py"
+command = "python3 scripts/build-wifi-userspace.py OUT ios27"
+revision = "9938cf3015072035fc0e27eed76c6b474ff26846"
+result = "The signed supplicant links openlog and vsyslog, and the staged job runs it with -q -s and no StandardOutPath or StandardErrorPath. Ath12kWifi tools/test-supplicant.py passes with the syslog build."
+
+[[area.evidence]]
+kind = "host"
 reference = "reports/ipados27-wifi-mainline-migration.md"
 command = "python3 scripts/check-wifi-association.py"
 revision = "fa9af675a5c56e27e1aaf0693c77939a4641a3ef"
@@ -583,6 +590,13 @@ next_action = ["Add captured host or device evidence when repeating a checkpoint
 kind = "source"
 reference = "scripts/read-sheng-log.py"
 result = "Implementation and configuration described in this section"
+
+[[area.evidence]]
+kind = "host"
+reference = "scripts/check-boot-log-host.py"
+command = "python3 scripts/check-boot-log-host.py"
+revision = "2a7187d270fdb20244353e7b949e60fdb5cc960a"
+result = "151 rounds over 2254981 stream bytes write 635 message blocks; a quiet round writes none, a failed write is retried by the next round, a replaced kernel ring restarts the stream once, and read-sheng-log.py returns the newest 131072 bytes and every slot. The kernel arm64e command compiles BootLog.c."
 
 
 [[area.evidence]]
