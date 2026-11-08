@@ -52,10 +52,10 @@ if not match: raise SystemExit("signed supplicant has no CDHash")
 (out / "etc/wifi/wpa_supplicant.conf").write_text("# Networks arrive from the native Wi-Fi control channel.\nap_scan=1\n")
 job = {"Label": "org.unixnu.wifi.supplicant", "ProgramArguments": [
     "/usr/libexec/unixnu-wpa_supplicant", "-Dsheng", "-ien0",
-    "-c/private/var/ngpu/etc/wifi/wpa_supplicant.conf", "-q"],
+    "-c/private/var/ngpu/etc/wifi/wpa_supplicant.conf", "-q", "-s"],
     "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 3, "UserName": "root",
-    "Umask": 0o77, "ProcessType": "Interactive",
-    "StandardOutPath": "/var/log/unixnu-wifi.log", "StandardErrorPath": "/var/log/unixnu-wifi.log"}
+    "Umask": 0o77, "ProcessType": "Interactive"}
+# -s: warnings and errors go to syslog, so logd keeps them in its bounded store; no log file grows on Data.
 (out / "daemons/org.unixnu.wifi.supplicant.plist").write_bytes(plistlib.dumps(job))
 files = [path for name in ("bin", "etc/wifi", "daemons", "firmware") for path in sorted((out / name).rglob("*")) if path.is_file()]
 (out / "report.json").write_text(json.dumps({"built": True, "target": args.target,
