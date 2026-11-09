@@ -62,19 +62,25 @@ int findApid(uint32_t ppid) {
     }
     return found;
 }
-// Both edges of the given interrupt bits, latched state cleared, then enabled in the peripheral.
+// Both edges of the given interrupt bits, latched state cleared, then enabled in the peripheral. A command that ends with an error is
+// retried with the whole sequence: the peripheral answers NACK while its power state settles (kbd2: the PON reads failed this way once
+// at boot, kbd1 the same code succeeded). Returns 0, or (step << 2) | rc of the last failure, step 1..8 within the sequence.
 int armPeripheral(int apid, uint8_t bits) {
-    uint8_t type = 0, high = 0, low = 0;
-    int rc = br_read8(gObs.va, &gArb, apid, kSetType, &type);
-    if (!rc) rc = br_read8(gObs.va, &gArb, apid, kPolHigh, &high);
-    if (!rc) rc = br_read8(gObs.va, &gArb, apid, kPolLow, &low);
-    if (!rc) rc = br_write8(gChn.va, apid, kSetType, type | bits);
-    if (!rc) rc = br_write8(gChn.va, apid, kPolHigh, high | bits);
-    if (!rc) rc = br_write8(gChn.va, apid, kPolLow, low | bits);
-    if (!rc) rc = br_write8(gChn.va, apid, kLatchedClr, bits);
-    if (!rc) rc = br_write8(gChn.va, apid, kEnSet, bits);
-    if (!rc) *apidReg(apid, kAccEnable) = 1;
-    return rc;
+    for (unsigned attempt = 0; ; ++attempt) {
+        uint8_t type = 0, high = 0, low = 0;
+        int rc = br_read8(gObs.va, &gArb, apid, kSetType, &type);
+        unsigned step = 1;
+        if (!rc) {step = 2; rc = br_read8(gObs.va, &gArb, apid, kPolHigh, &high);}
+        if (!rc) {step = 3; rc = br_read8(gObs.va, &gArb, apid, kPolLow, &low);}
+        if (!rc) {step = 4; rc = br_write8(gChn.va, apid, kSetType, type | bits);}
+        if (!rc) {step = 5; rc = br_write8(gChn.va, apid, kPolHigh, high | bits);}
+        if (!rc) {step = 6; rc = br_write8(gChn.va, apid, kPolLow, low | bits);}
+        if (!rc) {step = 7; rc = br_write8(gChn.va, apid, kLatchedClr, bits);}
+        if (!rc) {step = 8; rc = br_write8(gChn.va, apid, kEnSet, bits);}
+        if (!rc) {*apidReg(apid, kAccEnable) = 1; return 0;}
+        if (attempt == 3) return (int)((step << 2) | (unsigned)rc);
+        IOSleep(25);
+    }
 }
 
 // Primary interrupt context: acknowledge in the arbiter and the peripheral, then wake the thread. An APID that is not ours but raised
@@ -145,7 +151,7 @@ bool setup() {
     if (gPon < 0) {fail(4, -2); return false;}
     int rc = armPeripheral(gPon, kPowerBit | kResinBit);
     if (!rc && gGpio >= 0) rc = armPeripheral(gGpio, kGpioBit);
-    if (rc) {fail(5, rc); return false;}
+    if (rc) {fail(5, rc); return false;}   // stats[8]: (step << 2) | rc, the peripheral's first failing command
     // PDC pin 1: level high, enabled.
     const uint32_t pdcVersion = gPdc.va[kPdcVersion / 4];
     native_buttons_stats[7] = (int32_t)pdcVersion;

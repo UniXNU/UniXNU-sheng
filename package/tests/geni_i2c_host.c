@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Host tests of the event-driven GENI I2C core (package/GeniI2c.c) against a model of the serial engine with one slave register file.
+// Host tests of the event-driven GENI I2C core (package/GeniI2c.c) against a model of the serial engine with one slave register file,
+// and of its buffered transfers against a FIFO of limited depth that drains between events.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,17 +18,52 @@ typedef struct {
     int present, mute, cancel_ack, abort_ack;
     uint8_t slave[256], pointer;
     uint32_t wide[16], wide_pointer;   /* a device at 0x40 with 32-bit big-endian registers and values */
-    uint8_t tx[8]; int tx_bytes;
+    uint8_t tx[1024]; int tx_bytes;
     unsigned accesses, commands, fifo_writes;
+    /* FIFO mode (writes over 8 bytes, reads over 4): words in the TX FIFO until the next status read drains them; the bytes a read
+     * returns, how many are queued in the RX FIFO, and the RX FIFO itself. */
+    uint32_t depth, tx_level, tx_peak;
+    uint8_t stream[1024]; uint32_t stream_len, stream_pos;
+    uint32_t rxq[64], rx_head, rx_level, rx_total, rx_sent;
+    unsigned watermarks, rx_events;
+    uint32_t short_read;             /* a read command that returns only this many bytes, then ends */
 } Engine;
+
+static void rx_refill(Engine *e)
+{
+    while (e->rx_level < e->depth && e->rx_sent < e->rx_total) {
+        uint32_t w = 0;
+        for (int k = 0; k < 4 && e->rx_sent < e->rx_total; ++k) w |= (uint32_t)e->stream[e->stream_pos++ % 1024] << (8 * k), ++e->rx_sent;
+        e->rxq[(e->rx_head + e->rx_level++) % 64] = w;
+    }
+    if (e->rx_level) {
+        if (e->rx_level >= e->reg[GENI_RX_WATERMARK / 4]) e->status |= GENI_M_RX_WATERMARK;
+        if (e->rx_sent == e->rx_total) e->status |= GENI_M_RX_LAST;
+        ++e->rx_events;
+    }
+    if (e->rx_sent == e->rx_total && e->active) {e->status |= GENI_M_CMD_DONE; e->active = 0;}
+}
 
 static uint32_t eng_read(void *ctx, uint32_t r)
 {
     Engine *e = ctx;
     e->accesses++;
-    if (r == GENI_M_IRQ_STATUS) return e->status;
-    if (r == GENI_RX_FIFO_STATUS) return e->rx_count;
-    if (r == GENI_RX_FIFO) {e->rx_count = 0; return e->rx;}
+    if (r == GENI_M_IRQ_STATUS) {
+        /* Between events the wire takes what the FIFO holds. */
+        if (e->active && e->op == GENI_OP_WRITE && e->length > 8 && e->tx_level) {
+            e->tx_level = 0;
+            if (e->tx_bytes == e->length) {e->tx_bytes = 0; e->active = 0; e->status |= GENI_M_CMD_DONE;}
+            else if (e->reg[GENI_TX_WATERMARK / 4]) {e->status |= GENI_M_TX_WATERMARK; ++e->watermarks;}
+        }
+        if (e->active && e->op == GENI_OP_READ && e->rx_total) rx_refill(e);
+        return e->status;
+    }
+    if (r == GENI_TX_FIFO_STATUS) return e->tx_level;
+    if (r == GENI_RX_FIFO_STATUS) return e->rx_total ? e->rx_level : e->rx_count;
+    if (r == GENI_RX_FIFO) {
+        if (e->rx_total) {CHECK(e->rx_level); const uint32_t w = e->rxq[e->rx_head++ % 64]; --e->rx_level; return w;}
+        e->rx_count = 0; return e->rx;
+    }
     CHECK(r < sizeof e->reg && !(r & 3));
     return e->reg[r / 4];
 }
@@ -46,9 +82,17 @@ static void eng_write(void *ctx, uint32_t r, uint32_t v)
             if (e->reg[GENI_TX_WATERMARK / 4] && !e->mute) e->status |= GENI_M_TX_WATERMARK;
         } else {
             const uint32_t n = e->reg[GENI_RX_LEN / 4];
-            CHECK(e->op == GENI_OP_READ && (n == 1 || (e->address == 0x40 && n == 4)));
+            CHECK(e->op == GENI_OP_READ && (n == 1 || n > 4 || (e->address == 0x40 && n == 4)));
             if (e->mute) return;
             if (!e->present) {e->status |= (1u << 10) | GENI_M_CMD_DONE; e->active = 0; return;}
+            if (n > 4) {
+                CHECK((e->reg[GENI_M_IRQ_EN / 4] & (GENI_M_RX_WATERMARK | GENI_M_RX_LAST)) == (GENI_M_RX_WATERMARK | GENI_M_RX_LAST));
+                CHECK(e->reg[GENI_RX_WATERMARK / 4] && e->reg[GENI_RX_WATERMARK / 4] < e->depth);
+                e->rx_total = e->short_read ? e->short_read : n; e->rx_sent = 0; e->rx_level = 0; e->rx_head = 0; e->stream_pos = e->pointer;
+                rx_refill(e);
+                return;
+            }
+            e->rx_total = 0;
             if (n == 4) {const uint32_t v = e->wide[e->wide_pointer % 16];
                 e->rx = (v >> 24) | ((v >> 8) & 0xff00) | ((v << 8) & 0xff0000) | (v << 24);}
             else e->rx = e->slave[e->pointer++];
@@ -63,7 +107,15 @@ static void eng_write(void *ctx, uint32_t r, uint32_t v)
     case GENI_TX_FIFO:
         e->fifo_writes++;
         CHECK(e->active && e->op == GENI_OP_WRITE);
-        for (int i = 0; i < 4 && e->tx_bytes < e->length; ++i) e->tx[e->tx_bytes++] = (uint8_t)(v >> (8 * i));
+        for (int i = 0; i < 4 && e->tx_bytes < e->length; ++i) e->tx[e->tx_bytes++ % 1024] = (uint8_t)(v >> (8 * i));
+        if (e->length > 8) {
+            /* FIFO mode: the words wait in the FIFO, which must never overflow. */
+            ++e->tx_level;
+            CHECK(e->tx_level <= e->depth);
+            if (e->tx_level > e->tx_peak) e->tx_peak = e->tx_level;
+            if (e->tx_bytes == e->length) e->pointer = e->tx[0];
+            return;
+        }
         if (e->tx_bytes < e->length) return;
         e->tx_bytes = 0;
         e->active = 0;
@@ -96,6 +148,8 @@ static void boot_state(Engine *e)
     e->reg[GENI_CLK_CFG / 4] = 0x00000041;   /* divider 4, enabled */
     e->reg[GENI_SCL_COUNTERS / 4] = 0x00b31e2a;
     e->reg[GENI_DMA_MODE / 4] = 1;
+    e->reg[GENI_HW_PARAM_0 / 4] = 16u << 16; e->reg[GENI_HW_PARAM_1 / 4] = 16u << 16;
+    e->depth = 16;
     e->present = 1; e->cancel_ack = 1; e->abort_ack = 1;
 }
 /* Polls until the transfer ends; returns its result and the number of polls in *n. */
@@ -213,6 +267,62 @@ int main(void)
     CHECK(geni_i2c_start_write_bytes(&w, put, 8) == 0 && e.length == 8 && run(&w, NULL) == GeniDone && e.wide[12] == 0x12345678);
     CHECK(geni_i2c_start_read_bytes(&w, at, 4, 4) == 0 && e.hold && e.length == 4 && run(&w, NULL) == GeniDone);
     CHECK(w.rx == 0x78563412u && w.data == 0x12);   /* first byte (the most significant) in bits 7:0 */
+
+    /* Buffered writes: a 67-byte command and a 513-byte block through a 16-word FIFO, never more than the free words per event. */
+    GeniI2c b;
+    CHECK(geni_i2c_prepare(&b, &io, 0x4c, NULL) == 0 && b.tx_fifo_words == 16 && b.rx_fifo_words == 16);
+    static uint8_t big[513], frame[68];
+    for (unsigned i = 0; i < sizeof big; ++i) big[i] = (uint8_t)(i * 7 + 3);
+    big[0] = 0x5c;
+    for (unsigned size = 9; size <= sizeof big; size = size == 9 ? 67 : size == 67 ? 64 : size == 64 ? 65 : size == 65 ? 513 : 1000) {
+        e.tx_peak = 0; e.watermarks = 0; memset(e.tx, 0, sizeof e.tx);
+        CHECK(geni_i2c_start_write_buffer(&b, big, size) == 0 && e.length == (int)size && !e.hold);
+        CHECK(geni_i2c_start_write_buffer(&b, big, size) == -1);
+        unsigned polls = 0;
+        int r = GeniPending;
+        while (r == GeniPending && polls < 400) {r = geni_i2c_poll(&b); ++polls;}
+        CHECK(r == GeniDone && memcmp(e.tx, big, size) == 0 && e.tx_peak <= 16 && !geni_i2c_busy(&b));
+        CHECK(e.reg[GENI_TX_WATERMARK / 4] == 0 && b.tx_buffer == NULL);
+        if (size > 64) CHECK(e.watermarks >= (size - 1) / 64);
+    }
+    /* A watermark event while the FIFO is still full writes nothing. */
+    CHECK(geni_i2c_start_write_buffer(&b, big, 513) == 0 && geni_i2c_poll(&b) == GeniPending && e.tx_level == 16);
+    const unsigned writes = e.fifo_writes;
+    CHECK(geni_i2c_event(&b, GENI_M_TX_WATERMARK) == GeniPending && e.fifo_writes == writes);
+    { int r = GeniPending; for (unsigned i = 0; r == GeniPending && i < 400; ++i) r = geni_i2c_poll(&b);
+      CHECK(r == GeniDone && memcmp(e.tx, big, 513) == 0); }
+    /* Done before all words went in is a protocol error. */
+    CHECK(geni_i2c_start_write_buffer(&b, big, 513) == 0);
+    e.status = 0; e.active = 0; e.tx_level = 0;
+    CHECK(geni_i2c_event(&b, GENI_M_CMD_DONE) == GeniFailed && b.error == GeniErrState && b.tx_buffer == NULL);
+    e.tx_bytes = 0;
+
+    /* Buffered reads: register 0x4c held, then 68 bytes over several RX watermark events; the done event drains the rest. */
+    for (unsigned i = 0; i < sizeof e.stream; ++i) e.stream[i] = (uint8_t)(i ^ 0xa5);
+    for (unsigned size = 5; size <= 68; size = size == 5 ? 64 : size == 64 ? 67 : size == 67 ? 68 : 100) {
+        const uint8_t command = 0x4c;
+        memset(frame, 0, sizeof frame);
+        CHECK(geni_i2c_start_read_buffer(&b, &command, 1, frame, size) == 0 && e.hold && e.length == 1);
+        int r = GeniPending;
+        for (unsigned i = 0; r == GeniPending && i < 64; ++i) r = geni_i2c_poll(&b);
+        CHECK(r == GeniDone && b.rx_done == size && e.rx_level == 0);
+        for (unsigned i = 0; i < size; ++i) CHECK(frame[i] == (uint8_t)((0x4c + i) ^ 0xa5));
+        CHECK(e.reg[GENI_M_IRQ_EN / 4] == GENI_M_IRQ_WANTED && b.rx_buffer == NULL);
+    }
+    CHECK(geni_i2c_start_read_buffer(&b, big, 9, frame, 68) == -1 && geni_i2c_start_read_buffer(&b, big, 1, frame, 0) == -1);
+    /* A read that ends short fails and leaves no words for the next transfer. */
+    {
+        const uint8_t command = 0x4c;
+        e.short_read = 40;   /* the engine stops after 40 bytes */
+        CHECK(geni_i2c_start_read_buffer(&b, &command, 1, frame, 68) == 0);
+        int r = GeniPending;
+        for (unsigned i = 0; r == GeniPending && i < 64; ++i) r = geni_i2c_poll(&b);
+        CHECK(r == GeniFailed && b.error == GeniErrNoData && e.rx_level == 0 && e.reg[GENI_M_IRQ_EN / 4] == GENI_M_IRQ_WANTED);
+    }
+    /* The register transfers still work after buffered ones. */
+    e.rx_total = 0; e.short_read = 0;
+    CHECK(geni_i2c_start_write(&b, 0x5c, 0x04) == 0 && run(&b, NULL) == GeniDone && e.slave[0x5c] == 0x04);
+    CHECK(geni_i2c_start_read(&b, 0x5c) == 0 && run(&b, NULL) == GeniDone && b.data == 0x04);
     printf("PASS GENI I2C: %u checks\n", checks);
     return 0;
 }

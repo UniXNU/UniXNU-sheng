@@ -416,38 +416,59 @@ def object_vtable(data, found, name, count):
     return [entries.get(va + 16 + i * 8) for i in range(count)]
 
 
-hid_raw = (SRC / 'NativeHidInput.o').read_bytes()
-hid_found = object_symbols(hid_raw)
+# The keyboard cover's HID device (KeyboardCover.cpp) with the command NativeHidInput was compiled with: the same public IOHIDFamily
+# headers, so its IOHIDDevice virtuals sign with the original discriminators and bind to the same original entries.
+KEYBOARD_DIR = OUT / 'keyboard'
+KEYBOARD_DIR.mkdir(exist_ok=True)
+hid_command = json.loads((SRC / 'NativeHidInput.command.json').read_text())
+hid_source = next(a for a in hid_command if a.endswith('NativeHidInput.cpp'))
+keyboard_command, i = [], 0
+while i < len(hid_command):
+    value = hid_command[i]
+    if value == hid_source:
+        keyboard_command.append(str(ROOT / 'kits/sheng/KeyboardCover.cpp'))
+    elif value in ('-o', '-MF'):
+        keyboard_command += [value, str(KEYBOARD_DIR / ('KeyboardCover.o' if value == '-o' else 'KeyboardCover.d'))]
+        i += 1
+    elif value != '-DNATIVE_HID_SOURCE_API=1':
+        keyboard_command.append(value)
+    i += 1
+run(keyboard_command, cwd=r['directory'])
 hid_bindings = {n: int(v, 16) + slide for n, v in hid_abi['bindings'].items()}
 by_diversity = {}
 for i, (_, d) in enumerate(hid_slots):
     by_diversity.setdefault(d, []).append(i)
-hid_vtables = [n for n, _, k in hid_found if n.startswith('__ZTV') and k != 1 and '9MetaClassE' not in n]
-# An original method in an owned vtable is bound to the original entry of that slot (a base-class override signs with the
-# discriminator of the introducing IOService declaration, so its own name does not identify the slot); any other import by
-# the slot whose discriminator its name has.
+hid_vtables = []
 slot_of = {}
-for vt_name in hid_vtables:
-    for i, entry in enumerate(object_vtable(hid_raw, hid_found, vt_name, len(hid_slots))):
-        if entry and '11IOHIDDevice' in entry[0]:
-            require(slot_of.setdefault(entry[0], i) == i, f'{entry[0]}: one slot in every owned vtable')
-for name in sorted({n for n, _, k in hid_found if k == 1 and ('11IOHIDDevice' in n)} - set(hid_bindings)):
-    if name in slot_of:
-        slot = slot_of[name]
-    else:
-        matches = by_diversity.get(discriminator(name[1:]), [])
-        require(len(matches) == 1, f'{name}: one original IOHIDDevice slot with its discriminator')
-        slot = matches[0]
-    require(slot not in hid_pure, f'{name}: not an abstract original slot')
-    hid_bindings[name] = hid_slots[slot][0] + slide
-for vt_name in hid_vtables:
-    entries = object_vtable(hid_raw, hid_found, vt_name, len(hid_slots))
-    require(all(entries), f'{vt_name}: at least the {len(hid_slots)} IOHIDDevice entries')
-    for i, (name, word) in enumerate(entries):
-        require(word >> 63 and word >> 48 & 1 and word >> 49 & 3 == 0 and (word >> 32) & 0xffff == hid_slots[i][1],
-                f'{vt_name} slot {i} ({name}) signed with the original diversity {hid_slots[i][1]:#x}')
-        if '11IOHIDDevice' in name:
-            require(hid_bindings.get(name) == hid_slots[i][0] + slide, f'{vt_name} slot {i} ({name}) is the original entry')
+for hid_object in (SRC / 'NativeHidInput.o', KEYBOARD_DIR / 'KeyboardCover.o'):
+    hid_raw = hid_object.read_bytes()
+    hid_found = object_symbols(hid_raw)
+    vtables = [n for n, _, k in hid_found if n.startswith('__ZTV') and k != 1 and '9MetaClassE' not in n]
+    # An original method in an owned vtable is bound to the original entry of that slot (a base-class override signs with the
+    # discriminator of the introducing IOService declaration, so its own name does not identify the slot); any other import by
+    # the slot whose discriminator its name has.
+    for vt_name in vtables:
+        for i, entry in enumerate(object_vtable(hid_raw, hid_found, vt_name, len(hid_slots))):
+            if entry and '11IOHIDDevice' in entry[0]:
+                require(slot_of.setdefault(entry[0], i) == i, f'{entry[0]}: one slot in every owned vtable')
+    for name in sorted({n for n, _, k in hid_found if k == 1 and ('11IOHIDDevice' in n)} - set(hid_bindings)):
+        if name in slot_of:
+            slot = slot_of[name]
+        else:
+            matches = by_diversity.get(discriminator(name[1:]), [])
+            require(len(matches) == 1, f'{name}: one original IOHIDDevice slot with its discriminator')
+            slot = matches[0]
+        require(slot not in hid_pure, f'{name}: not an abstract original slot')
+        hid_bindings[name] = hid_slots[slot][0] + slide
+    for vt_name in vtables:
+        entries = object_vtable(hid_raw, hid_found, vt_name, len(hid_slots))
+        require(all(entries), f'{vt_name}: at least the {len(hid_slots)} IOHIDDevice entries')
+        for i, (name, word) in enumerate(entries):
+            require(word >> 63 and word >> 48 & 1 and word >> 49 & 3 == 0 and (word >> 32) & 0xffff == hid_slots[i][1],
+                    f'{vt_name} slot {i} ({name}) signed with the original diversity {hid_slots[i][1]:#x}')
+            if '11IOHIDDevice' in name:
+                require(hid_bindings.get(name) == hid_slots[i][0] + slide, f'{vt_name} slot {i} ({name}) is the original entry')
+    hid_vtables += vtables
 HID_DATA = {'__ZN11IOHIDDevice10gMetaClassE', '__ZTV11IOHIDDevice'}
 hid_text, hid_addresses = '.text\n.p2align 2\n', ''
 for name, va in sorted(hid_bindings.items()):
@@ -463,6 +484,10 @@ for stem in ('hid-bindings', 'hid-addresses'):
 hid_late = OUT / 'NativeHidInput.late.o'
 run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_NativeHidInput.cpp',
      SRC / 'NativeHidInput.o', hid_late])
+# The keyboard probe registers the class once IOHIDFamily is loaded, as HidInputProbe does for NativeHidInput.
+keyboard_late = KEYBOARD_DIR / 'KeyboardCover.late.o'
+run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_KeyboardCover.cpp',
+     KEYBOARD_DIR / 'KeyboardCover.o', keyboard_late])
 hid_probe = ROOT / 'kits/sheng/HidInputProbe.cpp'
 compile_cpp(hid_probe, OUT / 'HidInputProbe.o')
 def select_touch_transport(src, device):
@@ -507,7 +532,7 @@ def verify_touch_late_archive(archive, evidence):
 
 
 touch_transport, touch_link_evidence = select_touch_transport(SRC, DEVICE)
-input_objects = [hid_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o'] + touch_transport
+input_objects = [hid_late, keyboard_late, OUT / 'hid-bindings.o', OUT / 'hid-addresses.o', OUT / 'HidInputProbe.o'] + touch_transport
 print(f'HID: {len(hid_bindings)} original IOHIDDevice bindings, vtables {hid_vtables} match the original diversities')
 # The iPadOS 17 board drivers, unchanged: CPU frequency, WiFi, audio DSP (and the battery manager on it), speaker and microphone,
 # brightness, battery and panel timing. Their classes derive from xnu's own (IOService, IOUserClient, IOPMPowerSource), so the native
@@ -525,7 +550,7 @@ board_objects = []
 for stem, extra in [('CpuFreqProbe', ()), ('WifiProbe', ('-I', str(WIFI / 'include'))),
                     ('BluetoothProbe', ('-I', str(BLUETOOTH / 'include'), '-I', str(ROOT / 'kits/Sm8550Platform'))),
                     ('AdspProbe', ()), ('AudioProbe', ()),
-                    ('BacklightProbe', ()), ('DisplayTimingProbe', ()), ('BatteryProbe', ()),
+                    ('BacklightProbe', ()), ('DisplayTimingProbe', ()), ('BatteryProbe', ()), ('KeyboardProbe', ()),
                     # GPU power, GMU and the Metal accelerator publication (sheng-gpu-power, sheng-gpu-metal), as on iPadOS 17.
                     ('GpuPowerProbe', tuple(x for d in ('drivers/Adreno740', 'kits/ArmSmmu4K', 'kits/AdrenoFirmware', 'kits/AdrenoPM4',
                                                         'kits/Sm8550Platform') for x in ('-I', str(ROOT / d))))]:
@@ -537,9 +562,23 @@ for stem, extra in [('WifiNet', ('-I', str(WIFI / 'include'))), ('AppleARMBackli
          board_dir / (stem + '.o'), board_dir / (stem + '.late.o')])
     board_objects.append(board_dir / (stem + '.late.o'))
 for stem in ('QcomMdt', 'FatVolume', 'QcomQrtr', 'ShengQrtr', 'QcomSmem', 'QcomSmp2p', 'QcomGlink', 'QcomQmp', 'QcomRpmh', 'ShengBattmgr',
-             'ShengGpr', 'ShengAudioReach', 'ShengCs35l43', 'MhiBoot', 'GeniI2c'):
+             'ShengGpr', 'ShengAudioReach', 'ShengCs35l43', 'MhiBoot', 'GeniI2c', 'Wn8030'):
     compile_c(KITS / (stem + '.c'), board_dir / (stem + '.o'))
     board_objects.append(board_dir / (stem + '.o'))
+# The keyboard controller's RAM image, the pinned file of proprietary-files.txt (scripts/extract-files.py --section Keyboard), as data.
+keyboard_firmware = next((path for path in (DEVICE / '.cache/firmware/nanosic/MCU_Upgrade.bin', ROOT / '.cache/firmware/nanosic/MCU_Upgrade.bin')
+                          if path.is_file()), None)
+require(keyboard_firmware, 'nanosic/MCU_Upgrade.bin: run scripts/extract-files.py --section Keyboard in the device repository')
+keyboard_pin = next(line.split('|', 1)[1].strip() for line in (DEVICE / 'proprietary-files.txt').read_text().splitlines()
+                    if line.lstrip('-').startswith('nanosic/MCU_Upgrade.bin|'))
+keyboard_bytes = keyboard_firmware.read_bytes()
+require(hashlib.sha256(keyboard_bytes).hexdigest() == keyboard_pin, f'{keyboard_firmware}: not the pinned image')
+(board_dir / 'Wn8030Firmware.c').write_text('/* Generated vendor firmware; build output only. */\n#include <stdint.h>\n'
+                                            f'const uint32_t native_keyboard_firmware_size = {len(keyboard_bytes)};\n'
+                                            f'const uint8_t native_keyboard_firmware[{len(keyboard_bytes)}] = {{' +
+                                            ','.join(str(b) for b in keyboard_bytes) + '};\n')
+compile_c(board_dir / 'Wn8030Firmware.c', board_dir / 'Wn8030Firmware.o')
+board_objects.append(board_dir / 'Wn8030Firmware.o')
 # The audio DSP's firmware file reader goes through the VFS: BSD flags.
 compile_c(KITS / 'AdspFirmware.c', board_dir / 'AdspFirmware.o', 'bsd/DEVELOPMENT/kern_exec.o.json')
 board_objects.append(board_dir / 'AdspFirmware.o')
@@ -715,6 +754,8 @@ for directory in ('include', 'src', 'shim', 'out/linux'):
     sources += sorted((BLUETOOTH / directory).rglob('*.h'))
 sources += [ROOT / 'kits/Sm8550Platform' / name for name in ('Sm8550GeniUart.h', 'Sm8550QupDma.h')]
 sources += [KITS / name for name in ('SmmuBypass.h', 'AppsSmmuLock.h', 'UsbProbe.cpp')]
+sources += [KITS / name for name in ('KeyboardCover.cpp', 'KeyboardProbe.cpp', 'Wn8030.c', 'Wn8030.h', 'GeniI2c.c', 'GeniI2c.h')]
+sources += [keyboard_firmware]
 sources += [USB / 'QcomDwc3.cpp', USB / 'QcomEusb2Phy.h', USB / 'QcomQmpUsb3.h', USB / 'QcomUcsi.h', ROOT / 'scripts/usb-xdci-24A446.json', ROOT / 'scripts/usb-xhci-24A446.json']
 
 

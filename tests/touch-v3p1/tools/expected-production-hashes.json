@@ -17,5 +17,5 @@
   "device/package/TouchProbe.cpp": "6adfe9dae0df1d6cf1b1ae55aee2730a72ded7af0340d081235a45dbeb195d69",
   "device/package/TouchReportTimeline.h": "4a654d48aef1930f270b32c16b75d60c8ac2a82d10f9619863e4f8fde128d95d",
   "UniXNU/scripts/build-sheng-source-drivers.py": "8f140d9817c0945a9e15b484de7f9daeda17518b9709975a7c025b19793bcf22",
-  "device/scripts/build-gop-legacy-display-27.py": "377ac6beb1b8684e792fb116f96bbbfe7ff11ec43046b42df9e5f5aa34598cb0"
+  "device/scripts/build-gop-legacy-display-27.py": "6e1d00e2705591e4864ef2d304e5677230126ea415585ba799ce0772e404774a"
 }

@@ -1,0 +1,78 @@
+{
+  "schema": "unixnu.touch-upstream-sync-evidence.v1",
+  "date": "2026-11-09",
+  "scope": "Merge current board upstream into the existing touch contribution; no touch algorithm redesign.",
+  "parents": {
+    "existing_contribution": "0f07590bdeb0372dd377b587f22feb27dc530467",
+    "upstream_board": "a68ee4ee67cc71792fbf519de7e3e28072c717b5"
+  },
+  "paired_components": {
+    "ShengNovatekTouch": "fc4e2f4c29f433e15cc0accca8e5b3ca8bc1feaf",
+    "ShengHidInput": "455f636fe44a120bbf208685722cd938e29f2dca",
+    "UniXNU": "463d7020c158e425911236bb45c3647c6091f69e"
+  },
+  "resolutions": {
+    "scripts/build-gop-legacy-display-27.py": "Retain upstream keyboard compilation, bindings, late object, firmware and receipts alongside the unchanged typed-touch archive selection and verification.",
+    "porting.toml": "Retain all current upstream areas and evidence, add the ButtonProbe retry finding to the extended touch input record."
+  },
+  "upstream_only_paths_preserved": 26,
+  "runtime_and_fixture_source_bytes_unchanged": true,
+  "production_binding": {
+    "total": 19,
+    "unchanged_prior_hashes": 18,
+    "changed_only": "device/scripts/build-gop-legacy-display-27.py",
+    "hashes": {
+      "device/drivers/ShengHidInput/NativeHidInput.cpp": "0bd4448b846bde02f9f17c3c4f9a62cef1505c782a4f67cf9779cf36478e0cec",
+      "device/drivers/ShengHidInput/NativeHidTouchPlan.h": "b11592c16e451d7e37c7e3cb8505503e2737659a3c27648a64ec1016f8b2fd07",
+      "device/drivers/ShengNovatekTouch/NvtCoverage.c": "90fc8983092cec95dfd38f8846f164de0070e061881344743d2d4cce918884f2",
+      "device/drivers/ShengNovatekTouch/NvtCoverage.h": "2248985f573d2220b47cc70d744227b4a1e20778bce8eb323441279d17bd7529",
+      "device/drivers/ShengNovatekTouch/NvtPartialMathInline.h": "5570490c39f124dcd447ed65e559c57f4a685b211b461612d796371ca178db76",
+      "device/drivers/ShengNovatekTouch/NvtPartialObservation.c": "7f7ea44e52ee01b902d3a417c7fd8290cb56d8954c7f125ac8438b7024406e04",
+      "device/drivers/ShengNovatekTouch/NvtPartialObservation.h": "34bb1a2fe26130dd1efd71ac2727b26d53d6a90d2754f359576b7d811667eed6",
+      "device/drivers/ShengNovatekTouch/NvtProtocol.c": "e36aca444f6fe955325a6a0c43383c209ffd538a2ee1b98042e3ae9a6b0ff6b0",
+      "device/drivers/ShengNovatekTouch/NvtProtocol.h": "49a2d6b1d021968825685c1f3e0b76dd366e020d53c815cb8b164e6043729553",
+      "device/drivers/ShengNovatekTouch/NvtShapeMetricsInline.h": "9b6d755a41819e1f1666a21da183b8e8ed4da9a0f075ca9315caf6f187524ed7",
+      "device/drivers/ShengNovatekTouch/NvtTouchCore.c": "a067b9ef18fa9f312732fcfc89890230293f595cb03d09a360b1c1e019f0391b",
+      "device/drivers/ShengNovatekTouch/NvtTouchCore.h": "81a58af8dd0beb99029130842597a27a57269a1bae0a86b5c249b02dd0b05a1e",
+      "device/drivers/ShengNovatekTouch/Test/nvt-protocol.c": "fa515bb6008f7909c0ca118fdef0f87d3032fa2c02dc8552852ada9101d8c80a",
+      "device/package/TouchAstraProfile.h": "629a0ac74419565b06519c14722082b464280b3036e87d24b790507501744b8f",
+      "device/package/TouchEngine.h": "4003ba3fd5cdd8e76b6ebf4263c0e9c86607ad49aa581b57f7278f715495b937",
+      "device/package/TouchProbe.cpp": "6adfe9dae0df1d6cf1b1ae55aee2730a72ded7af0340d081235a45dbeb195d69",
+      "device/package/TouchReportTimeline.h": "4a654d48aef1930f270b32c16b75d60c8ac2a82d10f9619863e4f8fde128d95d",
+      "UniXNU/scripts/build-sheng-source-drivers.py": "8f140d9817c0945a9e15b484de7f9daeda17518b9709975a7c025b19793bcf22",
+      "device/scripts/build-gop-legacy-display-27.py": "6e1d00e2705591e4864ef2d304e5677230126ea415585ba799ce0772e404774a"
+    }
+  },
+  "host_results": "tests/touch-v3p1/results/upstream-sync-20261109/host-results.json",
+  "host_results_sha256": "d0ff795852a83ef3908c932553fb597a5fa2a325ea996a1299dc8a770e8ad74c",
+  "host_executed_utc": "2026-11-09T01:16:25.515455+00:00",
+  "checks": {
+    "astra_groups": 10,
+    "astra_named_checks": 122,
+    "hid_named_checks": 15,
+    "hid_generated_transitions": 9936,
+    "public_protocol_model": "PASS_SYNTHETIC_MODEL_ONLY",
+    "pure_C_HID_header": "PASS",
+    "legacy_author_fixture": "PASS_HOST_AUTHOR_FIXTURE",
+    "legacy_compile_returncode": 0,
+    "legacy_run_returncode": 0,
+    "command_count": 34,
+    "stderr_files_inspected": 34,
+    "nonempty_stderr_files": 0,
+    "sanitizer_findings": 0
+  },
+  "runner_sha256": "2e02d41cfee6e9c6d523f8b27f24cdabe75e242ff942c1f3f7715a2fb2963d08",
+  "static_checks": {
+    "python_syntax": "PASS",
+    "existing_touch_link_function_AST_unchanged": true,
+    "input_objects_contains_both_keyboard_and_typed_touch_transport": true,
+    "native_build_performed": false
+  },
+  "historical_evidence": "LATEST-INTEGRATION.json, HOST-SUMMARY.json and the original results/host-results.json retain their 2026-11-08 identities; they are not substituted for this run.",
+  "limits": [
+    "Host/synthetic checks do not perform a native kernel build or test physical SPI, SMMU/IRQ, hardware input delivery or boot stability.",
+    "This sync has no new native build or device run."
+  ],
+  "native_build_performed": false,
+  "device_run_performed": false
+}

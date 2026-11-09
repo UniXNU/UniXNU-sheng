@@ -76,3 +76,7 @@ in --out; reports normalize repository and work paths.
 
 See [LICENSING.md](LICENSING.md). Existing file-level notices and imported-code
 licenses take priority.
+
+## Upstream merge, 2026-11-09
+
+The expected nineteen-file profile now includes the merged late builder with the author keyboard input retained. The other eighteen hashes and all thirteen fixtures are unchanged. [The new host report](results/upstream-sync-20261109/host-results.json) records this execution; the original results/host-results.json remains the November 8 evidence. [The sync record](../../reports/touch-v3p1/UPSTREAM-SYNC-20261109.json) identifies the merge parents, paired revisions and static checks. Neither host execution is a new native or device test.
