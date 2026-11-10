@@ -1,10 +1,9 @@
-A two-cluster Edge matrix that this scheduler accepts and whose steal rule works.
+A two-cluster Edge matrix that this scheduler accepts and whose steal rule works, and counters for what each cluster type
+waits for while a core of the other type idles.
 
 The matrix is built when the CPU driver calls ml_cpu_init_completed (ArmCpu, boot argument armcpu-edge=1). Without the
 call every edge stays closed: no thread moves between the E cluster (three A510 cores) and the P cluster, in either
-direction. The macOS boot arguments do not carry the argument. In runs 56 to 61 the busiest E core was at 90 % or more
-in 13 to 28 % of the 10 s rows, and in run 61 the busiest core of cpu3 to cpu6 was at 60 % or less in 10 of those 12
-rows ([cpu gov]).
+direction.
 
 The matrix the board patch builds does not do what it says on this kernel:
 - P -> E is closed for the fixed priority, foreground and user-initiated buckets and open for default and lower. The
@@ -15,21 +14,25 @@ The matrix the board patch builds does not do what it says on this kernel:
   threads only when the fixed priority bucket of that edge may migrate (scr_incoming_migration_allowed,
   sched_edge_pset_peek_steal_possible), so a P core never takes them.
 
-Here P -> E is closed for every bucket, so a thread that prefers P runs on P as it does today. E -> P allows stealing
-for every bucket with the weight of a weighted spill (a steal then needs more runnable threads than E cores) and
-migration for the fixed priority bucket alone, which opens the steal search and moves nothing: no thread group prefers
-E for that bucket.
+Here P -> E is closed for every bucket, so a thread that prefers P runs on P. Opening it for the utility and background
+buckets alone would fail the same check and would move no thread: those buckets prefer the E cluster
+(sched_edge_default_preferred_pset, and nothing changes a thread group's preference without a performance controller),
+placement starts at the preferred pset, so a P run queue holds no utility or background thread that prefers P, and an idle
+E core already takes back the ones that prefer E through the foreign rebalance. E -> P allows stealing for every bucket
+with the weight of a weighted spill (a steal then needs more runnable threads than E cores) and migration for the fixed
+priority bucket alone, which opens the steal search and moves nothing: no thread group prefers E for that bucket.
 
-Two counters, each with index 0 for the E and 1 for the P cluster type: sheng_edge_cross_type_steals counts the threads
-a cluster took from the run queues of the other type, and sheng_edge_idle_beside_excess counts the times a core found
-nothing to run while the other type had more runnable threads than cores. The second works with the matrix unbuilt:
-against the idle entries of cpu3 to cpu7 it says how often a P core went idle beside waiting E work.
+Counters, each with index 0 for the E and 1 for the P cluster type: sheng_edge_cross_type_steals counts the threads a
+cluster took from the run queues of the other type; sheng_edge_idle_beside_excess counts the times a core found nothing
+to run while the other type had more runnable threads than cores; sheng_edge_idle_beside_queued splits the second by what
+was queued there: per scheduling bucket the threads that prefer the other type (the ones the matrix keeps there), nothing
+of that kind, and threads that prefer this core's type.
 
 Applies after zzyf-sheng-amp.patch and zzzz-sheng-ipados27-bringup.patch. Has not run on hardware.
 diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
 --- a/osfmk/kern/sched_clutch.c
 +++ b/osfmk/kern/sched_clutch.c
-@@ -1401,15 +1401,13 @@
+@@ -1401,15 +1401,21 @@
  }
  
  /*
@@ -40,6 +43,11 @@ diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
 + * sheng_edge_cross_type_steals: threads a pset of that type took from the run queues of a pset of the other type.
 + * sheng_edge_idle_beside_excess: times a core of that type found nothing to run while a pset of the other type had more
 + * runnable threads than cores (what a steal across a weighted edge requires), whatever the Edge matrix allows.
++ * sheng_edge_idle_beside_queued: what was waiting over there each time sheng_edge_idle_beside_excess counted. Entries 0 to 5
++ * count the times a thread of that scheduling bucket (fixed priority, FG, IN, DF, UT, BG) was queued there that prefers a pset
++ * of the other type, the threads the Edge matrix keeps there; entry 6 the times no such thread was queued (the excess was
++ * running, realtime or bound threads); entry 7 the times a thread that prefers this core's type was queued there, which the
++ * foreign rebalance of this core takes without any edge being open.
   */
 -static bool
 -sched_edge_ui_bucket_stays_on_p(pset_type_t from, pset_type_t to, sched_bucket_t bucket)
@@ -48,10 +56,13 @@ diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
 -}
 +volatile uint32_t sheng_edge_cross_type_steals[2];
 +volatile uint32_t sheng_edge_idle_beside_excess[2];
++#define SHENG_EDGE_QUEUED_NONE  TH_BUCKET_SCHED_MAX
++#define SHENG_EDGE_QUEUED_OWN   (TH_BUCKET_SCHED_MAX + 1)
++volatile uint32_t sheng_edge_idle_beside_queued[2][TH_BUCKET_SCHED_MAX + 2];
  #endif /* CONFIG_SCHED_EDGE */
  
  /*
-@@ -4952,6 +4950,9 @@
+@@ -4952,6 +4958,9 @@
  			sched_clutch_thread_remove(&steal_from_pset->pset_clutch_root, stolen_thread, current_timestamp, SCHED_CLUTCH_BUCKET_OPTIONS_NONE);
  			SCHED(update_pset_load_average)(steal_from_pset, current_timestamp);
  			KDBG(MACHDBG_CODE(DBG_MACH_SCHED_CLUTCH, MACH_SCHED_EDGE_STEAL) | DBG_FUNC_NONE, thread_tid(stolen_thread), idle_pset->pset_id, steal_from_pset->pset_id, 0);
@@ -61,7 +72,7 @@ diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
  		}
  
  		pset_unlock(steal_from_pset);
-@@ -5000,6 +5001,21 @@
+@@ -5000,6 +5009,47 @@
  
  	/* No foreign-enqueued threads found; find a thread to steal from all psets based on weights/loads etc. */
  	thread = sched_edge_steal_thread(pset, pset->native_psets[0] | pset->foreign_psets[0]);
@@ -75,7 +86,33 @@ diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
 +			int other_cpus = pset_available_cpu_count(other);
 +			if ((other_cpus > 0) &&
 +			    (os_atomic_load(&other->pset_runnable_depth[TH_BUCKET_SHARE_BG], relaxed) > (uint32_t)other_cpus)) {
-+				os_atomic_inc(&sheng_edge_idle_beside_excess[pset->pset_type == PSET_AMP_P], relaxed);
++				int type_index = (pset->pset_type == PSET_AMP_P);
++				os_atomic_inc(&sheng_edge_idle_beside_excess[type_index], relaxed);
++				/* What is queued there, read without the lock like sched_edge_pset_peek_steal_possible */
++				bitmap_t silos = os_atomic_load(other->pset_clutch_root.scr_populated_steal_silos, relaxed);
++				bitmap_t kept_buckets = 0;
++				bool own_queued = false;
++				for (int silo_id = lsb_first(silos); silo_id >= 0; silo_id = lsb_next(silos, silo_id)) {
++					processor_set_t silo_pset = os_atomic_load(&pset_array[silo_id], relaxed);
++					sched_edge_steal_silo_t steal_silo =
++					    sched_edge_steal_silo_from_pset_id((pset_id_t)silo_id, &other->pset_clutch_root);
++					bitmap_t populated_queues = os_atomic_load(steal_silo->sess_populated_steal_queues, relaxed);
++					if ((silo_pset != PROCESSOR_SET_NULL) && (silo_pset->pset_type == pset->pset_type)) {
++						own_queued = own_queued || (populated_queues != 0);
++					} else {
++						kept_buckets |= populated_queues;
++					}
++				}
++				if (kept_buckets == 0) {
++					os_atomic_inc(&sheng_edge_idle_beside_queued[type_index][SHENG_EDGE_QUEUED_NONE], relaxed);
++				}
++				for (int bucket = lsb_first(kept_buckets); (bucket >= 0) && (bucket < TH_BUCKET_SCHED_MAX);
++				    bucket = lsb_next(kept_buckets, bucket)) {
++					os_atomic_inc(&sheng_edge_idle_beside_queued[type_index][bucket], relaxed);
++				}
++				if (own_queued) {
++					os_atomic_inc(&sheng_edge_idle_beside_queued[type_index][SHENG_EDGE_QUEUED_OWN], relaxed);
++				}
 +				break;
 +			}
 +		}
@@ -83,7 +120,7 @@ diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
  	return thread;
  }
  
-@@ -6399,10 +6415,23 @@
+@@ -6399,10 +6449,26 @@
  	edge_config_defaults[PSET_AMP_P][PSET_AMP_P] = free_spill;
  	/* E -> E */
  	edge_config_defaults[PSET_AMP_E][PSET_AMP_E] = free_spill;
@@ -93,11 +130,14 @@ diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
 +	 * P -> E is closed for every bucket. The A510 cores run at a fraction of the P cores' speed and nothing raises their clock
 +	 * for a frame, so fixed priority, UI and user-initiated threads wait for (or preempt lower work on) a P core. An edge has
 +	 * to be at least as open for a higher bucket as for a lower one (sched_edge_config_verify; the steal search stops at the
-+	 * first closed bucket), so default threads stay on P as well.
++	 * first closed bucket), so default threads stay on P as well. Opening P -> E for utility and background alone would fail
++	 * that rule and would move nothing: those buckets prefer the E cluster (sched_edge_default_preferred_pset), placement starts
++	 * at the preferred pset (sched_edge_migrate_candidate), so a P run queue holds no utility or background thread that
++	 * prefers P, and an idle E core takes back the ones that prefer E through the foreign rebalance, which needs no open edge.
 +	 *
 +	 * E -> P lets a P core that goes idle take utility and background threads queued behind a full E cluster. Stealing is
-+	 * open for every bucket; with the weight of a weighted spill a steal needs more runnable threads than E cores. Migration is opened below for
-+	 * the fixed priority bucket alone: the steal search admits a cluster's threads only when that bucket may migrate
++	 * open for every bucket; with the weight of a weighted spill a steal needs more runnable threads than E cores. Migration is
++	 * opened below for the fixed priority bucket alone: the steal search admits a cluster's threads only when that bucket may migrate
 +	 * (scr_incoming_migration_allowed), and no thread group prefers E for it (sched_edge_default_preferred_pset).
 +	 */
  	/* P -> E */
@@ -110,7 +150,7 @@ diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
  #if HAS_MCORE
  	/* M -> M */
  	edge_config_defaults[PSET_AMP_M][PSET_AMP_M] = free_spill;
-@@ -6486,8 +6515,10 @@
+@@ -6486,8 +6552,10 @@
  				 * values when deciding to enforce performance islands for certain buckets.
  				 */
  #endif /* CONFIG_SCHED_PERF_ISLANDS */
