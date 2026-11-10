@@ -101,7 +101,7 @@ int wn8030_parse(const uint8_t frame[WN8030_FRAME_BYTES], Wn8030Frame *out);
 unsigned wn8030_touchpad_report(const uint8_t in[WN8030_TOUCHPAD_REPORT], uint8_t out[WN8030_TOUCHPAD_REPORT]);
 /* The touchpad as a pointer, for a system without a driver for touchpad collections (macOS takes only Apple's own trackpads and HID
  * pointers): one finger moves the pointer, two or more scroll, the click is the left button and with two fingers down the right one.
- * `touchpad` is a report wn8030_touchpad_report has already turned (Y from the top, palms lifted). `out` gets a pointer report: the
+ * `touchpad` is a report wn8030_touchpad_report has already processed (palms lifted); its Y grows away from the user. `out` gets a pointer report: the
  * ID, the buttons, X and Y as signed 16-bit counts, then the vertical and horizontal scroll steps as signed bytes. Returns its length,
  * or 0 when nothing changed. */
 #define WN8030_POINTER_ID 0x1au

@@ -176,13 +176,13 @@ int main(int argc, char **argv)
         FINGER(0, 1, 3, 1000, 1000);
         CHECK(wn8030_pointer_report(&st, r, o) == 0);                       /* the first touch does not move */
         FINGER(0, 1, 3, 1021, 990);
-        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[0] == WN8030_POINTER_ID && S16(o + 2) == 10 && S16(o + 4) == -5 && !o[6] && !o[7]);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[0] == WN8030_POINTER_ID && S16(o + 2) == 10 && S16(o + 4) == 5 && !o[6] && !o[7]);   /* Y falling by 10: the pointer goes down */
         FINGER(0, 1, 3, 1022, 990);                                         /* the half count left over is kept */
         CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && S16(o + 2) == 1 && S16(o + 4) == 0);
         FINGER(1, 1, 4, 1500, 990);
         CHECK(wn8030_pointer_report(&st, r, o) == 0);                       /* a second finger does not jump */
-        FINGER(0, 1, 3, 1022, 890); FINGER(1, 1, 4, 1500, 890);
-        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && (int8_t)o[6] == 2 && !S16(o + 2) && !S16(o + 4));   /* up by 100: two steps */
+        FINGER(0, 1, 3, 1022, 1090); FINGER(1, 1, 4, 1500, 1090);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && (int8_t)o[6] == 2 && !S16(o + 2) && !S16(o + 4));   /* away from the user by 100: two steps up */
         r[1] = 1;
         CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[1] == 2);   /* click with two fingers: right */
         r[1] = 0; FINGER(1, 0, 0, 0, 0);
