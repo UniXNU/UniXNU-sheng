@@ -275,7 +275,7 @@ extern volatile uint32_t native_adreno_io_coherent __attribute__((weak_import));
 extern char native_cpufreq_row[120] __attribute__((weak_import));
 extern uint32_t native_gpu_perf_vote[2] __attribute__((weak_import));
 extern volatile uint32_t native_gpu_dcvs[15] __attribute__((weak_import));
-extern volatile uint32_t native_touch_doze[3] __attribute__((weak_import));
+extern volatile uint32_t native_touch_doze[4] __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_gov[9] __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_boosts __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_frame[2] __attribute__((weak_import));
@@ -1124,9 +1124,9 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                native_gpu_dcvs[13], native_gpu_dcvs[14]);
       at = put(out, at, cap, row, sizeof row);
     }
-    if (&native_touch_doze && native_touch_doze[0]) {
-      snprintf(row, sizeof row, "[touch doze] requests=%u refused=%u frames after the last=%u", native_touch_doze[0], native_touch_doze[1],
-               native_touch_doze[2]);
+    if (&native_touch_doze && (native_touch_doze[0] || native_touch_doze[3])) {
+      snprintf(row, sizeof row, "[touch doze] requests=%u refused=%u wakes after the last=%u last frame type=%u", native_touch_doze[0],
+               native_touch_doze[1], native_touch_doze[2], native_touch_doze[3]);
       at = put(out, at, cap, row, sizeof row);
     }
   }
