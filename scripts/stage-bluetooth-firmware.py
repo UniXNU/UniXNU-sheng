@@ -7,7 +7,10 @@ from pathlib import Path
 import re
 import os
 import tempfile
-import urllib.request
+import sys
+
+sys.path.append(str(Path.cwd() / 'scripts'))
+from github_download import fetch_bytes
 
 root = Path(__file__).resolve().parents[1]
 p = argparse.ArgumentParser(description=__doc__)
@@ -26,8 +29,7 @@ for name, expected in manifest['files'].items():
     fetched = False
     if not source.exists() and a.fetch:
         url = manifest['repository'].replace('github.com', 'raw.githubusercontent.com')+'/'+manifest['commit']+'/qca/'+name
-        with urllib.request.urlopen(url, timeout=30) as response:
-            data = response.read()
+        data = fetch_bytes(url, max_bytes=expected['bytes'])
         fetched = True
     else:
         data = source.read_bytes()

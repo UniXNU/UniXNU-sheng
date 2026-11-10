@@ -9,6 +9,10 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
+
+sys.path.append(str(Path.cwd() / 'scripts'))
+from github_download import fetch_bytes
 
 ROOT = Path(__file__).resolve().parents[1]
 firmware = ROOT / '.cache/firmware/sheng'
@@ -22,12 +26,10 @@ tool = ROOT / 'build/tools/uefiextract/uefiextract'
 if not dump.exists():
     if not tool.is_file():
         import hashlib
-        import urllib.request
         import zipfile
         URL = 'https://github.com/LongSoft/UEFITool/releases/download/A76/UEFIExtract_NE_A76_universal_mac.zip'
         PINNED = 'f3c5ca9402df3c14b28242dcd04b527791a12c1c0bf3c1cbbb3d1a0445168ec5'
-        with urllib.request.urlopen(URL, timeout=60) as response:
-            blob = response.read()
+        blob = fetch_bytes(URL, timeout=60)
         if hashlib.sha256(blob).hexdigest() != PINNED:
             raise SystemExit('UEFIExtract download differs from the pinned A76 build')
         tool.parent.mkdir(parents=True, exist_ok=True)

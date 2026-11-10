@@ -7,8 +7,11 @@ import re
 import shutil
 import struct
 import subprocess
-import urllib.request
+import sys
 import xml.etree.ElementTree as ET
+
+sys.path.append(str(Path.cwd() / 'scripts'))
+from github_download import atomic_write, fetch_bytes
 
 ROOT = Path(__file__).resolve().parents[1]
 if shutil.disk_usage(ROOT).free < 5 * 1024**3 + 128 * 1024**2:
@@ -24,11 +27,10 @@ def source(name, dts=False):
     path = ROOT / ('.cache/linux-dts' if dts else '.cache/display-reference') / name
     if not path.is_file():
         url = PIN['repository'].replace('https://github.com/', 'https://raw.githubusercontent.com/') + '/' + PIN['commit'] + '/' + name
-        data = urllib.request.urlopen(url, timeout=30).read(expected['bytes'] + 1)
+        data = fetch_bytes(url, max_bytes=expected['bytes'])
         if len(data) != expected['bytes'] or hashlib.sha256(data).hexdigest() != expected['sha256']:
             raise SystemExit('Pinned source download identity differs: ' + name)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        atomic_write(path, data)
     data = path.read_bytes()
     if len(data) != expected['bytes'] or hashlib.sha256(data).hexdigest() != expected['sha256']:
         raise SystemExit('Pinned source identity differs: ' + name)

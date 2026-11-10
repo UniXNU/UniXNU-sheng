@@ -9,7 +9,10 @@ import posixpath
 import re
 import subprocess
 import shutil
-import urllib.request
+import sys
+
+sys.path.append(str(Path.cwd() / 'scripts'))
+from github_download import atomic_write, fetch_bytes
 
 COMMIT = '42f3b40c702abbc37c3a04c95af008cd283aeaf3'
 REPOSITORY = 'https://github.com/ianchb/sm8550-mainline'
@@ -22,9 +25,8 @@ INCLUDE = re.compile(r'^\s*#\s*include\s*([<"])([^>"\n]+)[>"]', re.M)
 def fetch(name):
     destination = ROOT / name
     if not destination.exists() and not destination.is_symlink():
-        data = urllib.request.urlopen(BASE + name, timeout=30).read()
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(data)
+        data = fetch_bytes(BASE + name)
+        atomic_write(destination, data)
     data = (os.readlink(destination).encode() if destination.is_symlink()
             else destination.read_bytes())
     dependencies = set()
