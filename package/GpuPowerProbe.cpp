@@ -1902,6 +1902,7 @@ void gpuDcvsThread(void *, wait_result_t) {
         const uint64_t need = busyNs * kGpuMHz[cur] * 2 / ns;
         runNs = busyNs * 100 >= ns * 95 ? runNs + ns : 0;
         unsigned want = cur, reason = 0;
+        bool rested = false;
         if (busyNs * 100 > ns * 85 || runNs >= 50000000ull) {
             want = kGpuTop;reason = 1;
         } else if (gpuLevelFor(need * 11 / 10) > cur) {
@@ -1913,12 +1914,14 @@ void gpuDcvsThread(void *, wait_result_t) {
                 down = 0;
             }
         } else {
-            uint64_t idle = 0;
-            absolutetime_to_nanoseconds(t - idleSince, &idle);
-            if (idle >= 80000000ull) {want = floor;reason = 4;}
+            uint64_t quiet = 0;
+            absolutetime_to_nanoseconds(t - idleSince, &quiet);
+            if (quiet >= 80000000ull) {want = floor;reason = 4;rested = true;}
         }
         if (active) idleSince = t;
-        if (!active && want == floor) idle = true;
+        // Idle only after those 80 ms: one empty window at the floor is the gap between two light frames, not a rest, and the wake boost
+        // after it took the level to the top about once a second with the GPU under 1 % busy (run54: 96 % of the time above the floor).
+        if (rested) idle = true;
         if (active && idle) {
             idle = false; wakeEnd = t + wakeAbs; native_gpu_dcvs[14] = native_gpu_dcvs[14] + 1;
         }
