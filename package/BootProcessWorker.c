@@ -27,9 +27,9 @@ void boot_process_start(void) {
   thread_t thread;
   if (kernel_thread_start_priority(capture_worker, NULL, MINPRI_KERNEL, &thread) == KERN_SUCCESS) {
     thread_deallocate(thread);
-    printf("sheng-log: process stack capture enabled\n");
+    printf("log: process stack capture enabled\n");
   } else {
     __atomic_store_n(&started, 0, __ATOMIC_RELEASE);
-    printf("sheng-log: process stack worker could not start\n");
+    printf("log: process stack worker could not start\n");
   }
 }

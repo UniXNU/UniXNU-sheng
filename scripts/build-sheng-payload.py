@@ -79,8 +79,8 @@ def check_native_root_boot_args(kernel, arguments):
             values.setdefault(key, []).append(value)
     if '1' not in values.get('native-ufs-root', []):
         return
-    if values.get('sheng-pmgr') != ['2']:
-        raise SystemExit('Native UFS root boot requires exactly one --kernel-arg=sheng-pmgr=2; '
+    if values.get('pmgr') != ['2']:
+        raise SystemExit('Native UFS root boot requires exactly one --kernel-arg=pmgr=2; '
                          'the unchanged target AMFI otherwise panics with No PMGR')
     symbols = subprocess.check_output(['xcrun', 'nm', '-U', str(kernel)], text=True)
     if not any(line.split()[-1:] == ['_sheng_pmgr_run'] for line in symbols.splitlines()):
@@ -271,25 +271,25 @@ def main():
                     *(['--ipad-identity'] if '--ipad-identity' in sys.argv else []),
                     *[v for a in sys.argv[1:] if a.startswith(('--cpu-regs=', '--psci-method=')) for v in (a.split('=', 1)[0], a.split('=', 1)[1])],
                     *[v for a in sys.argv[1:] if a.startswith('--owned-memory-size=') for v in ('--owned-memory-size', a.split('=', 1)[1])]], check=True)
-    # The menu title names the build: the session tag (sheng-build-tag) when given, else the first digits of the kernel hash.
-    build_tag = re.search(r'(?:^| )sheng-build-tag=([A-Za-z0-9._-]+)', KERNEL_ARGS)
+    # The menu title names the build: the session tag (build-tag) when given, else the first digits of the kernel hash.
+    build_tag = re.search(r'(?:^| )build-tag=([A-Za-z0-9._-]+)', KERNEL_ARGS)
     ENTRY_TITLE = (build_tag.group(1) if build_tag else digest(kernel)[:8])
     INITRD_LINE = 'initrd = "Payloads/scratch-data.img"\n' if data_ramdisk else ''
     # Two entries: "Boot" keeps userdata as it is; "Install and boot" asks first (confirm, before anything is touched), then erases the
-    # Data store (sheng-data-reset: the seed starts over) and boots, skipping the Hello page (1) or showing it (2). The command line
+    # Data store (data-reset: the seed starts over) and boots, skipping the Hello page (1) or showing it (2). The command line
     # limit is 1016 bytes, so each choice is a single argument.
-    # The install boot does not need the unattended return to fastboot, so its line leaves out sheng-autoreset (room for the reset argument).
-    INSTALL_ARGS = re.sub(r' sheng-autoreset=[0-9]+', '', KERNEL_ARGS)
+    # The install boot does not need the unattended return to fastboot, so its line leaves out autoreset (room for the reset argument).
+    INSTALL_ARGS = re.sub(r' autoreset=[0-9]+', '', KERNEL_ARGS)
     for value in ('1', '2'):
-        if len((INSTALL_ARGS + ' sheng-data-reset=' + value).encode()) > 1016:
-            raise SystemExit(f'the install entry command line is {len((INSTALL_ARGS + " sheng-data-reset=" + value).encode())} bytes, the limit is 1016')
+        if len((INSTALL_ARGS + ' data-reset=' + value).encode()) > 1016:
+            raise SystemExit(f'the install entry command line is {len((INSTALL_ARGS + " data-reset=" + value).encode())} bytes, the limit is 1016')
     INSTALL_ENTRY = f'''
 [[entry]]
 id = "install"
 title = "Install and boot ({ENTRY_TITLE})"
 confirm = "ERASE all iPadOS user data and install again?"
 confirm_titles = ["Erase Data, skip Hello, boot", "Erase Data, show Hello, boot"]
-confirm_args = ["sheng-data-reset=1", "sheng-data-reset=2"]
+confirm_args = ["data-reset=1", "data-reset=2"]
 type = "xnu"
 path = "Payloads/kernel.macho"
 {INITRD_LINE}args = "{INSTALL_ARGS}"

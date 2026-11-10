@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Seven-issue latency export: command/pass phases, allocation/release, CPU,
 // render thread waits, display arrival, fault and unnest evidence, and the
-// touch report times that bound the analysed windows; with sheng-shots=<s>,
+// touch report times that bound the analysed windows; with shots=<s>,
 // scene screenshots for the colour checks.
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -26,7 +26,7 @@ void boot_cache_loader_log_capture(unsigned now) {
   enum {capacity = 8192};
   if (enabled < 0) {
     uint32_t value = 0;
-    enabled = PE_parse_boot_argn("sheng-cache-log", &value, sizeof value) && value == 1;
+    enabled = PE_parse_boot_argn("cache-log", &value, sizeof value) && value == 1;
   }
   if (!enabled || !&native_wifi_logf) return;
   if (now > 120) { if (buffer) {IOFreeData(buffer, capacity); buffer = NULL;} return; }
@@ -75,7 +75,7 @@ static uint32_t cache_input_size, cache_keep;
 uint32_t boot_cache_input_ready(void) {return __atomic_load_n(&cache_input_size,__ATOMIC_ACQUIRE);}
 void boot_cache_input_capture(user_addr_t address,uint64_t size) {
   uint32_t enabled=0;
-  if(!PE_parse_boot_argn("sheng-cache-log",&enabled,sizeof enabled) || enabled!=1 ||
+  if(!PE_parse_boot_argn("cache-log",&enabled,sizeof enabled) || enabled!=1 ||
       !address || size<32 || size>4*1024*1024 || boot_cache_input_ready())return;
   void *data=IOMallocAligned((size_t)size,PAGE_SIZE);
   if(!data)return;
@@ -312,7 +312,7 @@ static void latency_tick(void) {
   }
 }
 
-// Scene screenshots (boot-arg sheng-shots=<first second of log time>, absent or 0: none): bursts of DiagBurst shots 50 ms apart (about six
+// Scene screenshots (boot-arg shots=<first second of log time>, absent or 0: none): bursts of DiagBurst shots 50 ms apart (about six
 // frames at 120 Hz), one burst every DiagBurstEvery seconds from that second on, up to DiagShots, of the panel at quarter resolution (every
 // fourth pixel of every fourth row), kept in memory and exported as screen-<seconds>-<index in the burst>.bgrx (16-byte header "SHOT", u32
 // width, height, stride, then BGRX rows). Shots of one burst show a picture that alternates between frames; a static scene repeats. They are
@@ -323,7 +323,7 @@ extern void native_legacy_direct_snapshot(void) __attribute__((weak_import));   
 static uint8_t *shot_data[DiagShots];
 static uint32_t shot_time[DiagShots], shot_index[DiagShots], shot_w, shot_h, shot_taken, shot_first, shot_first_read, shots_kept;
 static void shot_tick(unsigned now) {
-  if (!shot_first_read) {shot_first_read = 1; if (!PE_parse_boot_argn("sheng-shots", &shot_first, sizeof shot_first)) shot_first = 0;}
+  if (!shot_first_read) {shot_first_read = 1; if (!PE_parse_boot_argn("shots", &shot_first, sizeof shot_first)) shot_first = 0;}
   if (!shot_first || shot_taken >= DiagShots || now < shot_first + (shot_taken / DiagBurst) * DiagBurstEvery) return;
   for (unsigned k = 0; k < DiagBurst && shot_taken < DiagShots; ++k) {
     if (k) IOSleep(50);
@@ -474,7 +474,7 @@ uint64_t boot_diag_scan(uint64_t budget) {
     if(n && used+24+strlen(gpu_trace_name[i])+n<=budget){gpu_trace_size[i]=n;used+=24+strlen(gpu_trace_name[i])+n;}
     else if(n)note("gpu-budget",gpu_trace_name[i],(int)n);
   }
-  // The scene screenshots, which a run asks for by sheng-shots, come before the files: they are what such a run is for.
+  // The scene screenshots, which a run asks for by shots, come before the files: they are what such a run is for.
   shots_kept = 0;
   for (unsigned i = 0; i < DiagShots; ++i) {
     if (!shot_data[i]) continue;

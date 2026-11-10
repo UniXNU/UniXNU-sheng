@@ -19,7 +19,7 @@ static unsigned allocations,frees,copies;
 static uint32_t enabled;
 static void *valid;static size_t valid_size;
 static int PE_parse_boot_argn(const char *name,void *value,size_t size) {
- assert(!strcmp(name,"sheng-cache-log") && size==4);*(uint32_t *)value=enabled;return 1;
+ assert(!strcmp(name,"cache-log") && size==4);*(uint32_t *)value=enabled;return 1;
 }
 static void *IOMallocAligned(size_t size,size_t align) {assert(align==4096);allocations++;return malloc(size);}
 static void IOFreeAligned(void *p,size_t size) {(void)size;frees++;free(p);}

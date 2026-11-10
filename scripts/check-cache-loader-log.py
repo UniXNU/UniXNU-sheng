@@ -34,7 +34,7 @@ static unsigned opens, closes, reads, allocations, frees;
 static int opt_in = 1, present, fail_read; static unsigned modified = 1;
 static char file[10000], logs[100000]; static size_t size = 9000, logged;
 static int PE_parse_boot_argn(const char *name, void *value, size_t bytes) {
- assert(!strcmp(name,"sheng-cache-log") && bytes==4); *(uint32_t *)value=opt_in; return 1;
+ assert(!strcmp(name,"cache-log") && bytes==4); *(uint32_t *)value=opt_in; return 1;
 }
 static void *IOMallocData(size_t n) { assert(n==8192); allocations++; return malloc(n); }
 static void IOFreeData(void *p,size_t n) { assert(p && n==8192); frees++; free(p); }

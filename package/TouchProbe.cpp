@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Default-off staged bring-up of the NT36532E touch controller. `sheng-touch=<n>`:
+// Default-off staged bring-up of the NT36532E touch controller. `touch=<n>`:
 //   1  read-only snapshot of the GCC branches, the S4 DFS levels and the touch pins
 //   2  vote the QUP clocks, wait for them, configure the pins, read the GENI engine identity
 //   3  GENI SPI init and clock, then reset the touch bootloader and read the chip id
@@ -340,7 +340,7 @@ extern "C" {volatile uint32_t native_touch_hold[14];}
 static void (*gTouchSink)(void *);
 static void *gTouchSinkContext;
 extern "C" void native_touch_set_sink(void (*sink)(void *), void *context) {gTouchSinkContext = context; __atomic_store_n(&gTouchSink, sink, __ATOMIC_RELEASE);}
-// Set while the scripted input (sheng-swipe) holds a contact down: the panel's own empty frames, which it reports about 110 times a second
+// Set while the scripted input (swipe) holds a contact down: the panel's own empty frames, which it reports about 110 times a second
 // with no finger on it, would lift that contact after every scripted frame (int-283: 1247 one-frame strokes, no swipe ever reached the UI).
 volatile bool gScriptedDown;
 void publish(unsigned count, const nvt_contact *c) {
@@ -521,7 +521,7 @@ static uint64_t lastTouchIrq;
 
 static void initPathTrace() {
     unsigned enabled = 0;
-    if (!PE_parse_boot_argn("sheng-tlog", &enabled, sizeof enabled) || !enabled) return;
+    if (!PE_parse_boot_argn("tlog", &enabled, sizeof enabled) || !enabled) return;
     IOLock *lock = IOLockAlloc();
     if (!lock) return;
     pathTrace.ring = static_cast<touch_trace_row *>(IOMalloc(sizeof(touch_trace_row) * TouchTraceCapacity));
@@ -618,12 +618,12 @@ static bool armTouchIrq(Session &s) {
 }
 
 static void touchThread(void *, wait_result_t) {
-    thread_set_thread_name(current_thread(),"sheng-touch");
+    thread_set_thread_name(current_thread(),"touch");
     Session *s = static_cast<Session *>(IOMallocType(Session));
     if (!s) {fail(0, -12); return;}
     bzero(s, sizeof *s);
     unsigned stage = native_touch_stage_req, hz = TB_SPI_DEFAULT_HZ;
-    PE_parse_boot_argn("sheng-touch-hz", &hz, sizeof hz);
+    PE_parse_boot_argn("touch-hz", &hz, sizeof hz);
     if (hz < 100000 || hz > TB_SPI_MAX_HZ) hz = TB_SPI_DEFAULT_HZ;
     do {
         if (!snapshot(*s)) break;
@@ -646,7 +646,7 @@ static void touchThread(void *, wait_result_t) {
         s->chip.scratch = s->tx;
         s->chip.rxbuf = s->rx;
         mark(*s, 7);
-        // SPI mode: sheng-touch-mode=0..3 forces one; otherwise sweep until the chip id matches (the board DT gives no
+        // SPI mode: touch-mode=0..3 forces one; otherwise sweep until the chip id matches (the board DT gives no
         // spi-cpha/spi-cpol, i.e. mode 0, so this is a hardware cross-check rather than a guess).
         // Engine loopback: MOSI is fed back to MISO inside the controller, so this isolates the DMA, packing and clock path
         // from the touch chip.
@@ -668,7 +668,7 @@ static void touchThread(void *, wait_result_t) {
             rows(*s);
         }
         unsigned forced = 4;
-        PE_parse_boot_argn("sheng-touch-mode", &forced, sizeof forced);
+        PE_parse_boot_argn("touch-mode", &forced, sizeof forced);
         static const unsigned order[4] = {0, 3, 1, 2};
         int r = NVT_ERR_CHIP;
         for (unsigned i = 0; i < 4 && r; ++i) {
@@ -724,10 +724,10 @@ static void touchThread(void *, wait_result_t) {
         // is still sampled and counted.
         // Event driven (int-189): the controller pulses its interrupt line (GPIO 25, rising edge, devicetree novatek,irq-gpio flags 0x2001) for every
         // frame, the TLMM raises its summary interrupt (SPI 208), the handler acknowledges it and wakes this thread, which then reads the frame. Nothing
-        // wakes while nobody touches the panel. The earlier loop polled the frame counter every 2 ms (int-185: 93 of 300 s of CPU); sheng-touch-poll=1
+        // wakes while nobody touches the panel. The earlier loop polled the frame counter every 2 ms (int-185: 93 of 300 s of CPU); touch-poll=1
         // brings that back for diagnosis only, and it is also the fallback if the interrupt cannot be armed (then native_touch_irq_stats[0] says 2).
         unsigned pollOnly = 0;
-        PE_parse_boot_argn("sheng-touch-poll", &pollOnly, sizeof pollOnly);
+        PE_parse_boot_argn("touch-poll", &pollOnly, sizeof pollOnly);
         initPathTrace();
         const bool irqArmed = !pollOnly && armTouchIrq(*s);
         uint32_t seen = gTouchIrqEvents;
@@ -829,7 +829,7 @@ static void touchThread(void *, wait_result_t) {
     rows(*s);
 }
 
-// Scripted input for unattended frame-rate measurement (boot argument sheng-swipe=<seconds after the touch probe starts>), sent through the
+// Scripted input for unattended frame-rate measurement (boot argument swipe=<seconds after the touch probe starts>), sent through the
 // same publish path as the panel: 24 swipes across the middle of the home screen (left to right first, so it pages 1 <-> 2 and ends where it
 // began), then a tap on the first icon of page 2 (Clock), and after 12 s a swipe up from the bottom edge back home; the swap timeline records
 // each animation; a last swipe returns to page 1 for the closing screenshot. [0] swipes done, [1] first swipe start ms, [2] last action end ms, [3] frames published, [4] app tap ms, [5] home swipe ms.
@@ -862,7 +862,7 @@ static void pressHome() {
 }
 
 static void swipeThread(void *parameter, wait_result_t) {
-    thread_set_thread_name(current_thread(), "sheng-swipe");
+    thread_set_thread_name(current_thread(), "swipe");
     IOSleep(1000u * (unsigned)(uintptr_t)parameter);
     // The tablet boots to the lock screen, which turns the display off after a few idle seconds and then drops touches (int-232 ignored the
     // whole run): one Home press wakes it, a second opens the home screen (no passcode).
@@ -918,14 +918,14 @@ static void swipeThread(void *parameter, wait_result_t) {
 
 extern "C" void native_touch_probe(void) {
     unsigned stage = 0;
-    if (!PE_parse_boot_argn("sheng-touch", &stage, sizeof stage) || stage < 1 || native_touch_stage_req) return;
+    if (!PE_parse_boot_argn("touch", &stage, sizeof stage) || stage < 1 || native_touch_stage_req) return;
     if (stage > 4) stage = 4;
     native_touch_stage_req = stage;
     thread_t thread = nullptr;
     if (kernel_thread_start(touchThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
     else native_touch_error = -12;
     unsigned swipeAfter = 0;
-    if (PE_parse_boot_argn("sheng-swipe", &swipeAfter, sizeof swipeAfter) && swipeAfter &&
+    if (PE_parse_boot_argn("swipe", &swipeAfter, sizeof swipeAfter) && swipeAfter &&
         kernel_thread_start(swipeThread, reinterpret_cast<void *>(uintptr_t(swipeAfter)), &thread) == KERN_SUCCESS)
         thread_deallocate(thread);
 }

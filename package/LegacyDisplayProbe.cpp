@@ -20,7 +20,7 @@ extern "C" void native_gop_presenter_static_init(void) __asm__("__GLOBAL__sub_I_
 extern "C" IOService *native_gop_presenter_create(void);
 static IOService *pendingLegacyDisplay;
 static IOService *activeGOPPresenter,*activeGOPNub;
-// GPU hand-off presenter (sheng-fb-gpu=1, phase 4): lives beside the display driver, which offers it frames instead of copying them.
+// GPU hand-off presenter (fb-gpu=1, phase 4): lives beside the display driver, which offers it frames instead of copying them.
 static IOService *gpuHandoffPresenter;
 extern "C" bool native_gop_gpu_offer(IOService *,void *display,IOMemoryDescriptor *,uint64_t stride,uint32_t width,uint32_t height,uint32_t format);
 extern "C" void native_gop_presenter_set_source(IOService *presenter,IOService *nub);
@@ -213,7 +213,7 @@ extern "C" unsigned native_legacy_swap_timeline(char *out,unsigned cap) {
     }
     return at;
 }
-// The display refresh tick (NativeLegacyDisplay, sheng-vsync): vsync messages sent, arms, idle stops, late ticks, starts, refresh
+// The display refresh tick (NativeLegacyDisplay, vsync): vsync messages sent, arms, idle stops, late ticks, starts, refresh
 // properties reported at that rate, and the rate.
 static volatile uint64_t vsyncEvents[6];
 static volatile unsigned vsyncHz;
@@ -577,7 +577,7 @@ void native_legacy_display_late_probe(void) {
                     if(started && phase==4) {
                         activeLegacyDisplay=display;activeGOPNub=nub;native_legacy_stage=10;
                         {
-                            unsigned gpu=0;PE_parse_boot_argn("sheng-fb-gpu",&gpu,sizeof gpu);
+                            unsigned gpu=0;PE_parse_boot_argn("fb-gpu",&gpu,sizeof gpu);
                             if(gpu==1) {
                                 IOService *handoff=native_gop_presenter_create();
                                 // Not a child of the display subsystem's node: the original display code enumerates that node's children (int-075/077:

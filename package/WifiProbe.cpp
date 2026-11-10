@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// WiFi bring-up on the sheng board. Stage 1 (boot argument sheng-wifi=1) is a read-only look at what the boot loaders left of the WCN7850
-// path. Stage 2 (sheng-wifi=2) powers it and trains the PCIe0 link: WLAN_EN, the PCIe0 and PHY GDSCs, clocks, block resets, the QMP PHY
+// WiFi bring-up on the sheng board. Stage 1 (boot argument wifi=1) is a read-only look at what the boot loaders left of the WCN7850
+// path. Stage 2 (wifi=2) powers it and trains the PCIe0 link: WLAN_EN, the PCIe0 and PHY GDSCs, clocks, block resets, the QMP PHY
 // tables (WifiPcieTables.h), the controller's PARF setup, PERST# release, LTSSM, and a configuration read of the endpoint's ID.
 // The PHY supplies (L1E 0.88 V, L3E 1.2 V) are shared with the UFS PHY. WcnPower coordinates the WCN7850 PMU's six input rails and sleep
 // clock between Wi-Fi and Bluetooth; the PCIe NoC vote belongs to Wi-Fi.
@@ -994,7 +994,7 @@ int pFwGet(const char *path, const uint8_t **data, size_t *size) {
     if (!strcmp(base, "wlan_mac.bin")) return macFile(data, size);
     char want[24]; strlcpy(want, base, sizeof want);
     uint32_t which = 1;
-    PE_parse_boot_argn("sheng-wifi-fw", &which, sizeof which);
+    PE_parse_boot_argn("wifi-fw", &which, sizeof which);
     if (!strcmp(want, "amss.bin") && which == 2) strlcpy(want, "amss2.bin", sizeof want);
     FwCache *slot = nullptr;
     for (auto &f : gFw) {if (f.tried && !strncmp(f.name, want, 24)) {slot = &f; break;} }
@@ -1335,7 +1335,7 @@ void mhiBring(volatile uint32_t *m, uint64_t barBytes) {
     for (uint32_t off = 0; off < gDmaUsed; off += 64) __asm__ volatile("dc civac, %0" :: "r"(native_ufs_extra_va + off) : "memory");   // the endpoint reads DRAM
     __asm__ volatile("dsb sy" ::: "memory");
     st[0] = 3;
-    // the endpoint's pass-through stream 0x1401 was set up by the storage driver when it came up (it reads sheng-wifi): slot | bank << 16, bit 31 set
+    // the endpoint's pass-through stream 0x1401 was set up by the storage driver when it came up (it reads wifi): slot | bank << 16, bit 31 set
     st[1] = native_ufs_extra_stream;
     if (!(st[1] & 0x80000000u)) {st[0] = (uint32_t)-4; return;}
     st[0] = 4; native_wifi_mhi_ms[3] = elapsed();
@@ -1343,7 +1343,7 @@ void mhiBring(volatile uint32_t *m, uint64_t barBytes) {
     if (!dmaAlloc(sink, 4096)) {st[0] = (uint32_t)-3; st[10] = 203; return;}
     gSinkVa = sink.va;
     uint32_t level0 = 0;
-    PE_parse_boot_argn("sheng-wifi", &level0, sizeof level0);
+    PE_parse_boot_argn("wifi", &level0, sizeof level0);
     if (level0 >= 4) {chipPowerUp(m); endpointLinkSetup(sink.pa);}
     BarIo io = {m};
     MhiBoot boot = {};
@@ -1352,13 +1352,13 @@ void mhiBring(volatile uint32_t *m, uint64_t barBytes) {
     // the log writer needs a while to start; the next step is the one that can end the boot, so let it write a few slots first
     st[0] = 4; st[13] = elapsed();
     uint32_t level = 0;
-    if (!PE_parse_boot_argn("sheng-wifi", &level, sizeof level) || level < 3 || !low) return;   // the load itself starts with sheng-wifi=3
+    if (!PE_parse_boot_argn("wifi", &level, sizeof level) || level < 3 || !low) return;   // the load itself starts with wifi=3
     IOSleep(8000);
     programContexts(m, ctx, barBytes);
     for (uint32_t off = 0; off < gDmaUsed; off += 64) __asm__ volatile("dc civac, %0" :: "r"(native_ufs_extra_va + off) : "memory");
     __asm__ volatile("dsb sy" ::: "memory");   // the driver for this chip sets the device's context arrays up before the boot loader is started
     gTraceWrites = 1;
-    gSkipReg = level >= 4 ? 0 : m[0x28 / 4] + MHI_BHI_IMGTXDB;   // sheng-wifi=3 sets everything up but leaves the doorbell alone
+    gSkipReg = level >= 4 ? 0 : m[0x28 / 4] + MHI_BHI_IMGTXDB;   // wifi=3 sets everything up but leaves the doorbell alone
     st[14] = 1;   // about to write the boot loader's address and size into BHI
     uint32_t phase = mhi_boot_begin(&boot, 0, sbl.pa, kSbl < fw.amssSize ? kSbl : fw.amssSize, table.pa, entries * (uint32_t)sizeof(MhiBhieEntry), 0x5eed);
     gTraceWrites = 0;
@@ -1447,7 +1447,7 @@ void endpointProbe(volatile uint32_t *a, volatile uint32_t *c, volatile uint32_t
     }
     ep[0] = 3;
     uint32_t level5 = 0;
-    PE_parse_boot_argn("sheng-wifi", &level5, sizeof level5);
+    PE_parse_boot_argn("wifi", &level5, sizeof level5);
     if (level5 >= 5) {ep[0] = 4; wifiStack(m, size < 0x200000 ? size : 0x200000); release(bar); return;}
     const uint32_t bhi = m[0x28 / 4];
     if (bhi && bhi < 0x20000 - 0x40) {
@@ -1632,7 +1632,7 @@ void bringUp(Window &gcc, Window &tlmm) {
 }
 
 void wifiThread(void *arg, wait_result_t) {
-    thread_set_thread_name(current_thread(), "sheng-wifi");
+    thread_set_thread_name(current_thread(), "wifi");
     publishMac();
     Window gcc = {}, tlmm = {}, parf = {}, dbi = {};
     if (!mapWindow(gcc, kGcc, 0x80000) || !mapWindow(tlmm, kTlmm, 0x60000)) {native_wifi_stats[0] = -1; release(gcc); release(tlmm); return;}
@@ -1664,7 +1664,7 @@ extern "C" int sheng_wifi_file(const char *name, const uint8_t **data, size_t *s
 
 extern "C" void sheng_wifi_probe(void) {
     unsigned stage = 0;
-    if (!PE_parse_boot_argn("sheng-wifi", &stage, sizeof stage) || stage < 1 || native_wifi_stats[0]) return;
+    if (!PE_parse_boot_argn("wifi", &stage, sizeof stage) || stage < 1 || native_wifi_stats[0]) return;
     thread_t thread = nullptr;
     if (kernel_thread_start(wifiThread, reinterpret_cast<void *>(uintptr_t(stage)), &thread) == KERN_SUCCESS) thread_deallocate(thread);
     else native_wifi_stats[0] = -7;

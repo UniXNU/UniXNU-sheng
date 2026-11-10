@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// The audio DSP (ADSP, LPASS) of the sheng board: boot argument sheng-adsp=1 surveys what the boot stages left (SMEM partition and items,
-// the DSP's SMP2P state, the AOSS mailbox, the RSC, the command database) and writes nothing; sheng-adsp=2 starts the DSP and brings up
+// The audio DSP (ADSP, LPASS) of the sheng board: boot argument adsp=1 surveys what the boot stages left (SMEM partition and items,
+// the DSP's SMP2P state, the AOSS mailbox, the RSC, the command database) and writes nothing; adsp=2 starts the DSP and brings up
 // GLINK so the battery manager (PMIC GLINK) and the audio services (GPR) can talk to it.
 //
 // Devicetree facts: remoteproc@6800000 (qcom,sm8550-adsp-pas), PAS id 1 for adsp.mbn in adspslpi 0x9ea00000 + 0x4680000 and id 36 for
@@ -192,7 +192,7 @@ void readCrashReason() {
     if (n) note("crash: ", text);
 }
 
-// ---- the survey (sheng-adsp=1 and the first step of 2): reads only ----
+// ---- the survey (adsp=1 and the first step of 2): reads only ----
 void survey() {
     int32_t bits = 0;
     if (!qcom_smem_partition(&gSmem, QCOM_SMEM_HOST_APPS, kRemotePid, &gPart)) {
@@ -487,7 +487,7 @@ bool attachIrqs() {
     return true;
 }
 
-// The firmware comes from the device's own firmware partition ("modem:", read in place) or, with sheng-adsp-fw=DIR, from DIR/adsp.mbn
+// The firmware comes from the device's own firmware partition ("modem:", read in place) or, with adsp-fw=DIR, from DIR/adsp.mbn
 // and DIR/adsp_dtb.mbn on a mounted volume. Without the argument the partition is tried first, then the two directories files may be
 // installed in. The UFS driver and the Data volume may not be up when this thread starts: a few tries with growing pauses (about two
 // minutes in all), not a poll. source gets the source that opened ("modem:" or a directory).
@@ -527,7 +527,7 @@ void shutdownDsp(bool dtb, bool adsp) {
 
 bool start() {
     char dir[80] = "";
-    const bool chosen = PE_parse_boot_argn("sheng-adsp-fw", dir, sizeof dir) && dir[0];
+    const bool chosen = PE_parse_boot_argn("adsp-fw", dir, sizeof dir) && dir[0];
     char path[112];
     Image &dtb = gDtbImage, &adsp = gAdspImage;
     int rc = openFirmware(dtb, adsp, path, sizeof path, chosen ? dir : nullptr);
@@ -617,9 +617,9 @@ bool startGlink() {
 }
 
 void adspThread(void *, wait_result_t) {
-    thread_set_thread_name(current_thread(), "sheng-adsp");
+    thread_set_thread_name(current_thread(), "adsp");
     unsigned mode = 0;
-    PE_parse_boot_argn("sheng-adsp", &mode, sizeof mode);
+    PE_parse_boot_argn("adsp", &mode, sizeof mode);
     if (!mapWindow(gSmemW, kSmem, kSmemSize) || !mapWindow(gMutex, kMutex, 0x1000) || !mapWindow(gIpcc, kIpcc, 0x1000) ||
         !mapWindow(gAoss, kAoss, 0x1000) || !mapWindow(gRsc, kRscDrv, 0x10000)) {
         fail(StMapped, -12);
@@ -681,7 +681,7 @@ extern "C" int sheng_adsp_send(ShengAdspChannel *c, const void *data, uint32_t l
 
 extern "C" void sheng_adsp_probe(void) {
     unsigned mode = 0;
-    if (!PE_parse_boot_argn("sheng-adsp", &mode, sizeof mode) || !mode || native_adsp_stats[0]) return;
+    if (!PE_parse_boot_argn("adsp", &mode, sizeof mode) || !mode || native_adsp_stats[0]) return;
     gClientLock = IOLockAlloc();
     if (gClientLock && mode >= 2) sheng_qrtr_start();  // the router link registers before the DSP can open it
     thread_t thread = nullptr;

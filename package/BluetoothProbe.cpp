@@ -420,14 +420,14 @@ void powerResult(bool enabled,int error) {
     if(error && bt.geni.error)printf("[bluetooth uart] error=%d irq=%x/%x/%x/%x\n",bt.geni.error,bt.geni.fault_irq[0],bt.geni.fault_irq[1],bt.geni.fault_irq[2],bt.geni.fault_irq[3]);
 }
 void worker(void *,wait_result_t) {
-    thread_set_thread_name(current_thread(),"sheng-bluetooth");
+    thread_set_thread_name(current_thread(),"bluetooth");
     struct qbt_platform ops={nullptr,allocate,release,nowNs,writeUart,drained,setRate,flow,clockVote,pump,waitUntil,nativeRx,firmware,firmwarePut,log};
     bt.core=qbt_create(&ops);if(!bt.core){native_bluetooth_stats[0]=3;return;}
     struct qbt_transport_ops transport={nullptr,wake,requestPower};
     int e=qbt_transport_init(&transport);if(e){native_bluetooth_stats[0]=3;return;}
     while(native_gpu_addon_stage<1)waitUntil(nullptr,nowNs(nullptr)+10000000ULL);
     /* Wi-Fi settles WLAN_EN and the shared supplies first; its failure stage is negative. */
-    unsigned wifi=0;PE_parse_boot_argn("sheng-wifi",&wifi,sizeof(wifi));
+    unsigned wifi=0;PE_parse_boot_argn("wifi",&wifi,sizeof(wifi));
     if(wifi>=2) {
         uint64_t end=nowNs(nullptr)+15000000000ULL;
         while(nowNs(nullptr)<end) {
@@ -501,7 +501,7 @@ void processWatch(void *,wait_result_t) {
 }
 extern "C" void sheng_bluetooth_probe(void) {
     unsigned enabled=0;
-    if(!PE_parse_boot_argn("sheng-bluetooth",&enabled,sizeof(enabled)) || !enabled)return;
+    if(!PE_parse_boot_argn("bluetooth",&enabled,sizeof(enabled)) || !enabled)return;
     uint32_t expected=0;if(!__atomic_compare_exchange_n(&bt.started,&expected,1u,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE))return;
     native_bluetooth_stats[0]=1;
     if(!address()){native_bluetooth_stats[0]=3;native_bluetooth_stats[1]=(uint64_t)(int64_t)-ENOENT;return;}

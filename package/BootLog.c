@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Diagnostic log on UFS (boot argument sheng-log=1): every 2 s the text the board page would show (the diagnostic page, the live
+// Diagnostic log on UFS (boot argument log=1): every 2 s the text the board page would show (the diagnostic page, the live
 // banner, the GPU rows, a caught panic message) and the kernel message buffer are written to the last 32 MiB of userdata through
 // NativeUfs's bounded log window, so a run can be read back afterwards (scripts/read-sheng-log.py over the Linux log reader).
 //
@@ -10,7 +10,7 @@
 // A round writes only what changed: the blocks of a slot its text uses (the rest of the slot keeps a NUL-terminated older text that
 // the reader ignores) and the message buffer blocks that new kernel messages reached. Version 5 keeps the message area as a ring of
 // the message stream (msg_mode 1): msg_head bytes were appended in all, the newest min(msg_head, area) of them end at msg_head modulo
-// the area. msg_mode 0 is the linear form (oldest first, msg_bytes long) that the panic flush and sheng-diag=1 write.
+// the area. msg_mode 0 is the linear form (oldest first, msg_bytes long) that the panic flush and diag=1 write.
 // The header is written last in each round, so a reader never trusts a slot or an export the header does not count yet.
 #include "BootLatencyFiles.h"
 #include <kern/thread.h>
@@ -844,7 +844,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
     at = put(out, at, cap, row, sizeof row);
   }
-  // [exc]: the last four user exceptions of the processes sheng-exc-name lists (oldest first): name[pid] type, pc, lr, far, esr, then the
+  // [exc]: the last four user exceptions of the processes exc-name lists (oldest first): name[pid] type, pc, lr, far, esr, then the
   // return addresses of the frame chain (dyld cache addresses: slide them back offline).
   if (&sheng_exc_ring && &sheng_exc_count && sheng_exc_count) {
     char row[300];
@@ -1299,7 +1299,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     snprintf(row, sizeof row, "[dpu ctl] fb=%x%08x %x/%x/%x %x/%x/%x %x/%x/%x %x/%x/%x", p[41], p[40], p[42], p[43], p[44], p[45], p[46], p[47],
              p[48], p[49], p[50], p[51], p[52], p[53]);
     at = put(out, at, cap, row, sizeof row);
-    // sheng-dpu=2 and 3 (DisplayTimingProbe.cpp native_dpu_more): VIG 0 and 1, CTL 0, the tear check of interfaces 1 and 2, the flush latch test.
+    // dpu=2 and 3 (DisplayTimingProbe.cpp native_dpu_more): VIG 0 and 1, CTL 0, the tear check of interfaces 1 and 2, the flush latch test.
     if (&native_dpu_more && (native_dpu_more[0] | native_dpu_more[20] | native_dpu_more[31])) {
       const volatile uint32_t *m = native_dpu_more;
       for (int k = 0; k < 2; ++k) {
@@ -1321,7 +1321,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              v[0], v[1], v[2] >> 10, v[3], v[4], v[5] >> 10, v[6], v[7], v[8] >> 10, v[9], v[10], v[11] >> 10, v[12], v[13]);
     at = put(out, at, cap, row, sizeof row);
   }
-  // Direct scanout (sheng-dpu-scanout): the display bank's stage 1 (NativeUfs), then the flips (NativeLegacyDisplay.cpp native_legacy_direct).
+  // Direct scanout (dpu-scanout): the display bank's stage 1 (NativeUfs), then the flips (NativeLegacyDisplay.cpp native_legacy_direct).
   if (log_display_on && &native_ufs_dpu_state && native_ufs_dpu_state) {
     char row[600];
     const volatile uint32_t *c = native_ufs_dpu_check;
@@ -1348,7 +1348,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_gop_wait_reasons ? native_gop_wait_reasons[2] : 0, &native_gop_wait_reasons ? native_gop_wait_reasons[3] : 0);
     at = put(out, at, cap, row, sizeof row);
   }
-  // The display streams in the apps SMMU as the boot loader left them (NativeUfs, sheng-dpu=2): per stream group|bank, SMR, S2CR, CBAR,
+  // The display streams in the apps SMMU as the boot loader left them (NativeUfs, dpu=2): per stream group|bank, SMR, S2CR, CBAR,
   // CBA2R, SCTLR, TTBR0, TCR, FSR.
   if (log_display_on && &native_ufs_dpu_smmu && native_ufs_dpu_smmu[0]) {
     char row[300];
@@ -1880,7 +1880,7 @@ static int msg_stream_write(void) {
 
 // Log groups (boot arguments log-gpu, log-display, log-wifi, log-audio, log-input, log-power, log-sys; each =1 turns its rows on, all are off
 // without them). A slot's text is a list of sections: a line that starts with "[tag]" opens one and the lines after it (until the next
-// "[") belong to it. The slot's own head line and the panic text are always kept; sheng-diag has its own switch and writes other files.
+// "[") belong to it. The slot's own head line and the panic text are always kept; diag has its own switch and writes other files.
 enum {LogGpu, LogDisplay, LogWifi, LogAudio, LogInput, LogPower, LogSys, LogGroups};
 static const char *const log_group_arg[LogGroups] = {"log-gpu", "log-display", "log-wifi", "log-audio", "log-input", "log-power", "log-sys"};
 static uint32_t log_group_on;
@@ -1950,23 +1950,23 @@ static void writer(void *arg, wait_result_t result) {
   if (&boot_progress_tag) strlcpy(h.tag, boot_progress_tag(), sizeof h.tag);
   uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
   const uint64_t start = log_ticks();
-  // The reboot-into-fastboot path, read only: PSCI features and the PMIC cell. sheng-autoreset=<seconds of log time> then writes the cell and
+  // The reboot-into-fastboot path, read only: PSCI features and the PMIC cell. autoreset=<seconds of log time> then writes the cell and
   // restarts once, after that round's log is on the medium, but only when the probe found the cell writable.
   uint32_t autoreset = 0;
   int reset_ok = 0, reset_tried = 0;
   uint32_t reset_held = 0, reset_tried_at = 0;
   if (&boot_reset_probe) {
     reset_ok = boot_reset_probe(boot_log_reset_probe_text, sizeof boot_log_reset_probe_text) == 0;
-    PE_parse_boot_argn("sheng-autoreset", &autoreset, sizeof autoreset);
+    PE_parse_boot_argn("autoreset", &autoreset, sizeof autoreset);
   }
-  // sheng-diag=1 turns every diagnostic on: the kernel's rings and samplers (started from boot_diag_shot_tick), the scene screenshots and
-  // the export of the diagnostic files, once, 25 s before sheng-autoreset (sheng-diag-export=<seconds of log time> moves it). Without it
+  // diag=1 turns every diagnostic on: the kernel's rings and samplers (started from boot_diag_shot_tick), the scene screenshots and
+  // the export of the diagnostic files, once, 25 s before autoreset (diag-export=<seconds of log time> moves it). Without it
   // this writer keeps the log rows only.
   uint32_t diag = 0, diag_at = 0, gpu_trace = 0;
-  PE_parse_boot_argn("sheng-gpu-trace", &gpu_trace, sizeof gpu_trace);
-  PE_parse_boot_argn("sheng-diag", &diag, sizeof diag);
+  PE_parse_boot_argn("gpu-trace", &gpu_trace, sizeof gpu_trace);
+  PE_parse_boot_argn("diag", &diag, sizeof diag);
   if (gpu_trace == 1) diag = 1;
-  if (diag == 1 && &boot_diag_scan && &boot_diag_stream && !PE_parse_boot_argn("sheng-diag-export", &diag_at, sizeof diag_at))
+  if (diag == 1 && &boot_diag_scan && &boot_diag_stream && !PE_parse_boot_argn("diag-export", &diag_at, sizeof diag_at))
     diag_at = autoreset > 25 ? autoreset - 25 : gpu_trace == 1 ? 180 : 0;
   if (diag != 1) diag_at = 0;
   uint32_t errors = 0;
@@ -1989,7 +1989,7 @@ static void writer(void *arg, wait_result_t result) {
     if (slot_used > LogSlotBlocks) slot_used = LogSlotBlocks;
     ok &= native_ufs_log_write(LogSlotFirst + (uint64_t)(h.slots_written % slot_count) * LogSlotBlocks, slot_used, boot_log_buffer);
     if (diag == 1 || !boot_log_msg_ring) {
-      // sheng-diag=1 keeps only the latency lines, so its message area stays linear and is written whole.
+      // diag=1 keeps only the latency lines, so its message area stays linear and is written whole.
       h.msg_bytes = copy_msgbuf(boot_log_buffer);
       if(diag==1)h.msg_bytes=bl_latency_messages((char *)boot_log_buffer,h.msg_bytes);
       ok &= native_ufs_log_write(LogMsgFirst, LogMsgBlocks, boot_log_buffer);
@@ -2076,23 +2076,23 @@ void boot_log_panic_flush(void) {
   native_ufs_log_sync();
 }
 
-// Called by the board page's monitor once a second; starts the writer the first time when sheng-log=1.
+// Called by the board page's monitor once a second; starts the writer the first time when log=1.
 void boot_log_tick(unsigned now) {
   (void)now;
   if (boot_log_started) return;
   boot_log_started = 1;
   // An unattended run must come back however it ends: on the desktop past its deadline (int-229 first suspected) or in a panic seconds
   // after the start, before UFS and this log exist (int-229: a duplicate class at PE_lockdown_iokit). So the first tick, independent of
-  // sheng-log, marks the cell (any restart is fastboot) and arms the hypervisor's watchdog, which bites a minute after the pings stop:
+  // log, marks the cell (any restart is fastboot) and arms the hypervisor's watchdog, which bites a minute after the pings stop:
   // after the autoreset deadline, or when a panic parks the cores.
   uint32_t autoreset = 0;
-  if (PE_parse_boot_argn("sheng-autoreset", &autoreset, sizeof autoreset) && autoreset && &boot_reset_probe &&
+  if (PE_parse_boot_argn("autoreset", &autoreset, sizeof autoreset) && autoreset && &boot_reset_probe &&
       boot_reset_probe(boot_log_reset_probe_text, sizeof boot_log_reset_probe_text) == 0) {
     if (&boot_reset_mark_bootloader) boot_reset_mark_bootloader(boot_log_reset_mark, sizeof boot_log_reset_mark);
     if (&boot_reset_watchdog) boot_reset_watchdog(autoreset + 60, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
   }
   uint32_t mode = 0;
-  if (!PE_parse_boot_argn("sheng-log", &mode, sizeof mode) || mode != 1) return;
+  if (!PE_parse_boot_argn("log", &mode, sizeof mode) || mode != 1) return;
   log_groups_read();
   if (!&native_ufs_log_open || !&native_ufs_log_write || !&native_ufs_log_sync) return;
   boot_log_buffer = (uint8_t *)IOMallocAligned(LogMsgBlocks * LogBlock, LogBlock);
@@ -2107,7 +2107,7 @@ void boot_log_tick(unsigned now) {
   export_lock = IOLockAlloc();
 #if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
   uint32_t diag = 0;
-  if (PE_parse_boot_argn("sheng-diag", &diag, sizeof diag) && diag == 1) boot_process_start();
+  if (PE_parse_boot_argn("diag", &diag, sizeof diag) && diag == 1) boot_process_start();
 #endif
   thread_t thread;
   if (kernel_thread_start_priority(writer, 0, BASEPRI_KERNEL, &thread) == KERN_SUCCESS) thread_deallocate(thread);

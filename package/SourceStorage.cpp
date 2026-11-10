@@ -25,7 +25,7 @@ extern "C" const char *volatile native_ufs_root_failure;
 // minimal kernel does not include it; a weak definition keeps the archive
 // linkable and is replaced when the diagnostic component is built in.
 extern "C" __attribute__((weak)) void boot_progress_poll(void) {}
-// Starts the sheng-log writer (BootLog.c); the board page calls it when that page is built in.
+// Starts the log writer (BootLog.c); the board page calls it when that page is built in.
 extern "C" void boot_log_tick(unsigned now);
 extern "C" volatile uint32_t boot_log_state, boot_log_rounds, boot_log_errors;
 extern "C" const char *volatile boot_log_open_refusal;
@@ -42,7 +42,7 @@ static void boot_log_check(void *, wait_result_t)
         IOSleep(1000);
     }
     if (!boot_log_rounds)
-        panic("SourceStorage: sheng-log has no log (state %u, rounds %u, errors %u, open: %s)", boot_log_state,
+        panic("SourceStorage: log has no log (state %u, rounds %u, errors %u, open: %s)", boot_log_state,
               boot_log_rounds, boot_log_errors, boot_log_open_refusal ? boot_log_open_refusal : "no refusal");
     uint32_t last = boot_log_rounds;
     for (unsigned still = 0; boot_log_state == 2; IOSleep(1000)) {
@@ -50,12 +50,12 @@ static void boot_log_check(void *, wait_result_t)
         still = now == last ? still + 1 : 0;
         last = now;
         if (still >= 20)
-            panic("SourceStorage: sheng-log writer stalled for 20 s after %u rounds (errors %u)", now, boot_log_errors);
+            panic("SourceStorage: log writer stalled for 20 s after %u rounds (errors %u)", now, boot_log_errors);
     }
 }
 
 
-// ---- UFS benchmark (sheng-ufs-bench=1) ---------------------------------------------------------------------------------------
+// ---- UFS benchmark (ufs-bench=1) ---------------------------------------------------------------------------------------
 // The same tests as the Linux reader's ufsbench (fixed-seed xorshift per test and worker, so both read the same LBAs): random reads of
 // 4 KiB to 1 MiB at queue depth 1, 8 and 32, then sequential reads, inside the flashed root image of userdata (from 1 MiB, 14304 MiB),
 // through the driver's partition read path (native_ufs_part_read: 128 KiB commands from the slot pool). Queue depth N = N kernel threads
@@ -142,7 +142,7 @@ void benchTest(BenchWorker *workers, uint32_t lun, uint64_t first, uint64_t bloc
 void ufsBench(void)
 {
   uint32_t on = 0;
-  if (!PE_parse_boot_argn("sheng-ufs-bench", &on, sizeof on) || on != 1) return;
+  if (!PE_parse_boot_argn("ufs-bench", &on, sizeof on) || on != 1) return;
   if (!&native_ufs_part_find || !&native_ufs_part_read) { printf("ufsbench: driver exports missing\n"); return; }
   for (unsigned waited = 0; waited < 300 && !boot_log_rounds; ++waited) IOSleep(100);   // the log writer is running
   __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(benchFreq));
@@ -305,11 +305,11 @@ extern "C" void native_source_storage_start(void)
               native_ufs_root_failure ? native_ufs_root_failure : "no reason recorded");
     printf("SourceStorage: UFS started through public IOStorageFamily interface\n");
     start_data_disk(provider);
-    // The UFS log area exists from here on; the writer only runs with sheng-log=1.
+    // The UFS log area exists from here on; the writer only runs with log=1.
     boot_log_tick(0);
     unsigned log = 0;
     thread_t check;
-    if (PE_parse_boot_argn("sheng-log", &log, sizeof(log)) && log == 1 &&
+    if (PE_parse_boot_argn("log", &log, sizeof(log)) && log == 1 &&
         kernel_thread_start(boot_log_check, nullptr, &check) == KERN_SUCCESS)
         thread_deallocate(check);
     ufsBench();

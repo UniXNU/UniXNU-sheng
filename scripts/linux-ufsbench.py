@@ -2,7 +2,7 @@
 """Linux UFS baseline on sheng, unattended. With the tablet in fastboot: build package/linux-log/ufsbench.c (aarch64, static, no libc)
 when needed, boot the log reader (mainline kernel, read only), push ufsbench over its USB serial shell, run it on the flashed root image
 region of userdata, collect the kernel's UFS link and queue facts, then send the tablet back to fastboot with /bin/rebootbl. Nothing is
-mounted or written on UFS. sheng-ufs-bench=1 runs the same tests on the same LBAs under XNU; scripts/compare-ufsbench.py compares them.
+mounted or written on UFS. ufs-bench=1 runs the same tests on the same LBAs under XNU; scripts/compare-ufsbench.py compares them.
 
 usage: linux-ufsbench.py --reader sheng-linux-log.img --out DIR [--serial SERIAL] [--seconds 3]
 Output: DIR/bench.txt (one line per test), DIR/{kernel,ufs,queue,dmesg}.txt and DIR/run.txt."""

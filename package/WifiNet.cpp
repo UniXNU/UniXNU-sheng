@@ -797,7 +797,7 @@ void autoJoin(void *, wait_result_t) {
 extern "C" void sheng_wifi_net_start(const uint8_t mac[6]) {
   if (gIf) return;
   memcpy(gMac, mac, 6);
-  gGrp = lck_grp_alloc_init("sheng-wifi-net", LCK_GRP_ATTR_NULL); gLock = lck_mtx_alloc_init(gGrp, LCK_ATTR_NULL);
+  gGrp = lck_grp_alloc_init("wifi-net", LCK_GRP_ATTR_NULL); gLock = lck_mtx_alloc_init(gGrp, LCK_ATTR_NULL);
   struct ifnet_init_eparams p; memset(&p, 0, sizeof p);
   p.ver = IFNET_INIT_CURRENT_VERSION; p.len = sizeof p; p.flags = IFNET_INIT_LEGACY | IFNET_INIT_NX_NOAUTO; p.name = "en"; p.unit = 0; p.family = IFNET_FAMILY_ETHERNET; p.subfamily = IFNET_SUBFAMILY_WIFI; p.type = IFT_ETHER;
   p.output = if_output; p.demux = ether_demux; p.add_proto = ether_add_proto; p.del_proto = ether_del_proto; p.check_multi = ether_check_multi; p.framer = ether_frameout;
@@ -817,7 +817,7 @@ extern "C" void sheng_wifi_net_start(const uint8_t mac[6]) {
   nw_wifi_set_events(&gEvents);
   publish_registry("en0");
   // Unattended test credentials are used only with an explicit opt-in.
-  { uint32_t aj = 0; PE_parse_boot_argn("sheng-wifi-aj", &aj, sizeof aj);
+  { uint32_t aj = 0; PE_parse_boot_argn("wifi-aj", &aj, sizeof aj);
     thread_t t = nullptr; if (aj && kernel_thread_start(autoJoin, nullptr, &t) == KERN_SUCCESS) thread_deallocate(t);
     t = nullptr; if (kernel_thread_start(trafficLog, nullptr, &t) == KERN_SUCCESS) thread_deallocate(t); }
   log(6, "wifi-net: en0 is up, hardware address %02x:%02x:%02x:%02x:%02x:%02x, capabilities 0x%x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],

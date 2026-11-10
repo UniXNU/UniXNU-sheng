@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Display controller state on the sheng board (boot argument sheng-dpu=1): a read-only look at what the boot loader left running, so the
+// Display controller state on the sheng board (boot argument dpu=1): a read-only look at what the boot loader left running, so the
 // display driver can take its refresh timing from the hardware and later flip between two scanout buffers.
 // The devicetree facts: MDSS at 0xae00000 (qcom,sm8550-mdss), the DPU's MDP block at 0xae01000 (0x8f000 bytes, qcom,sm8550-dpu), dual DSI
 // (dsi@ae94000 master, dsi@ae96000) to the NT36532E panel. DPU 9.2 catalog offsets inside the MDP block: interfaces 1 and 2 (the DSI
@@ -18,10 +18,10 @@ extern "C" {volatile uint32_t native_dpu_stats[20];}
 // Per pipe (VIG 0..3, DMA 0..5): source size, source address 0, stride 0, source format; [40] the boot framebuffer's physical address
 // (low 32 bits), [41] its high bits; per CTL 0..3 at [42 + 3 * n]: layer mixer 0 setting, flush, interface active.
 extern "C" {volatile uint32_t native_dpu_pipes[54];}
-// sheng-dpu=2: VIG 0 and 1 at [10 * k]: source x/y, output size, output x/y, source address 1, unpack pattern, operation mode, UBWC control,
+// dpu=2: VIG 0 and 1 at [10 * k]: source x/y, output size, output x/y, source address 1, unpack pattern, operation mode, UBWC control,
 // fetch configuration, address status; CTL 0 at [20]: top, start, fetch pipes active, interface flush, pipes active, layers active, interface
 // master; interfaces 1 and 2 at [27 + 2 * i]: tear check enable, autorefresh configuration.
-// sheng-dpu=3 also writes each VIG pipe's current address back and flushes the two pipes on CTL 0 (the picture cannot change), to time the
+// dpu=3 also writes each VIG pipe's current address back and flushes the two pipes on CTL 0 (the picture cannot change), to time the
 // latch: [31] flush before, [32] right after the write, [33] microseconds until the pipe bits clear (all ones: still set after 100 ms),
 // [34] flush at the end, [35] interface 1 frame count before, [36] after.
 extern "C" {volatile uint32_t native_dpu_more[40];}
@@ -40,7 +40,7 @@ constexpr uint32_t kTearCheck = 0x284, kAutorefresh = 0x2b4;
 unsigned gLevel;
 
 void dpuThread(void *, wait_result_t) {
-    thread_set_thread_name(current_thread(), "sheng-dpu");
+    thread_set_thread_name(current_thread(), "dpu");
     // After the render server has taken the display (the first desktop frame comes at about two minutes).
     IOSleep(150000);
     IODeviceMemory *memory = IODeviceMemory::withRange(kMdp, kMdpBytes);
@@ -113,7 +113,7 @@ void dpuThread(void *, wait_result_t) {
 
 extern "C" void sheng_dpu_probe(void) {
     unsigned enabled = 0;
-    if (!PE_parse_boot_argn("sheng-dpu", &enabled, sizeof enabled) || !enabled || enabled > 3 || native_dpu_stats[0]) return;
+    if (!PE_parse_boot_argn("dpu", &enabled, sizeof enabled) || !enabled || enabled > 3 || native_dpu_stats[0]) return;
     gLevel = enabled;
     thread_t thread = nullptr;
     if (kernel_thread_start(dpuThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);

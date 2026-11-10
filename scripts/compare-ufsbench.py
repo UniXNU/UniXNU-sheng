@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare ufsbench results: Linux reader runs (scripts/linux-ufsbench.py, bench.txt) against XNU runs (sheng-ufs-bench=1: the
+"""Compare ufsbench results: Linux reader runs (scripts/linux-ufsbench.py, bench.txt) against XNU runs (ufs-bench=1: the
 'ufsbench' lines of the UFS log's msgbuf.txt). Prints the mean MB/s of each test with its range, the XNU/Linux ratio and the mean p99.
 
 usage: compare-ufsbench.py --linux A/bench.txt B/bench.txt ... --xnu C/msgbuf.txt D/msgbuf.txt ..."""

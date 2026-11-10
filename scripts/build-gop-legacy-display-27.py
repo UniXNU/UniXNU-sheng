@@ -510,7 +510,7 @@ for stem, extra in [('CpuFreqProbe', ()), ('WifiProbe', ('-I', str(WIFI / 'inclu
                     ('BluetoothProbe', ('-I', str(BLUETOOTH / 'include'), '-I', str(ROOT / 'kits/Sm8550Platform'))),
                     ('AdspProbe', ()), ('AudioProbe', ()),
                     ('BacklightProbe', ()), ('DisplayTimingProbe', ()), ('BatteryProbe', ()), ('KeyboardProbe', ()),
-                    # GPU power, GMU and the Metal accelerator publication (sheng-gpu-power, sheng-gpu-metal), as on iPadOS 17.
+                    # GPU power, GMU and the Metal accelerator publication (gpu-power, gpu-metal), as on iPadOS 17.
                     ('GpuPowerProbe', tuple(x for d in ('drivers/Adreno740', 'kits/ArmSmmu4K', 'kits/AdrenoFirmware', 'kits/AdrenoPM4',
                                                         'kits/Sm8550Platform') for x in ('-I', str(ROOT / d))))]:
     compile_cpp(KITS / (stem + '.cpp'), board_dir / (stem + '.o'), extra)
