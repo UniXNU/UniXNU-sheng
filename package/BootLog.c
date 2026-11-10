@@ -317,6 +317,11 @@ extern uint64_t cs_native4k_digest_wall[2] __attribute__((weak_import)), cs_nati
   cs_native4k_record_ticks __attribute__((weak_import));
 extern unsigned long cs_native4k_chunks_made __attribute__((weak_import));
 extern volatile uint32_t sheng_edge_idle_beside_queued[2][8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_job_time[8] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_long_jobs[8][8] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_slow_jobs[16][8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_stall_kick[26] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_pool_views[5] __attribute__((weak_import));
 extern volatile uint32_t native_gpu_dcvs_reasons[9] __attribute__((weak_import));
 extern volatile uint32_t native_gpu_dcvs_windows[8] __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_ramp[9] __attribute__((weak_import));
@@ -1348,6 +1353,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], (unsigned long long)(zero_ns / 1000000),
                (unsigned long long)native_adreno_pool_zero[1], (unsigned long long)(pass_ns / 1000000), (unsigned long long)native_adreno_pool_zero[3]);
       at = put(out, at, cap, pool, sizeof pool);
+      if (&native_adreno_pool_views) {
+        snprintf(pool, sizeof pool, "[gpu pool views] hook %u | tracked %u untracked %u | closes %u returned %u",
+                 native_adreno_pool_views[4], native_adreno_pool_views[0], native_adreno_pool_views[1],
+                 native_adreno_pool_views[2], native_adreno_pool_views[3]);
+        at = put(out, at, cap, pool, sizeof pool);
+      }
     }
     // What a submission still cleans by kind of mapping, what the walks visit, and where a submission's time goes.
     if (&native_adreno_maint_kind) {
@@ -2170,6 +2181,33 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9]);
       at = put(out, at, cap, row, sizeof row);
     }
+  }
+  // GPU job durations: counts over 8/16/33/100 ms, the 8 longest jobs since boot and the newest jobs over 8 ms (src 1: CP timestamps).
+  if (log_gpu_on && &native_adreno_job_time && native_adreno_job_time[0]) {
+    char row[260]; const volatile uint32_t *t = native_adreno_job_time;
+    snprintf(row, sizeof row, "[gpu jobs] timed=%u stamped=%u >8ms=%u >16ms=%u >33ms=%u >100ms=%u longest=%uus slow=%u",
+             t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7]);
+    at = put(out, at, cap, row, sizeof row);
+    for (unsigned i = 0; i < 12; ++i) {
+      const volatile uint64_t *j;
+      if (i < 8) { if (!&native_adreno_long_jobs) continue; j = native_adreno_long_jobs[i]; }
+      else { if (!&native_adreno_slow_jobs || i - 8 >= t[7]) continue; j = native_adreno_slow_jobs[(t[7] - 1 - (i - 8)) & 15]; }
+      if (!j[1]) continue;
+      snprintf(row, sizeof row, "[gpu %s] fence=%u pid=%u q=%llx ring=%u pri=%d ibs=%u KiB=%llu us=%llu src=%u lvl=%u role=%u at=%llums lat=%lluus",
+               i < 8 ? "long" : "slow", (uint32_t)j[0], (uint32_t)j[3], (unsigned long long)j[4], (unsigned)(j[0] >> 40 & 15),
+               (int)(j[0] >> 44 & 0xff) - 1, (unsigned)(j[0] >> 32 & 0xff), (unsigned long long)(j[2] >> 10), (unsigned long long)j[1],
+               (unsigned)(j[0] >> 52 & 15), (unsigned)(j[3] >> 40 & 0xffff), (unsigned)(j[3] >> 32 & 0xff),
+               (unsigned long long)(j[5] / 1000), (unsigned long long)j[6]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // The first stall stage: the CP's IB position at the first timed-out wait, at the stage and 500 us later, and when the job retired.
+  if (log_gpu_on && &native_adreno_stall_kick && native_adreno_stall_kick[25]) {
+    char row[360]; const volatile uint32_t *k = native_adreno_stall_kick;
+    snprintf(row, sizeof row, "[gpu kick] n=%u fence=%u pending=%uus moved=%x retired after=%uus | pid=%u ibs=%u ring=%u pri=%d KiB=%u | first ib1 %x:%x rem %u ib2 rem %u | at ib1 %x:%x rem %u ib2 rem %u | +500us ib1 %x:%x rem %u ib2 rem %u",
+             k[25], k[0], k[1], k[20], k[21], k[22], k[23] & 0xffff, (k[23] >> 16) & 0xff, (int)(k[23] >> 24) - 1, k[24] >> 10,
+             k[3], k[2], k[6], k[7], k[9], k[8], k[12], k[13], k[15], k[14], k[18], k[19]);
+    at = put(out, at, cap, row, sizeof row);
   }
   if (log_display_on && &native_gop_wait_stats && native_gop_wait_stats[0]) {
     char row[160];
