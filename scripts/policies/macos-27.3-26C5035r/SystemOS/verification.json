@@ -1,0 +1,14 @@
+{
+  "image_bytes": 2917138432,
+  "blocks_verified": 712192,
+  "image_sha256": "14330ed990fe7022114b10718f4defe3049d49b6e5d52fd3ac71a487541cd1f3",
+  "volume_uuid": "6678E466-2F88-4C56-9408-DC7361BAA0BA",
+  "generation": 1,
+  "trusted_key_sha256": "9de35ac810f15f20b9304b85714f0f998589e223b131d6bb006a0f8486d3d832",
+  "real_c_signature_and_block_verification": true,
+  "original_image_modified": false,
+  "host_only": true,
+  "boot_root_authenticated": false,
+  "qemu_tested": false,
+  "hardware_tested": false
+}

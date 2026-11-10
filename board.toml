@@ -166,6 +166,7 @@ CI_ENABLE_METAL_GPU = "0"
 "unixnu" = "../UniXNU"
 
 ["package"."defconfig"]
+"macos-27.3-26C5035r" = "sheng_macos_defconfig"
 "ipados-27.0.1-24A446" = "sheng_ipados27_defconfig"
 "ipados-26.5.2-23F84" = "sheng_ipados26_defconfig"
 "ipados-17.7.11-21H461" = "sheng_defconfig"
@@ -207,3 +208,8 @@ CI_ENABLE_METAL_GPU = "0"
 
 ["os_overrides"."ipados-26.5.2-23F84"]
 "remove" = ["payload.install", "payload.root_policies", "payload.runtime", "kernel.prelink.roots"]
+
+["os_overrides"."macos-27.3-26C5035r"."kernel"]
+"defconfig" = "sheng_macos_defconfig"
+"config_fragments" = ["arch:configs/common.config", "os:configs/macos.config"]
+"archives" = ["build-corecrypto-14.py", "build-corecrypto-14.py --namespace", "component:ArmDTPlatform", "component:ArmCpu", "build-libpthread-kernel.py", "component:ShengUfs", "build-sheng-source-storage.py --policy-dir scripts/policies/macos-27.3-26C5035r", "component:RamBlock", "component:Adreno740", "fetch-sheng-dts.py", "fetch-adreno-inputs.py", "prepare-sheng-gmu.py", "prepare-sheng-gpu-smmu.py", "prepare-sheng-gmu-votes.py", "build-adreno740-kits.py", "component:AppleKeyStoreState", "build-gop-legacy-display-27.py"]
