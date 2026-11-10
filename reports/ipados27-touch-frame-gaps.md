@@ -4,7 +4,7 @@ Measurements are from a Xiaomi Pad 6S Pro running iPadOS 27.0.1 build 24A446. A 
 
 ## Icon rendering and memory
 
-With `sheng-lite=1`, launchd starts `iconservicesagent` on demand. The job sets `FORCE_SOFTWARE_RENDERER=0` and `CI_ENABLE_METAL_GPU=0`. IconRendering uses the Adreno 740 Metal device. Core Image has Metal disabled for this process. The stock J820 Jetsam profile sets a 15 MiB inactive hard limit and a 1,224 MiB active soft limit.
+With `lite=1`, launchd starts `iconservicesagent` on demand. The job sets `FORCE_SOFTWARE_RENDERER=0` and `CI_ENABLE_METAL_GPU=0`. IconRendering uses the Adreno 740 Metal device. Core Image has Metal disabled for this process. The stock J820 Jetsam profile sets a 15 MiB inactive hard limit and a 1,224 MiB active soft limit.
 
 | Hardware observation | Evidence |
 | --- | --- |
@@ -34,7 +34,7 @@ Individual long frames have distinct causes. In a 242.143 ms interval on boot `5
 
 ## CPU profile
 
-With `cs-exact=1 cs-profile=1 sheng-cpufreq=4`, the interrupted CPU records SpringBoard's main-thread PC, LR and FP. Boot `da1dbd496` yielded 6,680 exact samples and 6,679 ready PMU readings. The sampler spent 82.19 ms on 8,019 attempts, or 0.0582% of the observed wall time.
+With `cs-exact=1 cs-profile=1 cpufreq=4`, the interrupted CPU records SpringBoard's main-thread PC, LR and FP. Boot `da1dbd496` yielded 6,680 exact samples and 6,679 ready PMU readings. The sampler spent 82.19 ms on 8,019 attempts, or 0.0582% of the observed wall time.
 
 The performance and prime domains requested their maximum frequencies in all 82 governor windows across five busy flip intervals of at least 100 ms. In the 131.501 ms interval with continuous input, the eight EPSS readings were 2,707 and 2,956 MHz respectively. The stack included `-[SBIconListView configureIconView:forIcon:]` in 5 of 171 long-frame samples and 0 of 523 short-frame samples.
 
