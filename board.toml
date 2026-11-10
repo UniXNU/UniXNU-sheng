@@ -214,7 +214,7 @@ CI_ENABLE_METAL_GPU = "0"
 "size_mib" = 176
 # First macOS bring-up: storage, display, HID, USB and CPU. No GPU, audio, Wi-Fi, Bluetooth or AppSync
 # userland exists for macOS yet, and the launchd watchdog policy (lite) names iPadOS jobs.
-"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "offline-key-events=1", "aks=1", "aks-sls=3", "offline-hid-input=1", "touch=4", "touch-hid=1", "buttons=1", "keyboard=1", "log=1", "smp=1", "armcpu-spi-ipi=1", "armcpu-self-ipi=1", "data-persist=2", "backlight=1", "cpufreq=4", "dpu-scanout=2", "no-lc=1", "vsync=120", "vsync-fixed=1", "disable-watchdogd=1", "usb=1"]
+"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "offline-key-events=1", "aks=1", "aks-sls=3", "offline-hid-input=1", "touch=4", "touch-hid=1", "buttons=1", "keyboard=1", "log=1", "smp=1", "armcpu-spi-ipi=1", "armcpu-self-ipi=1", "data-persist=2", "backlight=1", "cpufreq=4", "dpu-scanout=2", "no-lc=1", "vsync=120", "vsync-fixed=1", "disable-watchdogd=1", "usb=1", "vc-text=1", "exec-log=1", "apfs-boot-shim=1"]
 
 ["os_overrides"."macos-27.3-26C5035r"."payload"."adt"]
 # T6050, the chip of Mac17,11.
@@ -230,6 +230,8 @@ CI_ENABLE_METAL_GPU = "0"
 # The persistent Data store sits below the 1 GiB log reserve at the end of userdata and must clear the root image
 # (16.4 GiB with OS, SystemOS, App and their .vroot tables). 215 GiB overlapped it by 36 MiB; 210 GiB leaves 5 GiB.
 "data_gib" = 210
+# The owner apfs_boot_util for the read-only root container (launchd mount-phase-1/2), with apfs-boot-shim=1.
+"boot_shims" = true
 
 ["os_overrides"."macos-27.3-26C5035r"]
 "remove" = ["payload.install", "payload.skip_setup_tool", "payload.runtime.wallpapers", "payload.runtime.audio_tool", "payload.runtime.audio_target", "payload.runtime.audio_system_plugins", "payload.runtime.wifi_tool", "payload.runtime.wifi_target", "payload.runtime.wifi_launchd_cache", "payload.runtime.wifi_bin_prefix", "payload.runtime.bluetooth_tool", "payload.runtime.bluetooth_target", "payload.runtime.appsync", "payload.runtime.launchd_job_environment"]
