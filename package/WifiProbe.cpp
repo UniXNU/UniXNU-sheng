@@ -1674,3 +1674,46 @@ extern "C" void sheng_wifi_probe(void) {
     if (kernel_thread_start(wifiThread, reinterpret_cast<void *>(uintptr_t(stage)), &thread) == KERN_SUCCESS) thread_deallocate(thread);
     else native_wifi_stats[0] = -7;
 }
+
+// ---- The charger PMIC's own registers, for the boot log (log-power=1) ----
+// Charging belongs to the DSP firmware, which reports only its conclusions (ShengBattmgr.c). When the input is missing, the PMIC tells
+// why: its Type-C block has the CC state and role, its USB input block the input and power-path state. The charger PMIC is the SID
+// that has both the USB input (page 0x29) and the Type-C (page 0x2b) peripheral; the pages read are the boost for VBUS out (0x11),
+// charger (0x26), DC-DC (0x27), battery interface (0x28), USB input (0x29), Type-C (0x2b) and misc (0x2c). Reads only, through the
+// arbiter's observer channel. [0] SID + 1 (0 none found), [1] samples; then per page five words: SID<<24 | page<<16 | type<<8 | subtype,
+// registers 0x06-0x09, 0x0a-0x0d, 0x40-0x43, 0x44-0x47 (first register in the low byte; 0xee = not readable).
+extern "C" {volatile uint32_t native_charger_pmic[2 + 5 * 7];}
+extern "C" void sheng_charger_pmic_sample(void)
+{
+    static const uint8_t pages[7] = {0x11, 0x26, 0x27, 0x28, 0x29, 0x2b, 0x2c};
+    Pmic &p = gPmic;
+    if (!pmicOpen(p)) return;
+    int owner = -1;
+    uint32_t sid = native_charger_pmic[0];
+    if (!sid) {
+        for (uint32_t candidate = 0; candidate < 16 && !sid; ++candidate)
+            if (pmicApid(p, candidate << 8 | 0x29, &owner) >= 0 && pmicApid(p, candidate << 8 | 0x2b, &owner) >= 0) sid = candidate + 1;
+        if (!sid) return;
+        native_charger_pmic[0] = sid;
+    }
+    for (unsigned k = 0; k < sizeof pages; ++k) {
+        volatile uint32_t *out = native_charger_pmic + 2 + 5 * k;
+        const int apid = pmicApid(p, (sid - 1) << 8 | pages[k], &owner);
+        if (apid < 0) {out[0] = 0; continue;}
+        static const uint8_t first[4] = {0x06, 0x0a, 0x40, 0x44};
+        uint8_t type = 0xee, sub = 0xee;
+        br_read8(p.obs.va, &p.arb, apid, 0x04, &type); br_read8(p.obs.va, &p.arb, apid, 0x05, &sub);
+        out[0] = (sid - 1) << 24 | (uint32_t)pages[k] << 16 | (uint32_t)type << 8 | sub;
+        for (unsigned w = 0; w < 4; ++w) {
+            uint32_t word = 0;
+            for (unsigned i = 0; i < 4; ++i) {
+                uint8_t v = 0xee;
+                br_read8(p.obs.va, &p.arb, apid, (uint8_t)(first[w] + i), &v);
+                word |= (uint32_t)v << (8 * i);
+            }
+            out[1 + w] = word;
+        }
+    }
+    native_charger_pmic[1] = native_charger_pmic[1] + 1;
+}
+
