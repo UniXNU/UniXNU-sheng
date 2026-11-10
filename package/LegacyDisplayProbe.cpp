@@ -9,6 +9,7 @@
 #include <libkern/c++/OSSerialize.h>
 #include <libkern/c++/OSData.h>
 #include <kern/task.h>
+#include <kern/thread.h>
 #include <sys/proc.h>
 #include <pexpert/pexpert.h>
 #include <mach/kmod.h>
@@ -141,17 +142,20 @@ void native_legacy_surface_rejected(uint64_t width,uint64_t height,uint32_t form
     native_legacy_rej_surface[0]=width;native_legacy_rej_surface[1]=height;native_legacy_rej_surface[2]=format;native_legacy_rej_surface[3]=planes;
     native_legacy_rej_surface[4]=stride;native_legacy_rej_surface[5]=allocation;native_legacy_rej_surface[6]=bytes;
 }
+// The display's request layout (rectangles, masks, options, dimensions, surfaces); the iPadOS 17 one when the display has none.
+extern "C" const unsigned native_legacy_request_layout[6] __attribute__((weak_import));
 static void recordRejectedSwap(unsigned reason,const void *request,const void *surface) {
     const unsigned char *bytes=reinterpret_cast<const unsigned char *>(request);
     if(!bytes)return;
+    static const unsigned ios17[6]={17,81,792,804,816,2624};
+    const unsigned *layout=&native_legacy_request_layout?native_legacy_request_layout:ios17;
     native_legacy_rej_reason=reason;
-    uint64_t surfaces[4]={};memcpy(surfaces,bytes+2624,sizeof(surfaces));
+    uint64_t surfaces[4]={};memcpy(surfaces,bytes+layout[5],sizeof(surfaces));
     for(unsigned i=0;i<4;++i)native_legacy_rej_surfaces[i]=surfaces[i];
-    const unsigned stateOffsets[3]={792,796,800},optionOffsets[3]={804,808,812};
-    for(unsigned i=0;i<3;++i){uint32_t a=0,b=0;memcpy(&a,bytes+stateOffsets[i],4);memcpy(&b,bytes+optionOffsets[i],4);
+    for(unsigned i=0;i<3;++i){uint32_t a=0,b=0;memcpy(&a,bytes+layout[2]+4*i,4);memcpy(&b,bytes+layout[3]+4*i,4);
         native_legacy_rej_state[i]=a;native_legacy_rej_options[i]=b;}
-    uint32_t w=0,h=0;memcpy(&w,bytes+816,4);memcpy(&h,bytes+820,4);native_legacy_rej_size[0]=w;native_legacy_rej_size[1]=h;
-    const unsigned rectOffsets[2]={17,81};
+    uint32_t w=0,h=0;memcpy(&w,bytes+layout[4],4);memcpy(&h,bytes+layout[4]+4,4);native_legacy_rej_size[0]=w;native_legacy_rej_size[1]=h;
+    const unsigned rectOffsets[2]={layout[0],layout[1]};
     for(unsigned r=0;r<2;++r){uint32_t rect[4]={};memcpy(rect,bytes+rectOffsets[r],sizeof(rect));
         for(unsigned i=0;i<4;++i)native_legacy_rej_rects[r][i]=rect[i];}
     char name[32]={};
@@ -512,6 +516,8 @@ extern void sheng_gpu_power_probe(void);
 extern void sheng_wifi_probe(void);
 extern void sheng_bluetooth_probe(void) __attribute__((weak_import));
 extern void sheng_usb_probe(void) __attribute__((weak_import));
+extern "C" void sheng_ethernet_probe(void) __attribute__((weak_import));   // macOS builds only (ShengEthernet.cpp)
+extern "C" void sheng_software_aes_probe(void) __attribute__((weak_import));   // macOS builds only (SoftwareAesProbe.cpp)
 extern void sheng_adsp_probe(void);
 extern void sheng_battery_probe(void);
 extern void sheng_audio_probe(void);
@@ -519,7 +525,83 @@ extern void sheng_buttons_probe(void);
 extern void sheng_backlight_probe(void);
 extern "C" void sheng_keyboard_probe(void) __attribute__((weak_import));
 extern "C" void sheng_dpu_probe(void);
+// IOKit's busy services while the registry is not quiet: the network configuration names interfaces only once IOKit is quiet (or after its
+// 240 s limit), and the TimeSync clock manager waits for quiet too, so a service whose matching never ends holds up the network, TimeSync
+// and everything waiting on them (macOS run28: en0 named after 240 s, WindowServer waiting on clocksyncd). Every 10 s for 10 minutes, while
+// the root's busy count is not 0, the busy leaves (a busy service none of whose children is busy) are logged when the set changes: class,
+// name, busy count, and whether the service's own matching has finished.
+extern "C" int boot_kthread_report_nth(const char *prefix, unsigned nth, char *name, unsigned name_size, char *out, unsigned size);
+// [0] the latest busy set, [1..3] matching threads that are not idle, for the diagnostic page (BootLog.c).
+extern "C" {char native_iokit_busy_text[4][192];}
+namespace {
+// IOKit's matching threads, once, when the same busy set has stayed for two rounds: which thread holds a service's matching and where.
+void reportConfigThreads() {
+    unsigned kept = 1;
+    for (unsigned n = 0, tries = 0; n < 16 && tries < 64; ++tries) {
+        char name[64], where[400];
+        // The kernel task's lock is only tried: a busy lock is taken again a little later.
+        if (boot_kthread_report_nth("IOConfigThread", n, name, sizeof name, where, sizeof where)) {
+            if (n >= 1 && tries > 8) break;
+            IOSleep(5);
+            continue;
+        }
+        IOLog("IOKit matching thread %u %s: %s\n", n, name, where);
+        if (kept < 4) snprintf(native_iokit_busy_text[kept++], sizeof native_iokit_busy_text[0], "T%u %.40s %.140s", n, name, where);
+        ++n;
+    }
+}
+void busyReport(void *, wait_result_t) {
+    char last[400] = "";
+    unsigned same = 0;
+    bool threadsShown = false;
+    for (unsigned round = 1; round <= 60; ++round) {
+        IOSleep(10000);
+        IOService *root = IOService::getServiceRoot();
+        const UInt32 busy = root ? root->getBusyState() : 0;
+        char line[400];
+        int at = snprintf(line, sizeof line, "IOKit busy %u:", (unsigned)busy);
+        unsigned shown = 0;
+        if (busy) {
+            if (IORegistryIterator *it = IORegistryIterator::iterateOver(gIOServicePlane, kIORegistryIterateRecursively)) {
+                while (OSObject *object = it->getNextObject()) {
+                    IOService *service = OSDynamicCast(IOService, object);
+                    if (!service || !service->getBusyState()) continue;
+                    bool busyChild = false;
+                    if (OSIterator *children = service->getChildIterator(gIOServicePlane)) {
+                        while (OSObject *child = children->getNextObject()) {
+                            IOService *c = OSDynamicCast(IOService, child);
+                            if (c && c->getBusyState()) {busyChild = true; break;}
+                        }
+                        children->release();
+                    }
+                    if (busyChild) continue;
+                    if (at < (int)sizeof line - 2)
+                        at += snprintf(line + at, sizeof line - at, " %s(%s,%u,%c)", service->getName(), service->getMetaClass()->getClassName(),
+                                       (unsigned)service->getBusyState(), (service->getState() & kIOServiceMatchedState) ? 'm' : '-');
+                    if (++shown >= 8) break;
+                }
+                it->release();
+            }
+        }
+        if (strcmp(line, last)) {
+            IOLog("%s\n", line);
+            strlcpy(last, line, sizeof last);
+            snprintf(native_iokit_busy_text[0], sizeof native_iokit_busy_text[0], "%u s %.170s", round * 10, line);
+            same = 0;
+        } else if (busy && ++same == 2 && !threadsShown) {
+            threadsShown = true;
+            reportConfigThreads();
+        }
+        if (!busy && round > 3) break;
+    }
+    thread_terminate(current_thread());
+}
+}  // namespace
+
 void native_legacy_display_late_probe(void) {
+    {thread_t thread = nullptr; if (kernel_thread_start(busyReport, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);}
+    // First: AppleImage4's start already waits for an IOAESAccelerator, holding its expert lock (SoftwareAesProbe.cpp).
+    if (sheng_software_aes_probe) sheng_software_aes_probe();
     native_keystore_probe();
     sheng_cpufreq_probe();
     sheng_gpu_power_probe();
@@ -527,6 +609,7 @@ void native_legacy_display_late_probe(void) {
     sheng_wifi_probe();
     if (sheng_bluetooth_probe) sheng_bluetooth_probe();
     if (sheng_usb_probe) sheng_usb_probe();
+    if (sheng_ethernet_probe) sheng_ethernet_probe();
     sheng_adsp_probe();
     sheng_battery_probe();
     sheng_audio_probe();
@@ -567,6 +650,15 @@ void native_legacy_display_late_probe(void) {
         OSArray *ranges=OSArray::withCapacity(1);
         if(nub && memory && ranges && parent && nub->init()) {
             ranges->setObject(memory);nub->setDeviceMemory(ranges);nub->setName("NativeGOPFramebuffer");
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+            // macOS: the panel's density (12.4 inch, 3048 x 2032: 294 dots per inch), which the framebuffer reports as its dot pitch
+            // and turns into the display's physical size. Without one WindowServer saw a 0 x 0 inch panel and made the unscaled
+            // 3048 x 2032 mode the default (macOS run40); with it the default is the 2x mode, 1524 x 1016 points.
+            {
+                const uint32_t dotsPerInch=294;
+                if(OSData *pitch=OSData::withBytes(&dotsPerInch,sizeof(dotsPerInch))){nub->setProperty("dot-pitch",pitch);pitch->release();}
+            }
+#endif
             nubAttached=nub->attach(parent);if(nubAttached)nubStarted=nub->start(parent);
             if(nubStarted) {
                 unsigned phase=0;PE_parse_boot_argn("offline-legacy-phase",&phase,sizeof(phase));
