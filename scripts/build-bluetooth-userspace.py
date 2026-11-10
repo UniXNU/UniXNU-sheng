@@ -28,10 +28,9 @@ subprocess.run([sys.executable,root/'scripts/stage-bluetooth-firmware.py',out,
                 '--source',args.firmware_source,'--fetch'],check=True)
 firmware=json.loads((out/'bluetooth-firmware.json').read_text())
 report=json.loads((userland/'report.json').read_text())
-# iPadOS: the kernel shows the two directories over /usr/sbin and /usr/lib. macOS: sbin is shown over /usr/sbin (the system's own
-# launchd jobs start the daemon and BlueTool there), and the library is installed in /Library/Apple/usr/lib of Data, a place the
-# daemon's sandbox lets it map libraries from.
-names=('sbin','Library/Apple/usr/lib') if args.target=='macos27' else ('bluetooth-bin','bluetooth-lib')
+# The kernel shows the two directories over /usr/sbin and /usr/lib: the system's own launchd jobs start the daemon and BlueTool
+# there, and the daemon loads the library from a place its sandbox lets it map code from.
+names=('sbin','lib') if args.target=='macos27' else ('bluetooth-bin','bluetooth-lib')
 report['directories']={names[0]:'userland/bin',names[1]:'userland/lib',
                        firmware['firmware_prefix']:firmware['firmware_prefix']}
 report['firmware']=firmware
