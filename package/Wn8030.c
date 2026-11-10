@@ -145,3 +145,50 @@ unsigned wn8030_touchpad_report(const uint8_t in[WN8030_TOUCHPAD_REPORT], uint8_
     }
     return lifted;
 }
+
+/* 3048 counts span 9.35 cm (828 per inch); half of that is a common pointer resolution, and 48 counts (1.5 mm) make one scroll step. */
+#define WN8030_POINTER_DIVIDE 2
+#define WN8030_SCROLL_COUNTS 48
+static int32_t pointer_take(int32_t *pending, int32_t unit, int32_t limit)
+{
+    int32_t steps = *pending / unit;
+    if (steps > limit) steps = limit;
+    if (steps < -limit) steps = -limit;
+    *pending -= steps * unit;
+    return steps;
+}
+unsigned wn8030_pointer_report(struct wn8030_pointer *state, const uint8_t touchpad[WN8030_TOUCHPAD_REPORT],
+                               uint8_t out[WN8030_POINTER_REPORT])
+{
+    uint32_t fingers = 0, contact = 0;
+    int32_t x = 0, y = 0;
+    for (uint32_t f = 0; f < WN8030_TOUCHPAD_FINGERS; ++f) {
+        const uint8_t *p = touchpad + 2 + 6 * f;
+        if (!(p[0] & 1u)) continue;
+        if (!fingers) contact = p[1];
+        x += (int32_t)((uint32_t)p[2] | (uint32_t)p[3] << 8);
+        y += (int32_t)((uint32_t)p[4] | (uint32_t)p[5] << 8);
+        ++fingers;
+    }
+    if (fingers) {x /= (int32_t)fingers; y /= (int32_t)fingers;}
+    /* A finger that came, went or changed places starts from where it is: no jump. */
+    if (fingers && fingers == state->fingers && (fingers > 1 || contact == state->contact)) {
+        const int32_t dx = x - state->x, dy = y - state->y;
+        if (fingers == 1) {state->move_x += dx; state->move_y += dy;}
+        else {state->scroll_x += dx; state->scroll_y -= dy;}   /* fingers moving up scroll up */
+    }
+    if (fingers != state->fingers) state->move_x = state->move_y = state->scroll_x = state->scroll_y = 0;
+    state->fingers = (uint8_t)fingers; state->contact = (uint8_t)contact; state->x = x; state->y = y;
+    uint8_t buttons = 0;
+    if (touchpad[1] & 1u) buttons |= fingers >= 2 ? 2u : 1u;
+    if (touchpad[1] & 2u) buttons |= 2u;
+    const int32_t mx = pointer_take(&state->move_x, WN8030_POINTER_DIVIDE, 32767), my = pointer_take(&state->move_y, WN8030_POINTER_DIVIDE, 32767);
+    const int32_t sy = pointer_take(&state->scroll_y, WN8030_SCROLL_COUNTS, 127), sx = pointer_take(&state->scroll_x, WN8030_SCROLL_COUNTS, 127);
+    if (!mx && !my && !sx && !sy && buttons == state->buttons) return 0;
+    state->buttons = buttons;
+    out[0] = WN8030_POINTER_ID; out[1] = buttons;
+    put_le16(out + 2, (uint16_t)(int16_t)mx); put_le16(out + 4, (uint16_t)(int16_t)my);
+    out[6] = (uint8_t)(int8_t)sy; out[7] = (uint8_t)(int8_t)sx;
+    return WN8030_POINTER_REPORT;
+}
+
