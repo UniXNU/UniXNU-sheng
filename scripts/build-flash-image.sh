@@ -2,7 +2,7 @@
 # Repackage a built session image's kernel into a boot.img for flashing to a boot partition and starting with the power key:
 #   scripts/build-flash-image.sh <flash-tag> <payload-int-NNN.json> [partition-bytes]
 #   - the same kernel and Data seed as that session image (nothing is rebuilt but the packages);
-#   - no sheng-autoreset: a flashed image must not restart itself into fastboot on a timer;
+#   - no autoreset: a flashed image must not restart itself into fastboot on a timer;
 #   - the payload FAT volume is 176 MiB instead of 192 MiB so the whole image fits a 192 MiB boot partition (a session image is 193 MiB and
 #     only boots through `fastboot boot`).
 # The image is checked against the partition size (asked of a tablet in fastboot, `fastboot getvar partition-size:boot_b`, or given in
@@ -23,9 +23,9 @@ tag,base=sys.argv[1:]
 text=open(base).read()
 old=re.search(r'cpu-desktop-([a-z]+-[0-9]+)-candidate',text).group(1)   # the kernel stays the session image's own
 c=json.loads(text)
-c=[a for a in c if not a.startswith(('--kernel-arg=sheng-autoreset=','--kernel-arg=sheng-build-tag='))]
-i=c.index('--kernel-arg=sheng-touch=4')
-c.insert(i+1,'--kernel-arg=sheng-build-tag='+tag)
+c=[a for a in c if not a.startswith(('--kernel-arg=autoreset=','--kernel-arg=build-tag='))]
+i=c.index('--kernel-arg=touch=4')
+c.insert(i+1,'--kernel-arg=build-tag='+tag)
 json.dump(c,open(f'build/session-image/payload-{tag}.json','w'),indent=1)
 print('kernel from',old)
 P

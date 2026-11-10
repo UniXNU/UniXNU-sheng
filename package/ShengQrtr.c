@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 /* The IPC router link to the audio DSP (GLINK channel "IPCRTR", which the DSP opens) and the service locator on it. The DSP's protection
  * domains (audio, charger, sensors) ask the application processor's locator which domains provide a service before they start; the
- * battery manager runs in the charger domain. Started with sheng-adsp=2. Everything runs in the DSP thread's callbacks: each packet is
+ * battery manager runs in the charger domain. Started with adsp=2. Everything runs in the DSP thread's callbacks: each packet is
  * handled at once and any answer is queued with sheng_adsp_send, so nothing here waits. */
 #include <stddef.h>
 #include <stdint.h>

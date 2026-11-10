@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Starts the battery power source (ShengBattery.cpp) whenever the audio DSP runs (sheng-adsp=2: the values come from the DSP's battery
-// manager); sheng-battery=0 leaves it off, sheng-battery=1 asks for it without the DSP argument. It registers that file's classes with the
+// Starts the battery power source (ShengBattery.cpp) whenever the audio DSP runs (adsp=2: the values come from the DSP's battery
+// manager); battery=0 leaves it off, battery=1 asks for it without the DSP argument. It registers that file's classes with the
 // kernel's module (its static initializer, which the build takes out of __mod_init_func), then creates the service, which is published
 // once the first refresh is complete.
 #include <IOKit/IOService.h>
@@ -16,7 +16,7 @@ extern "C" {volatile int32_t native_battery_stats[16];}
 
 extern "C" void sheng_battery_probe(void) {
     unsigned enabled = 0, adsp = 0;
-    if (!PE_parse_boot_argn("sheng-battery", &enabled, sizeof enabled)) enabled = PE_parse_boot_argn("sheng-adsp", &adsp, sizeof adsp) && adsp == 2;
+    if (!PE_parse_boot_argn("battery", &enabled, sizeof enabled)) enabled = PE_parse_boot_argn("adsp", &adsp, sizeof adsp) && adsp == 2;
     if (enabled != 1 || native_battery_stats[0]) return;
     void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
     if (!handle) {native_battery_stats[0] = -10; return;}

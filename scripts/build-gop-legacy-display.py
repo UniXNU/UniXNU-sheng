@@ -241,7 +241,7 @@ trace_source=ROOT/'kits/sheng/BootUiTraceProbe.c'
 trace_obj=OUT/'BootUiTraceProbe.o'
 trace_cmd=[str(trace_source) if arg==str(process_source) else str(trace_obj) if arg==str(process_obj) else arg for arg in process_cmd]
 run(trace_cmd,cwd=pr['directory'])
-# UFS diagnostic log writer (sheng-log=1) and the guarded fastboot reset (sheng-autoreset=<seconds>).
+# UFS diagnostic log writer (log=1) and the guarded fastboot reset (autoreset=<seconds>).
 log_source=ROOT/'kits/sheng/BootLog.c'
 log_obj=OUT/'BootLog.o'
 run([str(log_source) if arg==str(process_source) else str(log_obj) if arg==str(process_obj) else arg for arg in process_cmd]+['-I',str(ROOT/'kits/sheng')],cwd=pr['directory'])
@@ -262,11 +262,11 @@ wifinet_cpp=ROOT/'kits/sheng/WifiNet.cpp';wifinet_obj=touch_dir/'WifiNet.o';wifi
 import os
 nativewifi=Path(os.environ.get('ATH12K_WIFI_DIR') or os.environ.get('NATIVE_WIFI_DIR') or ROOT/'drivers/Ath12kWifi')
 require((nativewifi/'include/nw_abi.h').exists(),'Ath12kWifi module directory (set ATH12K_WIFI_DIR)')
-# The audio DSP bring-up (sheng-adsp): the driver and its protocol cores (firmware images, SMEM, SMP2P, GLINK, AOSS QMP, RPMh). The
+# The audio DSP bring-up (adsp): the driver and its protocol cores (firmware images, SMEM, SMP2P, GLINK, AOSS QMP, RPMh). The
 # firmware file reader is BSD code and is built with the boot progress archive; the FAT reader it uses for the firmware partition is here.
 adsp_cpp=ROOT/'kits/sheng/AdspProbe.cpp';adsp_obj=touch_dir/'AdspProbe.o'
 adsp_c=[ROOT/'kits/sheng'/(n+'.c') for n in ('QcomMdt','FatVolume','QcomQrtr','ShengQrtr','QcomSmem','QcomSmp2p','QcomGlink','QcomQmp','QcomRpmh','ShengBattmgr','ShengGpr','ShengAudioReach','ShengCs35l43','MhiBoot')]
-# Speaker playback (sheng-audio): amplifiers over I2C, then the speaker graphs on the audio DSP.
+# Speaker playback (audio): amplifiers over I2C, then the speaker graphs on the audio DSP.
 audio_cpp=ROOT/'kits/sheng/AudioProbe.cpp';audio_obj=touch_dir/'AudioProbe.o'
 buttons_cpp=ROOT/'kits/sheng/ButtonProbe.cpp';buttons_obj=touch_dir/'ButtonProbe.o'
 backlight_cpp=ROOT/'kits/sheng/BacklightProbe.cpp';backlight_obj=touch_dir/'BacklightProbe.o'
@@ -275,11 +275,11 @@ dpu_cpp=ROOT/'kits/sheng/DisplayTimingProbe.cpp';dpu_obj=touch_dir/'DisplayTimin
 # postModLoad, as the other late classes do.
 backlight_class_cpp=ROOT/'kits/sheng/AppleARMBacklight.cpp';backlight_class_obj=touch_dir/'AppleARMBacklight.o'
 backlight_class_late=touch_dir/'AppleARMBacklight.late.o'
-# The battery power source (sheng-battery, values from the audio DSP's battery manager): its class is staged the same way.
+# The battery power source (battery, values from the audio DSP's battery manager): its class is staged the same way.
 battery_cpp=ROOT/'kits/sheng/BatteryProbe.cpp';battery_obj=touch_dir/'BatteryProbe.o'
 battery_class_cpp=ROOT/'kits/sheng/ShengBattery.cpp';battery_class_obj=touch_dir/'ShengBattery.o'
 battery_class_late=touch_dir/'ShengBattery.late.o'
-# The audio service class the audio server plug-in opens (sheng-audio): staged the same way.
+# The audio service class the audio server plug-in opens (audio): staged the same way.
 audio_class_cpp=ROOT/'kits/sheng/ShengAudioService.cpp';audio_class_obj=touch_dir/'ShengAudioService.o'
 audio_class_late=touch_dir/'ShengAudioService.late.o'
 # The event-driven GENI I2C core the brightness service drives its two engines with.

@@ -23,8 +23,8 @@ c=[a for a in c if not (a.startswith('--kernel-arg=') and a.count('=')>=2 and a.
 # --data-ramdisk=PATH and --owner-trust-cache=PATH replace the template's Data seed and its original trust cache.
 if any(a.startswith('--owner-trust-cache=') for a in extra):c=[a for a in c if not a.startswith('--original-trust-cache=')]
 if any(a.startswith('--data-ramdisk=') for a in extra):c=[a for a in c if not a.startswith('--data-ramdisk=')]
-i=c.index('--kernel-arg=sheng-touch=4')
-c[i+1:i+1]=[f'--kernel-arg=sheng-build-tag={tag}']+extra
+i=c.index('--kernel-arg=touch=4')
+c[i+1:i+1]=[f'--kernel-arg=build-tag={tag}']+extra
 json.dump(c,open(f'build/session-image/payload-{tag}.json','w'),indent=1)
 P
 export PATH=/opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/lld/bin:$PATH

@@ -71,7 +71,7 @@ def audit_configuration(config, nodes, root_uuid, owned_memory, boot_progress=Fa
     require(entry['id'] == 'xnu' and entry['type'] == 'xnu' and entry['path'] == 'Payloads/kernel.macho'
             and entry['initrd'] == 'Payloads/scratch-data.img', 'Unexpected boot paths')
     args = entry['args'].split()
-    expected = ['-v','serial=3','debug=0x14e','kt_fixed_zones=120','sheng-pmgr=2','native-ufs-root=1','native-ufs-diagnostics=1']
+    expected = ['-v','serial=3','debug=0x14e','kt_fixed_zones=120','pmgr=2','native-ufs-root=1','native-ufs-diagnostics=1']
     if boot_progress:
         expected += ['boot-progress=1']
     if shared_data:

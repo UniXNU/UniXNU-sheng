@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Speaker playback on the sheng board (boot argument sheng-audio, bits: 1 serve, 2 play a test tone first, 4 bring up the microphone
-// path, 8 press the power button once at 150 s for the lock sound; needs sheng-adsp=2). One kernel thread brings the path up in order:
+// Speaker playback on the sheng board (boot argument audio, bits: 1 serve, 2 play a test tone first, 4 bring up the microphone
+// path, 8 press the power button once at 150 s for the lock sound; needs adsp=2). One kernel thread brings the path up in order:
 //   1  pass-through stream mapping in the apps SMMU for the DSP's audio streams, and the DSP's period buffers
 //   2  pins: secondary MI2S to the LPASS function, the two amplifier I2C buses, the shared amplifier reset (low 2 ms, then high)
 //   3  QUP clocks and the two GENI I2C engines (QUP1 SE5, QUP2 SE0) at 400 kHz from the 19.2 MHz DFS level
 //   4  the six CS35L43 amplifiers: identity and configuration (ShengCs35l43.c)
 //   5  the audio DSP: "adsp_apps" packet router channel, framework readiness, speaker device and playback stream graphs
 //      (ShengAudioReach.c), buffer mapping
-//   6  the audio service (ShengAudioService.cpp) that iOS's audio server plug-in opens; with sheng-audio=2 a 750 Hz test tone plays first
-//      for sheng-audio-tone-ms (default 1500), attenuated by sheng-audio-atten dB (default 30)
+//   6  the audio service (ShengAudioService.cpp) that iOS's audio server plug-in opens; with audio=2 a 750 Hz test tone plays first
+//      for audio-tone-ms (default 1500), attenuated by audio-atten dB (default 30)
 // Then the thread serves the plug-in: on start it powers the amplifiers up, prepares and starts both graphs and keeps four 10 ms
 // periods queued at the DSP, each copied from the shared playback ring (ShengAudioAbi.h) as the previous one returns; on stop it stops
 // the graphs and powers the amplifiers down. Once the microphone test passed, input requests start and stop the capture graphs the same
@@ -55,7 +55,7 @@ extern "C" {volatile int32_t native_audio_stats[16];}
 extern "C" {volatile int32_t native_audio_passed;}   // buffer answers command() passed on to handle()
 // Per amplifier: device id, revision, EINT1, EINT2 while playing.
 extern "C" {volatile uint32_t native_audio_amps[CS35_AMPS][4];}
-// The microphone path (sheng-audio bit 2, after the speaker graphs): [0] stage (positive progress, negative the step that failed), [1] last PRM
+// The microphone path (audio bit 2, after the speaker graphs): [0] stage (positive progress, negative the step that failed), [1] last PRM
 // status, [2] codec rail (bit 0 found, bit 1 voted), [3] TX SoundWire master version, [4] its link status, [5] device status register
 // (2 bits per device number), [6] device 1 id bytes 5..4 | 3..0 low word, [7] high word, [8] the codec's efuse register, [9] its chip
 // id registers, [10] TX macro MCLK control, [11] VA macro MCLK control, [12] master interrupt status, [13] component parameters,
@@ -300,13 +300,13 @@ bool setupSmmu() {
 
 // The DSP takes 32-bit buffer addresses (its client hands it 32-bit IOVAs; i491 to i495: a buffer above 4 GiB was refused with status 1),
 // and every page the kernel owns lies above 4 GiB. The buffer is 64 KiB of low DRAM the UEFI memory map leaves conventional and nothing
-// uses after boot (the gap 0xCCF80000 to 0xD8000000; sheng-audio-pa moves it), mapped write-combined (normal non-cacheable: memset and
+// uses after boot (the gap 0xCCF80000 to 0xD8000000; audio-pa moves it), mapped write-combined (normal non-cacheable: memset and
 // memcpy need normal memory). The DSP takes it as address | stream index << 32: index 1 of the audio streams (0x1001 & 0xf), as its
 // client sends it; i491 to i495 sent a 36-bit address, whose upper word the DSP read as stream 8 and refused with status 1.
 constexpr uint64_t kLowBuffer = 0xd0000000ULL;
 bool setupBuffer() {
     uint64_t pa = kLowBuffer;
-    PE_parse_boot_argn("sheng-audio-pa", &pa, sizeof pa);
+    PE_parse_boot_argn("audio-pa", &pa, sizeof pa);
     if ((pa & 0xfff) || pa + kBufferBytes > 0x100000000ULL || !mapRegion(pa, kBufferBytes, gAudio.low, kIOMapWriteCombineCache)) return false;
     gAudio.bufferPa = pa;
     gAudio.dspAddr = pa | 1ull << 32;
@@ -741,7 +741,7 @@ void playTone() {
     stage(57);
 }
 
-// sheng-audio bit 8: an unattended check of the iOS output path. At 150 s of uptime one synthetic power button press locks the screen,
+// audio bit 8: an unattended check of the iOS output path. At 150 s of uptime one synthetic power button press locks the screen,
 // and SpringBoard plays its lock sound through the audio server, the plug-in and this service; [audio-service] then counts the requests.
 extern "C" bool sheng_buttons_press(uint32_t mask, uint32_t ms) __attribute__((weak_import));
 void lockSoundThread(void *, wait_result_t) {
@@ -764,7 +764,7 @@ bool openGraphs() {
     return true;
 }
 
-// ---- the microphones (sheng-audio bit 2) ----
+// ---- the microphones (audio bit 2) ----
 // The codec (WCD938x) sits on the TX SoundWire master of the low power audio subsystem. Every LPASS register below (pins, VA and TX
 // macros, SoundWire) is unclocked until the DSP's PRM grants the macro and digital codec votes: they are touched only after those succeed.
 constexpr uint64_t kLpassTlmm = 0x06e80000ULL, kLpassSlew = 0x07250000ULL + 0xa000, kTxMacro = 0x06ae0000ULL, kVaMacro = 0x06d44000ULL,
@@ -856,7 +856,7 @@ bool swrRead(uint8_t dev, uint16_t reg, uint8_t *value) {
 }
 
 // The capture stream of one microphone (the board's "Mic1" route: AMIC3 on micbias 3 into ADC2, slave data port 1 channel 2, master
-// port 2, TX decimator 0 from SWR_MIC1, codec DMA TX3) for sheng-audio bit 2, run for about two seconds: [0] stage (positive progress,
+// port 2, TX decimator 0 from SWR_MIC1, codec DMA TX3) for audio bit 2, run for about two seconds: [0] stage (positive progress,
 // negative the failing step), [1] last DSP status, [2] periods asked, [3] periods returned, [4] bytes, [5] peak, [6] mean absolute value,
 // [7] non-zero samples
 extern "C" {volatile int32_t native_mic_capture[8];}
@@ -1080,7 +1080,7 @@ bool publishService() {
 }
 
 void audioThread(void *, wait_result_t) {
-    thread_set_thread_name(current_thread(), "sheng-audio");
+    thread_set_thread_name(current_thread(), "audio");
     const uint64_t start = nowMs();
     stage(10);
     if (!setupBuffer() || !setupShared()) {fail(10); return;}
@@ -1149,12 +1149,12 @@ extern "C" int sheng_audio_request(uint32_t selector) {
 
 extern "C" void sheng_audio_probe(void) {
     unsigned mode = 0;
-    if (!PE_parse_boot_argn("sheng-audio", &mode, sizeof mode) || !mode || mode > 15 || native_audio_stats[0]) return;
+    if (!PE_parse_boot_argn("audio", &mode, sizeof mode) || !mode || mode > 15 || native_audio_stats[0]) return;
     gAudio.mode = mode;
     gAudio.toneMs = (mode & 2) ? 1500 : 0;
     gAudio.atten = 30;
-    PE_parse_boot_argn("sheng-audio-tone-ms", &gAudio.toneMs, sizeof gAudio.toneMs);
-    PE_parse_boot_argn("sheng-audio-atten", &gAudio.atten, sizeof gAudio.atten);
+    PE_parse_boot_argn("audio-tone-ms", &gAudio.toneMs, sizeof gAudio.toneMs);
+    PE_parse_boot_argn("audio-atten", &gAudio.atten, sizeof gAudio.atten);
     native_audio_stats[0] = 1;
     if (!sheng_adsp_channel || !sheng_adsp_send) {fail(1); return;}
     gAudio.lock = IOLockAlloc();

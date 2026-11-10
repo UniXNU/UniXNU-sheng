@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Board glue for BootResetCore.h: PSCI feature probe, a read-only look at the PMIC arbiter and the reboot-reason cell, and the guarded
-// "restart into fastboot" (boot argument sheng-autoreset=<seconds>, see BootLog.c). Nothing here runs without BootLog's boot arguments.
+// "restart into fastboot" (boot argument autoreset=<seconds>, see BootLog.c). Nothing here runs without BootLog's boot arguments.
 #include <kern/thread.h>
 #include <machine/machine_routines.h>
 #include <string.h>

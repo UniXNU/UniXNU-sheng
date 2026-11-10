@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Power and volume buttons of the sheng board (boot argument sheng-buttons=1), sent as the Consumer Power, Volume Increment and Volume
+// Power and volume buttons of the sheng board (boot argument buttons=1), sent as the Consumer Power, Volume Increment and Volume
 // Decrement bits of the HID input device's report 2 (drivers/ShengHidInput).
 // The devicetree facts: power is the PMK8550 PON (SPMI SID 0, peripheral 0x13, interrupt 7 "pwrkey"), volume down its RESIN (interrupt 6),
 // volume up the PM8550 GPIO 6 (SID 1, peripheral 0x8d, active low with a pull-up, gpio-keys). All three are PMIC peripheral interrupts the
@@ -176,7 +176,7 @@ bool setup() {
 }
 
 void buttonsThread(void *, wait_result_t) {
-    thread_set_thread_name(current_thread(), "sheng-buttons");
+    thread_set_thread_name(current_thread(), "buttons");
     if (!setup()) return;
     uint32_t seen = gEvents, last = 0;
     for (;;) {
@@ -213,7 +213,7 @@ extern "C" bool sheng_buttons_press(uint32_t mask, uint32_t ms) {
 
 extern "C" void sheng_buttons_probe(void) {
     unsigned enabled = 0;
-    if (!PE_parse_boot_argn("sheng-buttons", &enabled, sizeof enabled) || enabled != 1 || native_buttons_stats[0]) return;
+    if (!PE_parse_boot_argn("buttons", &enabled, sizeof enabled) || enabled != 1 || native_buttons_stats[0]) return;
     native_buttons_stats[0] = 1;
     thread_t thread = nullptr;
     if (kernel_thread_start(buttonsThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);

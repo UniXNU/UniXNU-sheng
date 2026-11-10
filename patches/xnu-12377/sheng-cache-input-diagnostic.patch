@@ -7,7 +7,7 @@ index 98bcafe..85eeb24 100644
  	    get_saved_state_pc(ss), get_saved_state_lr(ss), get_saved_state_sp(ss), get_saved_state_fp(ss),
  	    get_saved_state_reg(ss, 0), get_saved_state_reg(ss, 1), get_saved_state_reg(ss, 2));
 +	uint32_t cache_trace = 0;
-+	PE_parse_boot_argn("sheng-cache-log", &cache_trace, sizeof(cache_trace));
++	PE_parse_boot_argn("cache-log", &cache_trace, sizeof(cache_trace));
 +	cache_trace = cache_trace && tag && !strcmp(tag, "launchd");
 +	uint64_t previous_return = 0;
  	uint64_t fp = get_saved_state_fp(ss);

@@ -59,7 +59,7 @@ while j < len(policy_args):
     j += 1
 policy_command += ['-mgeneral-regs-only', '-Wall', '-Wextra', '-Werror']
 subprocess.run(policy_command, cwd=policy_record['directory'], check=True, timeout=90)
-# The diagnostic file export (BootLog.c's sheng-diag-export) reads files through the VFS: the same BSD-side flags.
+# The diagnostic file export (BootLog.c's diag-export) reads files through the VFS: the same BSD-side flags.
 diag_source = ROOT / 'kits/sheng/BootDiagExport.c'
 diag_obj = OUT / 'BootDiagExport.o'
 diag_command = [str(diag_source) if arg == str(policy_source) else str(diag_obj) if arg == str(policy_obj) else arg for arg in policy_command]

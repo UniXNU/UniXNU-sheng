@@ -32,7 +32,7 @@ static void worker(void *, wait_result_t) {
             else {
                 qcom_dwc3_publish();
                 unsigned mode = 0;
-                PE_parse_boot_argn("sheng-usb", &mode, sizeof mode);
+                PE_parse_boot_argn("usb", &mode, sizeof mode);
                 if (mode == 2 || mode == 3) qcom_dwc3_diag(mode == 3);
             }
         }
@@ -41,7 +41,7 @@ static void worker(void *, wait_result_t) {
 }
 extern "C" void sheng_usb_probe(void) {
     unsigned enabled = 0;
-    if (!PE_parse_boot_argn("sheng-usb", &enabled, sizeof enabled) || !enabled) return;
+    if (!PE_parse_boot_argn("usb", &enabled, sizeof enabled) || !enabled) return;
     thread_t thread = nullptr;
     if (kernel_thread_start(worker, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }

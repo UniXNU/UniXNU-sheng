@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// The sheng keyboard cover (boot argument sheng-keyboard=1): keyboard and touchpad behind the Nanosic WN8030 controller (Wn8030.h) on
+// The sheng keyboard cover (boot argument keyboard=1): keyboard and touchpad behind the Nanosic WN8030 controller (Wn8030.h) on
 // I2C9 (QUP2 SE1, 0x884000, client 0x4c). The devicetree facts: interrupt GPIO 62 (rising edge), reset GPIO 58 and sleep GPIO 57 (both
 // active low), status GPIO 56, I2C on GPIO 60/61 (qup2_se1, no pull), supplies vreg_l12b_1p8 (vddio) and vreg_l13b_3p3 (dvdd), the lid
 // and tablet-mode hall sensors on GPIO 171 and 172 (active low, pull-up). One kernel thread brings it up in order:
 //   1  pins: reset and sleep held low, I2C function, inputs
 //   2  supplies through active TCS 2 of the apps RSC (shared with the microphone and USB rails, under AppsSmmuLock)
-//   3  QUP2 clocks (core, AHB, SE1) and the GENI I2C engine from the 19.2 MHz DFS level (sheng-keyboard-khz, default 1000: a frame read
+//   3  QUP2 clocks (core, AHB, SE1) and the GENI I2C engine from the 19.2 MHz DFS level (keyboard-khz, default 1000: a frame read
 //      must not hold the bus long, or the controller merges touch frames)
 //   4  the engine interrupt (SPI 583) and the TLMM summary interrupt (SPI 208, shared) for GPIO 62, 171 and 172
 //   5  controller power-on: reset released, 20 ms, sleep released; boot ROM id 0xc8 in state 0
@@ -558,7 +558,7 @@ void serve() {
 }
 
 void keyboardThread(void *, wait_result_t) {
-    thread_set_thread_name(current_thread(), "sheng-keyboard");
+    thread_set_thread_name(current_thread(), "keyboard");
     Keyboard *kb = gKb;
     stage(1);
     if (!setupPins()) return;
@@ -586,15 +586,15 @@ void keyboardThread(void *, wait_result_t) {
 
 extern "C" void sheng_keyboard_probe(void) {
     unsigned enabled = 0;
-    if (!PE_parse_boot_argn("sheng-keyboard", &enabled, sizeof enabled) || enabled != 1 || gKb) return;
+    if (!PE_parse_boot_argn("keyboard", &enabled, sizeof enabled) || enabled != 1 || gKb) return;
     Keyboard *kb = static_cast<Keyboard *>(IOMallocType(Keyboard));
     if (!kb) {fail(8, -12); return;}
     bzero(kb, sizeof *kb);
     kb->busLock = IOSimpleLockAlloc();
     if (!kb->busLock) {IOFreeType(kb, Keyboard); fail(8, -12); return;}
     unsigned khz = 1000, backlight = 0;
-    PE_parse_boot_argn("sheng-keyboard-khz", &khz, sizeof khz);
-    PE_parse_boot_argn("sheng-keyboard-backlight", &backlight, sizeof backlight);
+    PE_parse_boot_argn("keyboard-khz", &khz, sizeof khz);
+    PE_parse_boot_argn("keyboard-backlight", &backlight, sizeof backlight);
     kb->khz = khz == 100 || khz == 400 ? khz : 1000;
     kb->backlight = static_cast<uint8_t>(backlight > WN8030_BACKLIGHT_MAX ? WN8030_BACKLIGHT_MAX : backlight);
     gKb = kb;

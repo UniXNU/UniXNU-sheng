@@ -7,10 +7,10 @@ index 87ca424..2156540 100644
  #if DEVELOPMENT || DEBUG
  	native_apfs_load_probe();
 +	{
-+		/* With sheng-log=1, let the UFS log writer start first, so a failure in the display path below is logged. */
++		/* With log=1, let the UFS log writer start first, so a failure in the display path below is logged. */
 +		extern volatile uint32_t boot_log_rounds __attribute__((weak_import));
 +		int log = 0;
-+		if (&boot_log_rounds && PE_parse_boot_argn("sheng-log", &log, sizeof(log)) && log == 1) {
++		if (&boot_log_rounds && PE_parse_boot_argn("log", &log, sizeof(log)) && log == 1) {
 +			for (int waited = 0; waited < 300 && !boot_log_rounds; waited++) {
 +				IOSleep(100);
 +			}
@@ -1354,7 +1354,7 @@ index 29d7dbe..af797d0 100644
 +#ifdef MACH_BSD
 +extern int proc_pid(struct proc *);
 +#endif
-+/* The last four user exceptions of the processes sheng-exc-name lists, for the board's boot log (the message buffer wraps). */
++/* The last four user exceptions of the processes exc-name lists, for the board's boot log (the message buffer wraps). */
 +struct sheng_exc_record {char name[20]; uint32_t pid, type, esr, frames; uint64_t pc, lr, far, ret[12];};
 +struct sheng_exc_record sheng_exc_ring[4];
 +volatile uint32_t sheng_exc_count;
@@ -1366,9 +1366,9 @@ index 29d7dbe..af797d0 100644
  		maybe_unrecoverable_exception_triage(exception, code);
  	}
 +#ifdef MACH_BSD
-+	/* Processes whose exceptions are dumped: launchd, plus the comma-separated names in sheng-exc-name. */
++	/* Processes whose exceptions are dumped: launchd, plus the comma-separated names in exc-name. */
 +	char sheng_exc_names[96] = "backboardd,chronod,liveactivitiesd";
-+	PE_parse_boot_argn("sheng-exc-name", sheng_exc_names, sizeof(sheng_exc_names));
++	PE_parse_boot_argn("exc-name", sheng_exc_names, sizeof(sheng_exc_names));
 +	bool sheng_exc_match = false;
 +	if (get_bsdtask_info(task)) {
 +		const char *name = proc_best_name(get_bsdtask_info(task));

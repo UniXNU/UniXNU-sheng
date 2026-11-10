@@ -11,7 +11,7 @@ cd "$U"
 export ATH12K_WIFI_DIR=${ATH12K_WIFI_DIR:-$SERIES/wt/NativeWifi}
 build_kernel=1
 if [ "${1:-}" = --no-kernel ]; then build_kernel=0; shift; fi
-args=(--kernel-arg sheng-log=1 --kernel-arg sheng-autoreset=${AUTORESET:-120})
+args=(--kernel-arg log=1 --kernel-arg autoreset=${AUTORESET:-120})
 # UFS_DIAG_OFF=1 drops native-ufs-diagnostics=1 (23 bytes) when the command line is tight.
 [ -n "${UFS_DIAG_OFF:-}" ] || args+=(--kernel-arg native-ufs-diagnostics=1)
 for a in "$@"; do args+=(--kernel-arg "$a"); done
@@ -45,7 +45,7 @@ PY
 )
 if [ ${#cmdline} -gt "${CMDLINE_MAX:-700}" ]; then echo "kernel arguments from this script are ${#cmdline} bytes (limit ${CMDLINE_MAX:-700}): shorten them"; exit 1; fi
 # ADDON: an NGPUADD2 addon (e.g. the audio plug-in); TRUST: a trust bundle that also carries its CDHashes.
-[ -n "${ADDON:-}" ] && args+=(--gpu-addon "$ADDON" --kernel-arg sheng-gpu-addon=1)
+[ -n "${ADDON:-}" ] && args+=(--gpu-addon "$ADDON" --kernel-arg gpu-addon=1)
 ./unixnu payload -D ../UniXNU-sheng --uefi ../uefi-sheng --kernel $K/kernel.macho --trust-cache ${TRUST:-$K/ipsw-trust.bundle} \
   "${args[@]}" --unique-chip-id b714917c >> "$LOG" 2>&1 || { echo "payload failed: $LOG"; tail -5 "$LOG"; exit 1; }
 want=$(shasum -a 256 $K/kernel.macho | cut -c1-64)

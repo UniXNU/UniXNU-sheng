@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Boots a test image, waits for the tablet to restart into fastboot by itself (the image's sheng-autoreset=<seconds> path), then boots the
+# Boots a test image, waits for the tablet to restart into fastboot by itself (the image's autoreset=<seconds> path), then boots the
 # Linux log reader and fetches the log. If the tablet does not come back within the limit it says so and waits for a manual fastboot entry.
 # usage: [SERIAL=<serial>] [READER=<log-reader.img>] run-sheng-unattended.sh IMAGE [wait_seconds=420]
 set -uo pipefail

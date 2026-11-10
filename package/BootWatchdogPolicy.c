@@ -16,9 +16,9 @@ static const char policy_head[] =
 static const char policy_watchdogd[]="<key>com.apple.watchdogd</key><true/>";
 // Bring-up isolation: hardware stacks show identityservicesd, contextstored and locationd in a
 // cycle of synchronous XPC waits. A disabled job makes its Mach service lookups fail instead of hang.
-// sheng-disable-jobs=<label>[,<label>...] (restricted label characters, bounded length).
+// disable-jobs=<label>[,<label>...] (restricted label characters, bounded length).
 static const char policy_tail[]="</dict></plist>\n";
-// sheng-lite=1: jobs that only reach for the network, iCloud or the photo library and have nothing to do on this tablet (no radios, no accounts),
+// lite=1: jobs that only reach for the network, iCloud or the photo library and have nothing to do on this tablet (no radios, no accounts),
 // all of which start at the first boot of a fresh Data and compete with SpringBoard for the CPU and for memory. The first three are the
 // cycle of synchronous XPC waits the isolation work found. Labels are the ones in the target's own LaunchDaemons.
 static const char lite_jobs[]=
@@ -41,11 +41,11 @@ static const char lite_jobs[]=
 // it held a GPU client and wrote denied trace files every 5 s). The scheduler hygiene checks of a development kernel trace instead
 // of panicking, as a shipping (release) kernel has none: an interrupts-off window of 786 us in a work queue thread's priority change
 // panicked the board (untagged-203fd45bf).
-char PE_builtin_boot_args[]="owner-staged-apps=1 owner-dataprotect=1 sheng-disable-jobs=com.apple.cameracaptured sched_preemption_disable_debug_mode=1 interrupt-masked-debug-mode=1";
+char PE_builtin_boot_args[]="owner-staged-apps=1 owner-dataprotect=1 disable-jobs=com.apple.cameracaptured sched_preemption_disable_debug_mode=1 interrupt-masked-debug-mode=1";
 static char policy[2048],jobs[200];
 volatile int sheng_watchdog_policy_status=-1;
 
-// sheng-setup=1 or sheng-data-reset=2 (the install entry's "show Hello" choice): remove Setup's completion flags once, so this boot shows the Hello page.
+// setup=1 or data-reset=2 (the install entry's "show Hello" choice): remove Setup's completion flags once, so this boot shows the Hello page.
 // iPadOS writes them again when Setup finishes, so later boots do not show it. Absent files are fine.
 static int sheng_boot_setup_reset(proc_t p,uint64_t scratch) {
  static const char *const files[]={
@@ -77,14 +77,14 @@ static int append_job(const char **cursor) {
 int sheng_boot_watchdog_policy(void *process, uint64_t scratch) {
  proc_t p=process;
  int enabled=0,error=0,fd=-1;int32_t result=0;
- PE_parse_boot_argn("sheng-disable-watchdogd",&enabled,sizeof(enabled));
- if(!PE_parse_boot_argn("sheng-disable-jobs",jobs,sizeof(jobs)))jobs[0]=0;jobs[sizeof(jobs)-1]=0;
- int lite=0;PE_parse_boot_argn("sheng-lite",&lite,sizeof(lite));if(lite!=1 && lite!=2)lite=0;
+ PE_parse_boot_argn("disable-watchdogd",&enabled,sizeof(enabled));
+ if(!PE_parse_boot_argn("disable-jobs",jobs,sizeof(jobs)))jobs[0]=0;jobs[sizeof(jobs)-1]=0;
+ int lite=0;PE_parse_boot_argn("lite",&lite,sizeof(lite));if(lite!=1 && lite!=2)lite=0;
  if(enabled!=1)enabled=0;
  for(const char *c=jobs;*c;++c)if(!((*c>='a'&&*c<='z')||(*c>='A'&&*c<='Z')||(*c>='0'&&*c<='9')||*c=='.'||*c=='-'||*c==','))return EINVAL;
  int setup=0,reset=0;
- PE_parse_boot_argn("sheng-setup",&setup,sizeof(setup));
- PE_parse_boot_argn("sheng-data-reset",&reset,sizeof(reset));   // 2 = erase Data and show the Hello page; 1 = erase Data, Setup stays skipped
+ PE_parse_boot_argn("setup",&setup,sizeof(setup));
+ PE_parse_boot_argn("data-reset",&reset,sizeof(reset));   // 2 = erase Data and show the Hello page; 1 = erase Data, Setup stays skipped
  if(reset==2)setup=1;
  if(setup==1 && (error=sheng_boot_setup_reset(p,scratch))) {
   sheng_watchdog_policy_status=error;

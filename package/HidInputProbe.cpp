@@ -228,8 +228,8 @@ void native_hid_input_probe(void) {
                     }
                     unsigned touchHid=0;
                     unsigned split=0;
-                    PE_parse_boot_argn("sheng-touch-split",&split,sizeof(split));
-                    if(started && split==1 && PE_parse_boot_argn("sheng-touch-hid",&touchHid,sizeof(touchHid)) && touchHid==1) {
+                    PE_parse_boot_argn("touch-split",&split,sizeof(split));
+                    if(started && split==1 && PE_parse_boot_argn("touch-hid",&touchHid,sizeof(touchHid)) && touchHid==1) {
                         // Separate digitizer service (primary usage Digitizer/Touch Screen, Built-In).
                         IOService *touch=native_hid_touch_allocate();
                         bool touchStarted=touch && touch->metaCast("IOHIDDevice") && touch->init() && touch->attach(resource) && touch->start(resource);

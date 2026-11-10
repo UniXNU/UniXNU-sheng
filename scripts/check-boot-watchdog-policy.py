@@ -33,7 +33,7 @@ struct unlink_args {user_addr_t path;};struct fsync_args {int fd;};struct fstat6
 static char jobs[200];static int enabled,calls,opens,closes,md_error,open_error,short_write,chown_error,bad_owner,close_error,marker_exists;
 static unsigned char written_data[3072];static size_t written_size;
 static int setup_arg,reset_arg,lite_arg,unlink_error,unlinks;static char unlinked[2][128];
-static int PE_parse_boot_argn(const char *key,void *out,int n){if(!strcmp(key,"sheng-lite")){assert(n==4);memcpy(out,&lite_arg,4);return lite_arg!=0;}if(!strcmp(key,"sheng-setup")){assert(n==4);memcpy(out,&setup_arg,4);return setup_arg!=0;}if(!strcmp(key,"sheng-data-reset")){assert(n==4);memcpy(out,&reset_arg,4);return reset_arg!=0;}if(!strcmp(key,"sheng-disable-jobs")){assert(n==200);memcpy(out,jobs,200);return jobs[0]!=0;}assert(!strcmp(key,"sheng-disable-watchdogd")&&n==4);memcpy(out,&enabled,4);return enabled!=0;}
+static int PE_parse_boot_argn(const char *key,void *out,int n){if(!strcmp(key,"lite")){assert(n==4);memcpy(out,&lite_arg,4);return lite_arg!=0;}if(!strcmp(key,"setup")){assert(n==4);memcpy(out,&setup_arg,4);return setup_arg!=0;}if(!strcmp(key,"data-reset")){assert(n==4);memcpy(out,&reset_arg,4);return reset_arg!=0;}if(!strcmp(key,"disable-jobs")){assert(n==200);memcpy(out,jobs,200);return jobs[0]!=0;}assert(!strcmp(key,"disable-watchdogd")&&n==4);memcpy(out,&enabled,4);return enabled!=0;}
 static int copyout(const void *s,uintptr_t d,size_t n){++calls;memcpy((void *)d,s,n);return 0;}
 static int copyin(uintptr_t s,void *d,size_t n){++calls;memcpy(d,(void *)s,n);return 0;}
 static int k_unlink(proc_t p,struct unlink_args *a,int32_t *r){(void)p;(void)r;++calls;assert(unlinks<2);strcpy(unlinked[unlinks++],(char*)a->path);return unlink_error;}
@@ -66,7 +66,7 @@ int main(void){
  reset();bad_owner=1;assert(run()==EINVAL&&closes==1&&opens==1);
  reset();close_error=EIO;assert(run()==EIO&&closes==1&&opens==1);
  reset();marker_exists=1;assert(!run()&&opens==2&&closes==1);
- /* sheng-lite=1 adds the built-in jobs, with or without other options. */
+ /* lite=1 adds the built-in jobs, with or without other options. */
  reset();enabled=0;lite_arg=1;assert(!run()&&strstr((char*)written_data,"<key>com.apple.photoanalysisd</key><true/>")&&strstr((char*)written_data,"<key>com.apple.identityservicesd</key><true/>")&&!strstr((char*)written_data,"watchdogd")&&written_size<sizeof(written_data));
  reset();lite_arg=1;strcpy(jobs,"com.apple.locationd");assert(!run()&&strstr((char*)written_data,"watchdogd")&&strstr((char*)written_data,"com.apple.eyereliefd"));
  /* Compare the complete sch3 and sch4 policy bytes, including the default camera job. */
@@ -78,7 +78,7 @@ int main(void){
  memmove(key,key+strlen(extra),strlen(key+strlen(extra))+1);
  assert(!strcmp(baseline,(char*)written_data) && !strstr(baseline,extra));
  reset();enabled=0;lite_arg=3;assert(!run()&&!opens);
- /* sheng-setup=1 removes Setup's completion flags (both files) before the policy, and works without any other option. */
+ /* setup=1 removes Setup's completion flags (both files) before the policy, and works without any other option. */
  reset();enabled=0;setup_arg=1;assert(!run()&&unlinks==2&&!strcmp(unlinked[0],"/private/var/mobile/Library/Preferences/com.apple.purplebuddy.plist")&&!strcmp(unlinked[1],"/private/var/mobile/Library/Preferences/com.apple.purplebuddy.notbackedup.plist")&&!opens);
  reset();setup_arg=1;assert(!run()&&unlinks==2&&opens==2);
  reset();setup_arg=1;unlink_error=ENOENT;assert(!run()&&unlinks==2);   /* already absent is fine */

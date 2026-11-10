@@ -63,7 +63,7 @@
 "dram_size" = "0x80000000"
 "skip_setup_tool" = "scripts/seed-data-skip-setup.py"
 "panic_screen" = true
-"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "offline-key-events=1", "sheng-aks=1", "sheng-aks-sls=3", "offline-hid-input=1", "offline-hid-home=1", "sheng-touch=4", "sheng-touch-hid=1", "sheng-buttons=1", "sheng-keyboard=1", "sheng-log=1", "sheng-smp=1", "armcpu-spi-ipi=1", "armcpu-self-ipi=1", "sheng-data-persist=2", "sheng-adsp=2", "sheng-audio=12", "sheng-wifi=5", "sheng-bluetooth=1", "sheng-backlight=1", "sheng-cpufreq=4", "sheng-gpu-power=9", "sheng-gpu-metal=1", "sheng-fb-gpu=1", "sheng-fb-bgra=1", "sheng-dpu-scanout=2", "sheng-no-lc=1", "sheng-vsync=120", "sheng-vsync-fixed=1", "sheng-gpu-dcvs=1", "sheng-disable-watchdogd=1", "sheng-lite=1", "sheng-gpu-addon=1", "sheng-usb=1", "appsync=1"]
+"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "offline-key-events=1", "aks=1", "aks-sls=3", "offline-hid-input=1", "offline-hid-home=1", "touch=4", "touch-hid=1", "buttons=1", "keyboard=1", "log=1", "smp=1", "armcpu-spi-ipi=1", "armcpu-self-ipi=1", "data-persist=2", "adsp=2", "audio=12", "wifi=5", "bluetooth=1", "backlight=1", "cpufreq=4", "gpu-power=9", "gpu-metal=1", "fb-gpu=1", "fb-bgra=1", "dpu-scanout=2", "no-lc=1", "vsync=120", "vsync-fixed=1", "gpu-dcvs=1", "disable-watchdogd=1", "lite=1", "gpu-addon=1", "usb=1", "appsync=1"]
 
 [payload.runtime]
 tool = "scripts/build-boot-runtime.py"
@@ -92,7 +92,7 @@ CI_ENABLE_METAL_GPU = "0"
 "title" = "Install and boot"
 "confirm" = "ERASE all iPadOS user data and install again?"
 "confirm_titles" = ["Erase Data, skip Hello, boot", "Erase Data, show Hello, boot"]
-"confirm_args" = ["sheng-data-reset=1", "sheng-data-reset=2"]
+"confirm_args" = ["data-reset=1", "data-reset=2"]
 
 ["payload"."adt"]
 "chip_id" = "8142"
@@ -180,7 +180,7 @@ CI_ENABLE_METAL_GPU = "0"
 "patch_series" = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu/series"]
 
 ["os_overrides"."ipados-17.7.11-21H461"."payload"]
-"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-hid-home=1", "offline-hid-input=1", "offline-legacy-phase=4", "offline-mobile-graphics-client=1", "offline-mobile-graphics-load=1", "offline-apfs-load=1", "boot-progress=2", "-apfs_shared_datavolume", "offline-key-events=1", "native-ufs-root=1", "sheng-pmgr=2", "sheng-disable-watchdogd=1", "sheng-lite=1", "boot-ui-focus4=SpringBoard", "sheng-smp=1", "sheng-cpufreq=4", "sheng-touch=4", "sheng-aks=1", "sheng-gpu-power=9", "sheng-gpu-metal=1", "sheng-fb-gpu=1", "sheng-banner=0", "sheng-gpu-dcvs=1", "sheng-gpu-addon=1", "armcpu-spi-ipi=1", "-no_slto_panic", "ml-timeout-lock-panic-scale=40", "sheng-touch-hid=1", "sheng-data-persist=2", "sheng-staged-apps=1", "sheng-buttons=1", "sheng-backlight=1", "sheng-wifi=5", "sheng-vsync=120"]
+"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-hid-home=1", "offline-hid-input=1", "offline-legacy-phase=4", "offline-mobile-graphics-client=1", "offline-mobile-graphics-load=1", "offline-apfs-load=1", "boot-progress=2", "-apfs_shared_datavolume", "offline-key-events=1", "native-ufs-root=1", "pmgr=2", "disable-watchdogd=1", "lite=1", "boot-ui-focus4=SpringBoard", "smp=1", "cpufreq=4", "touch=4", "aks=1", "gpu-power=9", "gpu-metal=1", "fb-gpu=1", "banner=0", "gpu-dcvs=1", "gpu-addon=1", "armcpu-spi-ipi=1", "-no_slto_panic", "ml-timeout-lock-panic-scale=40", "touch-hid=1", "data-persist=2", "staged-apps=1", "buttons=1", "backlight=1", "wifi=5", "vsync=120"]
 "size_mib" = 208
 
 ["os_overrides"."ipados-17.7.11-21H461"."payload"."adt"]

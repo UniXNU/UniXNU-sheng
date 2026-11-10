@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Default-off CPU frequency control for the SM8550 EPSS frequency domains and the EPSS L3. `sheng-cpufreq=<n>`:
+// Default-off CPU frequency control for the SM8550 EPSS frequency domains and the EPSS L3. `cpufreq=<n>`:
 //   1  read-only: report each domain's enable bit, current/requested level and its highest LUT entry
 //   2  additionally request that highest non-turbo level in domain 0 (the boot CPU's cluster)
 //   3  the same in every domain once it reads enabled, and the highest L3 level
 //   4  mode 3's L3 vote, and a governor for the domains (below)
-// Optional `sheng-cpufreq-cap=<MHz>`: mode 3 requests the highest non-turbo level at or below it (domains and L3).
+// Optional `cpufreq-cap=<MHz>`: mode 3 requests the highest non-turbo level at or below it (domains and L3).
 // Register layout is the qcom-cpufreq-hw "epss" data of the pinned mainline tree (reg_enable 0x0, reg_domain_state 0x20,
 // reg_dcvs_ctrl 0xb0, reg_freq_lut 0x100 with 4-byte rows, reg_perf_state 0x320, per-core perf_state rows +4*i for the
 // policy's other CPUs when dcvs_ctrl bit 0 is set); the three domain windows come from the cpufreq@17d91000 node of
@@ -18,15 +18,15 @@
 // Mode 4's governor runs every 16 ms: a CPU's busy share is 1 - its idle time over the window (sheng_cpu_idle_mach, a kernel helper
 // over recount), a domain's the share of its busiest CPU. The domain gets the lowest LUT level at or above 1.25 x busy x its current
 // frequency (schedutil's margin), the highest allowed level once a CPU is 90 % busy (a hispeed jump); it goes up at once and down only
-// after 4 windows in a row that asked for less. Levels stay between `sheng-cpufreq-min=<MHz>` (default 0) and mode 3's highest
+// after 4 windows in a row that asked for less. Levels stay between `cpufreq-min=<MHz>` (default 0) and mode 3's highest
 // non-turbo level (or the cap). The XNU CPU numbers follow the DTS cpu order: cpus 0-2 are the A510 cores (domain 0, the E cluster),
 // cpus 3-6 the A715/A710 cores (domain 1), cpu 7 the X3 (domain 2).
 // Touch boost: when the touch report count moves, the P domains (1, 2) hold their highest allowed level until
-// `sheng-cpufreq-boost-ms=<ms>` (default 1000, 0 = off) after the last report, so an app launch or a scroll starts at full speed
+// `cpufreq-boost-ms=<ms>` (default 1000, 0 = off) after the last report, so an app launch or a scroll starts at full speed
 // instead of ramping by 1.25x per window. Outside a boost the P domains stop at the lowest level at or above half their highest
 // one, and go lower only after 12 windows in a row under 10 % busy.
 // Frame floor: GPU submits (NativeAdreno's submit count) in 2 of the last 4 windows keep every domain at or above
-// `sheng-cpufreq-frame-pct=<n>` (default 60) % of its highest level for `sheng-cpufreq-frame-ms=<ms>` (default 300, 0 = off), the E
+// `cpufreq-frame-pct=<n>` (default 60) % of its highest level for `cpufreq-frame-ms=<ms>` (default 300, 0 = off), the E
 // domain included: the render server also runs on the A510 cores (i566 profile: 23 % of backboardd's samples on cpus 0-2) and they
 // sat at 307 MHz. i565 held the P domains at the top during frames and counted a domain's busy share as the sum of its CPUs: d1 then
 // never left 2803 MHz (99 % busy), so both are gone; a touch still holds the P domains at the top.
@@ -337,13 +337,13 @@ extern "C" void sheng_cpufreq_poll(void) {
 
 extern "C" void sheng_cpufreq_probe(void) {
     unsigned mode = 0, capMHz = 0, minMHz = 0, boostMs = 1000, frameMs = 300, framePct = 60;
-    PE_parse_boot_argn("sheng-cpufreq", &mode, sizeof(mode));
-    PE_parse_boot_argn("sheng-cpufreq-cap", &capMHz, sizeof(capMHz));
-    PE_parse_boot_argn("sheng-cpufreq-min", &minMHz, sizeof(minMHz));
-    PE_parse_boot_argn("sheng-cpufreq-boost-ms", &boostMs, sizeof(boostMs));
-    PE_parse_boot_argn("sheng-cpufreq-frame-ms", &frameMs, sizeof(frameMs));
+    PE_parse_boot_argn("cpufreq", &mode, sizeof(mode));
+    PE_parse_boot_argn("cpufreq-cap", &capMHz, sizeof(capMHz));
+    PE_parse_boot_argn("cpufreq-min", &minMHz, sizeof(minMHz));
+    PE_parse_boot_argn("cpufreq-boost-ms", &boostMs, sizeof(boostMs));
+    PE_parse_boot_argn("cpufreq-frame-ms", &frameMs, sizeof(frameMs));
     gBoostMs = boostMs;
-    PE_parse_boot_argn("sheng-cpufreq-frame-pct", &framePct, sizeof(framePct));
+    PE_parse_boot_argn("cpufreq-frame-pct", &framePct, sizeof(framePct));
     gFrameMs = frameMs;
     gFramePct = framePct > 100 ? 100 : framePct;
     gFloorKHz = minMHz * 1000;

@@ -18,7 +18,7 @@ volatile uint64_t native_keyevents_service;
 void native_keyevents_open_refused(void) {
     native_keyevents_refused_opens = native_keyevents_refused_opens + 1;
 }
-// sheng-aks=1: the owned AppleKeyStore answers the state queries (no passcode, nothing locked); counters feed the diagnostic
+// aks=1: the owned AppleKeyStore answers the state queries (no passcode, nothing locked); counters feed the diagnostic
 // page's extension rows (slots 0-1): opens/calls, then selector:count per selector seen ('e' = the last answer was an error).
 extern char boot_progress_ext[8][48];
 volatile uint32_t native_aks_opens, native_aks_calls;
@@ -28,16 +28,16 @@ bool native_aks_state_enabled(void) {
     static int cached = -1;
     if (cached < 0) {
         unsigned value = 0;
-        cached = PE_parse_boot_argn("sheng-aks", &value, sizeof(value)) && value == 1;
+        cached = PE_parse_boot_argn("aks", &value, sizeof(value)) && value == 1;
     }
     return cached == 1;
 }
-// sheng-aks-sls=<n> overrides the reported lock state (default 0 = unlocked; 3 = MobileKeyBag's "no passcode").
+// aks-sls=<n> overrides the reported lock state (default 0 = unlocked; 3 = MobileKeyBag's "no passcode").
 uint32_t native_aks_lock_state(void) {
     static int cached = -1;
     if (cached < 0) {
         unsigned value = 0;
-        if (!PE_parse_boot_argn("sheng-aks-sls", &value, sizeof(value)) || value > 7) value = 0;
+        if (!PE_parse_boot_argn("aks-sls", &value, sizeof(value)) || value > 7) value = 0;
         cached = (int)value;
     }
     return (uint32_t)cached;
@@ -102,7 +102,7 @@ static void native_keyevents_probe(void) {
     if (data && data->getLength() == sizeof(ephemeral))
         memcpy(&ephemeral, data->getBytesNoCopy(), sizeof(ephemeral));
     OSSafeReleaseNULL(chosen);
-    // A persistent Data store (no ephemeral-storage) still has no SEP: sheng-aks keeps the owned service for it.
+    // A persistent Data store (no ephemeral-storage) still has no SEP: aks keeps the owned service for it.
     if ((ephemeral != 1 && !native_aks_state_enabled()) || original) return;
     const OSSymbol *name = OSSymbol::withCString("AppleKeyStore");
     bool absent = name && !OSMetaClass::getMetaClassWithName(name);

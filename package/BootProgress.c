@@ -262,7 +262,7 @@ static void draw(unsigned now) {
           visible->reason == 1 ? "STOP: NO STAGE / IO ACTIVITY FOR 30s - diagnostic snapshot" :
           visible->reason == 2 ? "STOP: 120s OBSERVATION LIMIT - activity does not prove forward progress" :
           "UniXNU boot diagnostics - live XNU - native 4K - no automatic reboot";
-  // Session/build label from the sheng-build-tag boot argument (e.g. ks-001, gpu-003), so a photograph says which image it is.
+  // Session/build label from the build-tag boot argument (e.g. ks-001, gpu-003), so a photograph says which image it is.
   if(build_tag[0]) snprintf(b,sizeof(b)," [%s] %s",build_tag,title); else snprintf(b,sizeof(b)," %s",title);
   bar(0, b, 0xffffffff, visible->reason && !visible->continuous ? BP_BAR_STOP : BP_BAR_LIVE);
   snprintf(b,sizeof(b),"time=%us idle=%us IRQ=%llu monitor=%llu lost=%u root=%d procs=%d free=%u",
@@ -578,7 +578,7 @@ void boot_progress_init(void) {
   if (!boot_progress_frequency) return;
   boot_progress_epoch=ticks(); state.limit=120; state.stall=30;
   state.continuous=opt==2; enabled=opt;
-  PE_parse_boot_argn("sheng-build-tag",build_tag,sizeof(build_tag));build_tag[sizeof(build_tag)-1]=0;
+  PE_parse_boot_argn("build-tag",build_tag,sizeof(build_tag));build_tag[sizeof(build_tag)-1]=0;
   if (PE_parse_boot_argn("boot-diag-resume",&resume_after,sizeof(resume_after)) && (resume_after<5 || resume_after>3600)) resume_after=0;
   boot_progress_stage("PE initialized; early native mappings");
 }
@@ -1090,10 +1090,10 @@ static void crash_banner(unsigned now) {
 }
 static void touch_overlay_locked(void);
 static void touch_overlay(void) {
-  // sheng-banner=0 switches every on-screen diagnostic painting off once the system owns the display (the UFS log carries the same rows):
+  // banner=0 switches every on-screen diagnostic painting off once the system owns the display (the UFS log carries the same rows):
   // the painters hold render_busy for about a million uncached stores, which a swap's scanout hand-off has to wait for.
   static int banner_off=-1;
-  if(banner_off<0){unsigned v=1;PE_parse_boot_argn("sheng-banner",&v,sizeof(v));banner_off=v==0;}
+  if(banner_off<0){unsigned v=1;PE_parse_boot_argn("banner",&v,sizeof(v));banner_off=v==0;}
   if(banner_off)return;
   __atomic_fetch_add(&touch_passes,1,__ATOMIC_RELAXED);
   // Same rule as the text renderer: draw only while holding render_busy, so a display handoff (which takes it before
@@ -1184,7 +1184,7 @@ static void monitor(void *arg, wait_result_t result) {
   }
 }
 // The boot core is a little A510. Without cluster types the scheduler sees equal cores and hands it work first (lowest idle core
-// number); a lowest-priority thread bound to it (sheng-cpu0-park=1) keeps it busy so work goes to the big cores while any is idle.
+// number); a lowest-priority thread bound to it (cpu0-park=1) keeps it busy so work goes to the big cores while any is idle.
 // Compositing frames ran 40 fps without it and 55 fps with it. With E and P clusters the Edge scheduler places work, so it is off.
 static void cpu0_park(void *arg, wait_result_t result) {
   (void)arg;(void)result;
@@ -1209,7 +1209,7 @@ void boot_progress_start(void) {
     else __atomic_store_n(&process_worker_status,3,__ATOMIC_RELEASE);
   }
   if(kernel_thread_start_priority(touch_monitor,0,BASEPRI_KERNEL,&thread)==KERN_SUCCESS)thread_deallocate(thread);
-  {unsigned park=0;PE_parse_boot_argn("sheng-cpu0-park",&park,sizeof(park));
+  {unsigned park=0;PE_parse_boot_argn("cpu0-park",&park,sizeof(park));
    if(park==1 && kernel_thread_start_priority(cpu0_park,0,1,&thread)==KERN_SUCCESS)thread_deallocate(thread);}
   boot_progress_stage(state.continuous ?
     "monitor continuous: deadlines warn only; OS remains running" :

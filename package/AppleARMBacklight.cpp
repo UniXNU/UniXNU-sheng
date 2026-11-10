@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Panel brightness for the sheng board (boot argument sheng-backlight=1, started by BacklightProbe.cpp). The panel's backlight is two Kinetic KTZ8866 drivers at I2C
+// Panel brightness for the sheng board (boot argument backlight=1, started by BacklightProbe.cpp). The panel's backlight is two Kinetic KTZ8866 drivers at I2C
 // address 0x11, one on the QUP wrap1 serial engine 1 (i2c@a84000, "ktz8866a") and one on the I2C hub engine 2 (i2c@988000, "ktz8866b");
 // both get the same 11-bit level in BL_BRT_LSB (0x04, bits 2:0) and BL_BRT_MSB (0x05), as the mainline ktz8866 driver writes it.
 // The engines run the GENI I2C firmware the boot loaders left loaded and clocked; this code votes their clocks on again, keeps the clock
@@ -351,9 +351,9 @@ class ShengBacklight : public IOService {
         // does CoreBrightness start the libEDR server (com.apple.libEDR.Notification) that QuartzCore's IOMFBServer sends to
         // synchronously once backlight-control makes CADeviceHasBacklight true. int-236 published backlight-control without the
         // conformance: the server never started, the send blocked with the display server lock held and the screen stopped updating.
-        // sheng-backlight-control=0 leaves both out.
+        // backlight-control=0 leaves both out.
         uint32_t control = 1;
-        PE_parse_boot_argn("sheng-backlight-control", &control, sizeof control);
+        PE_parse_boot_argn("backlight-control", &control, sizeof control);
         // backboardd's sandbox profile refuses FadePeriod on this service (int-276), and CoreBrightness sends it with every brightness:
         // the grant (patches/xnu/zzwb-native-sandbox-grant-set-properties.patch) lets backboardd alone set its properties, which
         // setProperties checks itself.
