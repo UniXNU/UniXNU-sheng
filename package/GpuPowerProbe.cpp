@@ -1360,9 +1360,17 @@ void publishMetal() {
         gMetalStatus = kIOReturnUnsupported;
         return;
     }
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+    // macOS: Metal finds accelerators by IOServiceMatching("IOAccelerator"); the base class is IOGraphicsFamily's IOAccelerator
+    // (drivers/AdrenoMetal/OriginalAcceleratorABI.h, the same 136 bytes without operational overrides).
+    gMetalKext = OSKextLoadKextWithIdentifier("com.apple.iokit.IOGraphicsFamily");
+    if (gMetalKext) {gMetalStatus = gMetalKext; return;}
+    const OSSymbol *name = OSSymbol::withCString("IOAccelerator");
+#else
     gMetalKext = OSKextLoadKextWithIdentifier("com.apple.iokit.IOGPUFamily");
     if (gMetalKext) {gMetalStatus = gMetalKext; return;}
     const OSSymbol *name = OSSymbol::withCString("IOAcceleratorES");
+#endif
     const OSMetaClass *parent = name ? OSMetaClass::getMetaClassWithName(name) : nullptr;
     OSSafeReleaseNULL(name);
     if (!parent || parent->getClassSize() != 136) {gMetalStatus = kIOReturnNotFound; return;}
