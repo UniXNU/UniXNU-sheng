@@ -106,4 +106,4 @@ observations separately, with source revisions and commands.
 
 ## GPU frame diagnostics
 
-`sheng-gpu-trace=1 sheng-diag-export=240` exports the latency capture at 240 seconds of boot-log time. It does not schedule a reboot. The capture holds the render server's frame trace, GPU submission and display arrival, large GPU allocations, CPU occupancy, render thread waits, faults, shared-region unnests and the touch report times. `scripts/read-sheng-log.py` extracts the files and runs the decoders; the `*.touch.*` outputs keep only the touch windows. See [GPU frame diagnostics](https://unixnu.com/porting/gpu-diagnostics).
+`gpu-trace=1 diag-export=240` exports the latency capture at 240 seconds of boot-log time. It does not schedule a reboot. The capture holds the render server's frame trace, GPU submission and display arrival, large GPU allocations, CPU occupancy, render thread waits, faults, shared-region unnests and the touch report times. `scripts/read-sheng-log.py` extracts the files and runs the decoders; the `*.touch.*` outputs keep only the touch windows. See [GPU frame diagnostics](https://unixnu.com/porting/gpu-diagnostics).

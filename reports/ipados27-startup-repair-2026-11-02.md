@@ -48,7 +48,7 @@ python3 out/startup27-fix-20261102-v4/verify-image.py; python3 scripts/check-uni
 
 ## Observation 5
 
-The repaired v4 kernel and restored runtime inputs ran to the 120-second auto-reset deadline: log state 2, 61 rounds, zero write errors and no panic. SpringBoard PID 30, backboardd PID 61 and wifid PID 49 are present. The diagnostic image differs from the normal payload only by sheng-autoreset=120. Visual presentation was not verified. Two unresolved data imports and 24 trap references remain outside this boot qualification.
+The repaired v4 kernel and restored runtime inputs ran to the 120-second auto-reset deadline: log state 2, 61 rounds, zero write errors and no panic. SpringBoard PID 30, backboardd PID 61 and wifid PID 49 are present. The diagnostic image differs from the normal payload only by autoreset=120. Visual presentation was not verified. Two unresolved data imports and 24 trap references remain outside this boot qualification.
 
 Local artifact: `out/startup27-fix-20261102-v4/hardware-verification.json`.
 
@@ -62,7 +62,7 @@ fastboot boot diagnostic/boot-diagnostic.img; fastboot boot sheng-linux-log.img;
 
 The normal package.sh pipeline completed and produced boot.img with SHA-256 `142d66c645d2dc9e6323d712381d836073facf196537c163e8070c053cdc28cf`. An independently inspected payload retained 266 corrected adapter branches, five absolute data symbols, 24 pre-existing trapped imports and two unresolved data references.
 
-A diagnostic variant with only `sheng-autoreset=120` added recorded 120 seconds, 61 log rounds, state 2 and zero write errors. No kernel panic was found in that capture. It reused the original Data seed. Visual UI behavior, Wi-Fi Settings and full sheng Actions execution were not qualified.
+A diagnostic variant with only `autoreset=120` added recorded 120 seconds, 61 log rounds, state 2 and zero write errors. No kernel panic was found in that capture. It reused the original Data seed. Visual UI behavior, Wi-Fi Settings and full sheng Actions execution were not qualified.
 
 Local records: `out/package-integration-hardware-20261102/hardware-verification.json` and `out/package-integration-hardware-20261102/device-run/untagged-1e549aad6/header.txt`.
 

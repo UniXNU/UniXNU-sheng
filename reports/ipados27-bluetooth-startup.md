@@ -36,7 +36,7 @@ EnablePressuredExit false and EnableTransactions true. Its other top-level
 entries retain their original values. Plist lint and the host private XPC
 parser accept the system, Wi-Fi and Bluetooth caches.
 
-`sheng-cache-log=1` captures the loader log and, on the matched 24A446 failure
+`cache-log=1` captures the loader log and, on the matched 24A446 failure
 stack, the actual parser input. The snapshot is bounded to 4 MiB and published
 once. The log writer exports launchd-parser-input.plist, the system-path cache,
 the Data addon cache and the loader log to the existing reserved diagnostic
