@@ -39,7 +39,7 @@ prefix = r'''
 #include "nw_abi.h"
 using test_user_addr_t = uintptr_t;
 #define user_addr_t test_user_addr_t
-struct apple80211req { uint32_t req_len; user_addr_t req_data; };
+struct apple80211req { uint32_t req_len; user_addr_t req_data; uint32_t req_kernel = 0; };
 static bool copy_fault, gUserJoin, gKeyed, had_bssid, had_key;
 static bool gPower = true, gLinkSuppressed, gAssocModern, gJoinPending;
 static int gAssocResult, calls, connect_error;

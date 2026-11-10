@@ -97,17 +97,50 @@ int wn8030_parse(const uint8_t frame[WN8030_FRAME_BYTES], Wn8030Frame *out);
 
 /* The touchpad report as the host's device takes it: Y counted from the other edge (the controller's Y grows toward the hinge) and a
  * touching contact without confidence (a palm) sent as lifted, since iPadOS's trackpad filter fails on a touching palm that is the last
- * contact of a frame. Returns the number of contacts sent as lifted. */
+ * contact of a frame. Returns the number of contacts sent as lifted. Each report is also counted in native_keyboard_census. */
 unsigned wn8030_touchpad_report(const uint8_t in[WN8030_TOUCHPAD_REPORT], uint8_t out[WN8030_TOUCHPAD_REPORT]);
+extern int wn8030_keep_lone_contact;   /* 1: keep a report's only touching contact without confidence (boot argument keyboard-lone=1) */
+
+/* What the touchpad's reports carried, for the boot log. A touching contact without confidence is one the controller itself takes for
+ * a palm, so a report whose touching contacts all lack confidence moves nothing on the host: whether those contacts lie still (a hand
+ * at rest) or travel like a finger is what the pairs, their travel and the kept reports show. */
+#define WN8030_PALM_SAMPLES 6u
+struct wn8030_census {
+    uint32_t reports;                          /* touchpad reports */
+    uint32_t idle;                             /* nothing touching */
+    uint32_t fingers;                          /* touching contacts, all with confidence */
+    uint32_t mixed;                            /* touching contacts with and without confidence */
+    uint32_t palms[WN8030_TOUCHPAD_FINGERS];   /* touching contacts, none with confidence: one, two, three of them */
+    uint32_t beyond;                           /* reports with a touching contact in a slot past the report's own contact count */
+    uint32_t more;                             /* reports whose contact count is above the three contacts a report holds: a frame
+                                                * of more contacts than one report carries, while this driver takes every report
+                                                * for a whole frame */
+    uint32_t palm_pairs;                       /* a palm with the same contact id in the same slot of the report before */
+    uint32_t palm_travel;                      /* the counts those palms moved between the two reports, X and Y summed */
+    int32_t palm_x[2], palm_y[2];              /* the palms' range as the controller sent them: minimum, maximum (-1 before the first) */
+    uint32_t samples;                          /* reports kept in sample[] */
+    uint8_t sample[WN8030_PALM_SAMPLES][WN8030_TOUCHPAD_REPORT];   /* the 1st, 4th, 16th, 64th, 256th and 1024th report with palms only */
+    uint8_t last_palms;                        /* bit per slot: a palm in the report before, which had palms only */
+    uint8_t last_id[WN8030_TOUCHPAD_FINGERS];
+    uint16_t last_x[WN8030_TOUCHPAD_FINGERS], last_y[WN8030_TOUCHPAD_FINGERS];
+};
+void wn8030_touchpad_census(struct wn8030_census *census, const uint8_t in[WN8030_TOUCHPAD_REPORT]);
+/* The census of every report wn8030_touchpad_report has processed (one caller thread; the boot log reads it without a lock). */
+extern struct wn8030_census native_keyboard_census;
+
 /* The touchpad as a pointer, for a system without a driver for touchpad collections (macOS takes only Apple's own trackpads and HID
  * pointers): one finger moves the pointer, two or more scroll, the click is the left button and with two fingers down the right one.
+ * A click keeps the button it began as until it ends, however many fingers are down by then: one press is one button. Movement is
+ * taken between two reports with the same touching contacts only, so a finger that came, went or was replaced does not jump.
  * `touchpad` is a report wn8030_touchpad_report has already processed (palms lifted); its Y grows away from the user. `out` gets a pointer report: the
  * ID, the buttons, X and Y as signed 16-bit counts, then the vertical and horizontal scroll steps as signed bytes. Returns its length,
  * or 0 when nothing changed. */
 #define WN8030_POINTER_ID 0x1au
 #define WN8030_POINTER_REPORT 8u
 struct wn8030_pointer {
-    uint8_t fingers, contact, buttons;
+    uint8_t fingers, buttons;
+    uint8_t click;                            /* the button the click held now began as (0: none held) */
+    uint8_t ids[WN8030_TOUCHPAD_FINGERS];     /* the touching fingers' contact ids, ascending */
     int32_t x, y;            /* where the finger (or the fingers' centre) was */
     int32_t move_x, move_y;  /* motion not yet sent, in half counts */
     int32_t scroll_x, scroll_y;

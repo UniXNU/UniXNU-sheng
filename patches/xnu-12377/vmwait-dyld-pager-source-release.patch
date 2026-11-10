@@ -1,0 +1,66 @@
+The dyld pager releases its source page before it reads the other parts of a 16 KiB fixup page.
+
+On a 4 KiB kernel a 16 KiB chained-fixup page is assembled from four source pages: the part being paged in, already
+faulted, and the three others, read with dyld_pager_peek (both come from zzzz-sheng-ipados27-bringup.patch of the sheng
+device repository, which this patch must follow). The source page of the part being paged in stayed busy, with its paging
+reference on the file's VM object and the placeholder page in the copy object, while the others were read. A part that is
+not resident is paged in from the file, and APFS pages a file with integrity verification in by the whole verification
+block, with a UPL over all of its pages that waits uninterruptibly for every busy page of the block. The busy source page
+is in that block, so the thread waited for itself in vm_object_upl_request (block hint 0x16), or for a thread whose page-in
+waited for the page; the wait cannot be interrupted, so the process could not even exit. The paging reference it kept on
+the file's object then held every later private mapping of that file in vm_object_copy_delayed (block hint 0x19): macOS
+kernels wait there for paging to end.
+
+The source page and the placeholder are now released right after the part is copied into the fixup buffer, the way the
+end of the loop releases them, and the loop skips its release for such a part. The same release, for the same reason, is
+in the shared region pager (native-4k-shared-region-slide.patch).
+
+Not run on hardware.
+--- a/osfmk/vm/vm_dyld_pager.c
++++ b/osfmk/vm/vm_dyld_pager.c
+@@ -1330,8 +1330,32 @@
+ 			uint32_t part = (uint32_t)((page_off - base_off) / PAGE_SIZE);
+ 			uint64_t base_userVA = userVA - (uint64_t)(page_off - base_off);
+ 
+-			/* The current page's source is already faulted and still mapped; fill the rest by peeking. */
++			/* The current page's source is already faulted and still mapped: copy it, then read the other parts. */
+ 			bcopy((const char *)src_vaddr, (char *)fixup_buffer + (vm_offset_t)part * PAGE_SIZE, PAGE_SIZE);
++
++			/*
++			 * The source page and its placeholder in the top object are released before the other parts are read,
++			 * the way the end of this loop releases them. A part that is not resident is paged in from the file, and
++			 * APFS pages a file with integrity verification in by the whole verification block, with a UPL over all
++			 * of its pages that waits, uninterruptibly, for every busy page of the block. A source page held busy
++			 * across the reads is such a page: the thread would wait in vm_object_upl_request for itself (or for a
++			 * thread whose page-in waits for this page), and its paging reference on the file's object would keep
++			 * every later private mapping of the file waiting in vm_object_copy_delayed.
++			 */
++			vm_object_lock(src_page_object);
++			vm_page_wakeup_done(src_page_object, src_page);
++			src_page = VM_PAGE_NULL;
++			vm_object_paging_end(src_page_object);
++			vm_object_unlock(src_page_object);
++			if (top_page != VM_PAGE_NULL) {
++				assert(VM_PAGE_OBJECT(top_page) == src_top_object);
++				vm_object_lock(src_top_object);
++				VM_PAGE_FREE(top_page);
++				vm_object_paging_end(src_top_object);
++				vm_object_unlock(src_top_object);
++				top_page = VM_PAGE_NULL;
++			}
++
+ 			retval = KERN_SUCCESS;
+ 			for (i = 0; i < mwli_page_size / PAGE_SIZE; ++i) {
+ 				if (i == part) {
+@@ -1362,6 +1386,11 @@
+ 			}
+ 		}
+ 
++		if (src_page == VM_PAGE_NULL) {
++			/* a fixup page larger than a page: its source page is already released (above) */
++			continue;
++		}
++
+ 		assert(VM_PAGE_OBJECT(src_page) == src_page_object);
+ 		assert(src_page->vmp_busy);
+ 		assert(src_page_object->paging_in_progress > 0);
