@@ -16,8 +16,9 @@ extern volatile int native_gpu_addon_stage;
  * Successful ownership is transferred to its boot-lifetime firmware cache. */
 int sheng_wifi_firmware_read(const char *name, uint8_t **data, size_t *size) {
   *data = NULL; *size = 0;
+  /* join.txt: the unattended-test network file, present only in a build made with UNIXNU_WIFI_JOIN and read only with wifi-aj=1. */
   if (strcmp(name, "amss.bin") && strcmp(name, "amss2.bin") &&
-      strcmp(name, "m3.bin") && strcmp(name, "board-2.bin")) return ENOENT;
+      strcmp(name, "m3.bin") && strcmp(name, "board-2.bin") && strcmp(name, "join.txt")) return ENOENT;
   if (native_gpu_addon_stage < 1) return EAGAIN;
   char path[160]; snprintf(path, sizeof(path), "%s/%s", SHENG_WIFI_FIRMWARE_ROOT, name);
   vfs_context_t ctx = vfs_context_kernel(); vnode_t vp = NULL;
