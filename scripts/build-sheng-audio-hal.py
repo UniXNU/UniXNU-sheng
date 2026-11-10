@@ -3,11 +3,15 @@
 
   build-sheng-audio-hal.py OUTDIR [TARGET]
 
-TARGET is the clang target of the audio server (default arm64-apple-ios17.0; iPadOS 27's audio server is arm64e-apple-ios27.0).
+TARGET is the clang target of the audio server (default arm64-apple-ios17.0; iPadOS 27's audio server is arm64e-apple-ios27.0,
+macOS 27's arm64e-apple-macos27.0).
 
 Writes OUTDIR/ShengAudio.driver and OUTDIR/trust.json (the executable's CDHash, for the owner trust cache). The iOS SDK has no
-audio server plug-in headers; the macOS SDK's CoreAudio headers declare the same interface and are used for the build only."""
+audio server plug-in headers; the macOS SDK's CoreAudio headers declare the same interface and are used for the build only.
+A macOS target makes a macOS bundle (Contents/Info.plist, Contents/MacOS/ShengAudio) with the macOS SDK, for the audio server's
+own driver directory /Library/Audio/Plug-Ins/HAL."""
 import json
+import plistlib
 import re
 import shutil
 import subprocess
@@ -21,21 +25,30 @@ if len(sys.argv) not in (2, 3):
     sys.exit(__doc__)
 out = Path(sys.argv[1]).resolve()
 target = sys.argv[2] if len(sys.argv) == 3 else 'arm64-apple-ios17.0'
+macos = '-apple-macos' in target
 ios = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
 mac = subprocess.check_output(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], text=True).strip()
 bundle = out / 'ShengAudio.driver'
 shutil.rmtree(bundle, ignore_errors=True)
-bundle.mkdir(parents=True)
+contents = bundle / 'Contents' if macos else bundle
+(contents / 'MacOS' if macos else bundle).mkdir(parents=True)
 with tempfile.TemporaryDirectory() as tmp:
     headers = Path(tmp) / 'CoreAudio'
     headers.mkdir()
     for name in ('AudioServerPlugIn.h', 'AudioHardwareBase.h', 'AudioHardware.h'):
         (headers / name).symlink_to(Path(mac) / 'System/Library/Frameworks/CoreAudio.framework/Headers' / name)
-    executable = bundle / 'ShengAudio'
-    subprocess.run(['xcrun', 'clang', '-target', target, '-isysroot', ios, '-I', tmp, '-I', str(PACKAGE), '-O2', '-g0',
+    executable = contents / 'MacOS/ShengAudio' if macos else bundle / 'ShengAudio'
+    subprocess.run(['xcrun', 'clang', '-target', target, '-isysroot', mac if macos else ios, '-I', tmp, '-I', str(PACKAGE), '-O2', '-g0',
                     '-Wall', '-Wextra', '-Werror', '-bundle', '-fvisibility=hidden', '-framework', 'CoreFoundation', '-framework', 'IOKit',
                     str(ROOT / 'hal/ShengAudioPlugIn.c'), '-o', str(executable)], check=True)
-shutil.copy(ROOT / 'hal/Info.plist', bundle / 'Info.plist')
+if macos:
+    info = plistlib.loads((ROOT / 'hal/Info.plist').read_bytes())
+    info['CFBundleSupportedPlatforms'] = ['MacOSX']
+    del info['MinimumOSVersion']
+    info['LSMinimumSystemVersion'] = re.search(r'macos([0-9.]+)', target).group(1)
+    (contents / 'Info.plist').write_bytes(plistlib.dumps(info))
+else:
+    shutil.copy(ROOT / 'hal/Info.plist', bundle / 'Info.plist')
 subprocess.run(['codesign', '--force', '--sign', '-', '--pagesize', '4096', '--identifier', 'org.unixnu.sheng.audio', str(bundle)], check=True)
 subprocess.run(['codesign', '--verify', '--strict', str(bundle)], check=True)
 detail = subprocess.run(['codesign', '--display', '--verbose=4', str(bundle)], capture_output=True, text=True, check=True).stderr
