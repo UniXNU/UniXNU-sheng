@@ -79,6 +79,10 @@ extern volatile uint32_t native_adreno_sync_skips[2] __attribute__((weak_import)
 extern volatile uint32_t native_adreno_sync_audit[6] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_maint_all __attribute__((weak_import));
 extern volatile uint64_t native_adreno_submit_us[8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_pool_state[12] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_pool_fallbacks[8] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_pool_zero[4] __attribute__((weak_import));
+extern volatile uint32_t native_gpu_pool_board[4] __attribute__((weak_import));
 extern volatile int native_gpu_addon_written __attribute__((weak_import));
 extern volatile int native_gpu_addon_same __attribute__((weak_import));
 extern volatile int native_gpu_addon_failed __attribute__((weak_import));
@@ -196,6 +200,7 @@ extern void sheng_charger_pmic_sample(void) __attribute__((weak_import));
 extern void sheng_thermal_sample(void) __attribute__((weak_import));
 extern unsigned sheng_thermal_row(unsigned index, char *row, unsigned size) __attribute__((weak_import));
 extern unsigned sheng_board_clock_row(char *row, unsigned size) __attribute__((weak_import));
+extern unsigned sheng_thermal_level_row(char *row, unsigned size) __attribute__((weak_import));
 extern volatile uint32_t native_pmic_rtc[3] __attribute__((weak_import));
 extern volatile uint32_t native_pmic_rtc_offset[3] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_tl_count __attribute__((weak_import));
@@ -233,12 +238,6 @@ extern volatile int32_t native_qrtr_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_battery_raw[10] __attribute__((weak_import));
 extern volatile int32_t native_charger_stats[16] __attribute__((weak_import));
 extern char native_qrtr_text[96] __attribute__((weak_import));
-extern volatile uint64_t native_adreno_maint_kind[8][3] __attribute__((weak_import));
-extern volatile uint64_t native_adreno_maint_walk[8] __attribute__((weak_import));
-extern volatile uint32_t native_adreno_sync_skips[2] __attribute__((weak_import));
-extern volatile uint32_t native_adreno_sync_audit[6] __attribute__((weak_import));
-extern volatile uint32_t native_adreno_maint_all __attribute__((weak_import));
-extern volatile uint64_t native_adreno_submit_us[8] __attribute__((weak_import));
 extern volatile uint32_t native_swipe_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_method_stats[20][4] __attribute__((weak_import));
@@ -1273,6 +1272,24 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              (unsigned long long)p[6][0], (unsigned long long)p[6][1], (unsigned long long)p[7][0], (unsigned long long)p[7][1],
              native_adreno_pool_stats_uncached[1], native_adreno_pool_stats_uncached[0]);
     at = put(out, at, cap, row, sizeof row);
+    // The GPU's memory pool outside the kernel's window (Adreno740 NativeAdrenoPool, package/GpuMemoryPool.cpp): its ranges and free
+    // memory, the buffer objects alive from it, pages retired because a client had mapped them, and why requests fell back.
+    if (&native_adreno_pool_state && &native_adreno_pool_fallbacks && &native_adreno_pool_zero) {
+      const volatile uint32_t *s = native_adreno_pool_state, *f = native_adreno_pool_fallbacks;
+      char pool[360];
+      snprintf(pool, sizeof pool, "[gpu pool] arg %u ranges %u (refused %u) total %u KiB free %u (lowest %u) | alive %u grants %u KiB | served %u freed %u retired %u (%u KiB) | board %u/%u %u KiB %x",
+               s[10], s[0], s[11], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9],
+               &native_gpu_pool_board ? native_gpu_pool_board[0] : 0, &native_gpu_pool_board ? native_gpu_pool_board[1] : 0,
+               &native_gpu_pool_board ? native_gpu_pool_board[2] : 0, &native_gpu_pool_board ? native_gpu_pool_board[3] : 0);
+      at = put(out, at, cap, pool, sizeof pool);
+      uint64_t zero_ns = 0, pass_ns = 0;
+      absolutetime_to_nanoseconds(native_adreno_pool_zero[0], &zero_ns);
+      absolutetime_to_nanoseconds(native_adreno_pool_zero[2], &pass_ns);
+      snprintf(pool, sizeof pool, "[gpu pool fallback] no range %u | too large %u | exhausted %u | fragmented %u | limit %u | no metadata %u | kind %u | scrub %u || zero %llums %llu KiB, cache pass %llums %llu KiB",
+               f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], (unsigned long long)(zero_ns / 1000000),
+               (unsigned long long)native_adreno_pool_zero[1], (unsigned long long)(pass_ns / 1000000), (unsigned long long)native_adreno_pool_zero[3]);
+      at = put(out, at, cap, pool, sizeof pool);
+    }
     // What a submission still cleans by kind of mapping, what the walks visit, and where a submission's time goes.
     if (&native_adreno_maint_kind) {
       static const char *const kind[7] = {"driver", "wc", "cached", "kernel", "import ro", "import rw", "import nc"};
@@ -1333,6 +1350,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       char thermal[400];
       sheng_thermal_sample();
       for (unsigned i = 0; i < 8 && sheng_thermal_row(i, thermal, sizeof thermal); ++i) at = put(out, at, cap, thermal, sizeof thermal);
+    }
+    // The thermal pressure level handed to macOS and who read it (ThermalLevel.cpp, thermal-level=1).
+    if (&sheng_thermal_level_row) {
+      char level[400];
+      if (sheng_thermal_level_row(level, sizeof level)) at = put(out, at, cap, level, sizeof level);
     }
     // The board's wall clock (BoardClock.cpp, board-clock=<bits>): counter, stored offset, what the system set.
     if (&sheng_board_clock_row) {

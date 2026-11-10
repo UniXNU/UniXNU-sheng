@@ -523,7 +523,7 @@ BLUETOOTH = Path(os.environ.get('QCA_BLUETOOTH_DIR') or
                  (ROOT / 'drivers/QcaBluetooth' if (ROOT / 'drivers/QcaBluetooth').is_dir() else DEVICE / 'drivers/QcaBluetooth'))
 require((BLUETOOTH / 'include/qbt.h').exists(), 'QcaBluetooth module directory')
 board_objects = []
-for stem, extra in [('CpuFreqProbe', ()), ('ThermalProbe', ()), ('BoardClock', ()), ('WifiProbe', ('-I', str(WIFI / 'include'))),
+for stem, extra in [('CpuFreqProbe', ()), ('ThermalProbe', ()), ('BoardClock', ()), ('GpuMemoryPool', ()), ('WifiProbe', ('-I', str(WIFI / 'include'))),
                     ('BluetoothProbe', ('-I', str(BLUETOOTH / 'include'), '-I', str(ROOT / 'kits/Sm8550Platform'))),
                     ('AdspProbe', ()), ('AudioProbe', ()),
                     ('BacklightProbe', ()), ('DisplayTimingProbe', ()), ('BatteryProbe', ()), ('KeyboardProbe', ()),
@@ -532,7 +532,7 @@ for stem, extra in [('CpuFreqProbe', ()), ('ThermalProbe', ()), ('BoardClock', (
                                                         'kits/Sm8550Platform') for x in ('-I', str(ROOT / d))))]:
     compile_cpp(KITS / (stem + '.cpp'), board_dir / (stem + '.o'), extra)
     board_objects.append(board_dir / (stem + '.o'))
-for stem, extra in [('WifiNet', ('-I', str(WIFI / 'include'))), ('AppleARMBacklight', ()), ('ShengBattery', ()), ('ShengAudioService', ())]:
+for stem, extra in [('WifiNet', ('-I', str(WIFI / 'include'))), ('AppleARMBacklight', ()), ('ShengBattery', ()), ('ShengAudioService', ()), ('ThermalLevel', ())]:
     compile_cpp(KITS / (stem + '.cpp'), board_dir / (stem + '.o'), extra)
     run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', f'--globalize-symbol=__GLOBAL__sub_I_{stem}.cpp',
          board_dir / (stem + '.o'), board_dir / (stem + '.late.o')])

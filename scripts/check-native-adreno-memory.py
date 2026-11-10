@@ -570,7 +570,7 @@ for literal in ['0x0800', '0x0802', '0x0804', '0x0806', '0x0807', '0x0885',
 
 recipe = ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'
 record = json.loads(recipe.read_text().strip().rstrip(','))
-sources = [kit / name for name in ['NativeAdrenoMemory.cpp', 'NativeAdrenoCpu.cpp', 'NativeAdrenoSmmuMemory.cpp', 'NativeAdrenoVm.cpp', 'NativeAdrenoRing.cpp', 'NativeAdrenoPreempt.cpp', 'NativeAdrenoSubmit.cpp', 'NativeAdrenoIrq.cpp', 'NativeAdrenoCpInit.cpp', 'NativeAdrenoUserClient.cpp', 'NativeAdrenoTimer.cpp', 'NativeAdrenoGpu.cpp', 'NativeAdrenoBoard.cpp', 'NativeAdrenoSha256.cpp', 'NativeAdrenoFirmware.cpp', 'NativeAdrenoGmuMemory.cpp', 'NativeAdrenoGmuConfig.cpp', 'NativeAdrenoGmuPlatform.cpp', 'NativeAdrenoSmmuContext.cpp', 'NativeAdrenoKernelTime.cpp', 'NativeAdrenoPwrup.cpp']]
+sources = [kit / name for name in ['NativeAdrenoMemory.cpp', 'NativeAdrenoPool.cpp', 'NativeAdrenoCpu.cpp', 'NativeAdrenoSmmuMemory.cpp', 'NativeAdrenoVm.cpp', 'NativeAdrenoRing.cpp', 'NativeAdrenoPreempt.cpp', 'NativeAdrenoSubmit.cpp', 'NativeAdrenoIrq.cpp', 'NativeAdrenoCpInit.cpp', 'NativeAdrenoUserClient.cpp', 'NativeAdrenoTimer.cpp', 'NativeAdrenoGpu.cpp', 'NativeAdrenoBoard.cpp', 'NativeAdrenoSha256.cpp', 'NativeAdrenoFirmware.cpp', 'NativeAdrenoGmuMemory.cpp', 'NativeAdrenoGmuConfig.cpp', 'NativeAdrenoGmuPlatform.cpp', 'NativeAdrenoSmmuContext.cpp', 'NativeAdrenoKernelTime.cpp', 'NativeAdrenoPwrup.cpp']]
 xnu = ROOT / '.cache/xnu-work'
 xnu_names = ['iokit/IOKit/IOMemoryDescriptor.h', 'iokit/IOKit/IOBufferMemoryDescriptor.h',
              'iokit/Kernel/IOMemoryDescriptor.cpp', 'iokit/Kernel/IOBufferMemoryDescriptor.cpp',

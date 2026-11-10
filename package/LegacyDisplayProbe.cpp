@@ -524,7 +524,9 @@ extern void native_keystore_probe(void);
 extern void native_touch_probe(void);
 extern void sheng_cpufreq_probe(void);
 extern void sheng_thermal_probe(void) __attribute__((weak_import));       // ThermalProbe.cpp, thermal=1
+extern void sheng_thermal_level_probe(void) __attribute__((weak_import)); // ThermalLevel.cpp, thermal-level=1
 extern void sheng_board_clock_probe(void) __attribute__((weak_import));   // BoardClock.cpp, board-clock=<bits>
+extern void sheng_gpu_pool_probe(void) __attribute__((weak_import));      // GpuMemoryPool.cpp, before the GPU driver allocates
 extern void sheng_gpu_power_probe(void);
 extern void sheng_wifi_probe(void);
 extern void sheng_bluetooth_probe(void) __attribute__((weak_import));
@@ -618,7 +620,9 @@ void native_legacy_display_late_probe(void) {
     native_keystore_probe();
     sheng_cpufreq_probe();
     if (sheng_thermal_probe) sheng_thermal_probe();
+    if (sheng_thermal_level_probe) sheng_thermal_level_probe();
     if (sheng_board_clock_probe) sheng_board_clock_probe();
+    if (sheng_gpu_pool_probe) sheng_gpu_pool_probe();
     sheng_gpu_power_probe();
     native_touch_probe();
     sheng_wifi_probe();
