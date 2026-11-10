@@ -37,6 +37,17 @@ extern "C" {
 #include "nw_abi.h"
 #include "nw_control_endpoint.h"
 
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+// macOS: en0 is ShengEthernet (an IOEthernetController of the original IONetworkingFamily, ShengEthernet.cpp), which carries this
+// module's frames; the family's IONetworkInterface, IONetworkStack and IO80211 classes exist there, so none is defined here, and no
+// ifnet of its own is made. The interface's ifnet exists once the network configuration has named it.
+#define SHENG_WIFI_ETHERNET 1
+extern "C" bool sheng_ethernet_wifi_attach(int (*output)(mbuf_t));
+extern "C" void sheng_ethernet_wifi_link(bool up);
+extern "C" ifnet_t sheng_ethernet_ifnet(void);
+#else
+#define SHENG_WIFI_ETHERNET 0
+#endif
 extern "C" void native_wifi_logf(int level, const char *fmt, ...);
 extern "C" int sheng_wifi_file(const char *name, const uint8_t **data, size_t *size);
 extern "C" void sheng_wifi_wake(void);   // WifiProbe.cpp: the WiFi thread sends the queued frame now
@@ -151,6 +162,9 @@ void post_event(uint32_t code, const void *payload, size_t length) {
 }
 // link state for the network configuration: the interface's flags and the stack's own link events
 void post_link(bool up) {
+#if SHENG_WIFI_ETHERNET
+  sheng_ethernet_wifi_link(up);   // the family posts the link events and sets the interface's flags
+#else
   if (!gIf) return;
   ifnet_set_flags(gIf, up ? IFF_RUNNING : 0, IFF_RUNNING);
   struct { struct net_event_data data; } payload; memset(&payload, 0, sizeof payload);
@@ -159,6 +173,7 @@ void post_link(bool up) {
   msg.vendor_code = KEV_VENDOR_APPLE; msg.kev_class = KEV_NETWORK_CLASS; msg.kev_subclass = KEV_DL_SUBCLASS; msg.event_code = up ? KEV_DL_LINK_ON : KEV_DL_LINK_OFF;
   msg.dv[0].data_length = sizeof payload; msg.dv[0].data_ptr = &payload;
   sheng_kev_post(&msg);
+#endif
 }
 
 void post_link_down(bool involuntary, int reason) {
@@ -327,6 +342,9 @@ void note_packet(void *context, size_t length, nw_packet_reader reader, bool out
   } else note_frame(header, peek, out);
 }
 void on_rx_packet(void *context, size_t length, nw_packet_reader reader) {
+#if SHENG_WIFI_ETHERNET
+  if (!gIf) gIf = sheng_ethernet_ifnet();
+#endif
   if (!gIf || length < 14) return;
   note_packet(context, length, reader, false);
   // Two bytes ahead of the Ethernet header put the IP header on a 4-byte boundary. The packet may come back as a chain (a frame larger
@@ -375,6 +393,9 @@ errno_t if_output(ifnet_t, mbuf_t m) {
   return 0;
 }
 void if_event_stub(ifnet_t, const struct kev_msg *) {}
+#if SHENG_WIFI_ETHERNET
+int ethernet_output(mbuf_t m) { return if_output(gIf, m); }
+#endif
 
 // ---- Apple80211 ----
 void fill_channel(channel &c, uint32_t mhz) {
@@ -592,6 +613,7 @@ errno_t if_ioctl(ifnet_t, unsigned long cmd, void *data) {
 
 // ---- registry entries (see the top of the file in the build: the classes are registered late) ----
 }  // namespace
+#if !SHENG_WIFI_ETHERNET
 
 class IO80211Controller : public IOService { OSDeclareDefaultStructors(IO80211Controller); };
 OSDefineMetaClassAndStructors(IO80211Controller, IOService);
@@ -667,6 +689,10 @@ void publish_registry(const char *ifname) {
   if (!publish(wlan, controller, "ShengWLAN")) log(3, "wifi-net: the interface service did not start"); else wlan->release();
   controller->release();
 }
+
+}  // namespace
+#endif  // !SHENG_WIFI_ETHERNET
+namespace {
 
 // en0's IPv4 addresses and packet counts, for the log.
 void log_traffic() {
@@ -750,6 +776,9 @@ void trafficLog(void *, wait_result_t) {
   uint32_t diagnostics = 0; PE_parse_boot_argn("log-wifi", &diagnostics, sizeof diagnostics);
   for (unsigned second = 1;; ++second) {
     IOSleep(1000); nw_wifi_status st; nw_wifi_status_get(&st);
+#if SHENG_WIFI_ETHERNET
+    if (!gIf) { gIf = sheng_ethernet_ifnet(); if (!gIf) continue; }
+#endif
     if (diagnostics && second % 10 == 0) {
       nw_control_stats control{}; nw_wifi_control_stats_get(&control);
       log(6, "wifi-net: control session %llu opened %llu closed %llu", static_cast<unsigned long long>(control.active_session),
@@ -796,8 +825,25 @@ void autoJoin(void *, wait_result_t) {
 // Called once the module has a station interface and a hardware address.
 extern "C" void sheng_wifi_net_start(const uint8_t mac[6]) {
   if (gIf) return;
+#if SHENG_WIFI_ETHERNET
+  if (gGrp) return;   // the ifnet comes later there
+#endif
   memcpy(gMac, mac, 6);
   gGrp = lck_grp_alloc_init("wifi-net", LCK_GRP_ATTR_NULL); gLock = lck_mtx_alloc_init(gGrp, LCK_ATTR_NULL);
+#if SHENG_WIFI_ETHERNET
+  (void)if_ioctl; (void)if_event_stub;
+  // ShengEthernet starts with the late probes, long before the module's firmware is up; it is waited for a little all the same.
+  bool attached = false;
+  for (unsigned waited = 0; !(attached = sheng_ethernet_wifi_attach(ethernet_output)) && waited < 30000; waited += 100) IOSleep(100);
+  if (!attached) { log(3, "wifi-net: no Ethernet controller (ethernet=1) to carry the module's frames"); return; }
+  gIf = sheng_ethernet_ifnet();
+  nw_wifi_set_events(&gEvents);
+  { uint32_t aj = 0; PE_parse_boot_argn("wifi-aj", &aj, sizeof aj);
+    thread_t t = nullptr; if (aj && kernel_thread_start(autoJoin, nullptr, &t) == KERN_SUCCESS) thread_deallocate(t);
+    t = nullptr; if (kernel_thread_start(trafficLog, nullptr, &t) == KERN_SUCCESS) thread_deallocate(t); }
+  log(6, "wifi-net: carried by en0 (ShengEthernet), hardware address %02x:%02x:%02x:%02x:%02x:%02x, ifnet %s", mac[0], mac[1], mac[2], mac[3],
+      mac[4], mac[5], gIf ? "attached" : "not yet named");
+#else
   struct ifnet_init_eparams p; memset(&p, 0, sizeof p);
   p.ver = IFNET_INIT_CURRENT_VERSION; p.len = sizeof p; p.flags = IFNET_INIT_LEGACY | IFNET_INIT_NX_NOAUTO; p.name = "en"; p.unit = 0; p.family = IFNET_FAMILY_ETHERNET; p.subfamily = IFNET_SUBFAMILY_WIFI; p.type = IFT_ETHER;
   p.output = if_output; p.demux = ether_demux; p.add_proto = ether_add_proto; p.del_proto = ether_del_proto; p.check_multi = ether_check_multi; p.framer = ether_frameout;
@@ -822,4 +868,5 @@ extern "C" void sheng_wifi_net_start(const uint8_t mac[6]) {
     t = nullptr; if (kernel_thread_start(trafficLog, nullptr, &t) == KERN_SUCCESS) thread_deallocate(t); }
   log(6, "wifi-net: en0 is up, hardware address %02x:%02x:%02x:%02x:%02x:%02x, capabilities 0x%x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
       ifnet_capabilities_enabled(ifp));
+#endif
 }

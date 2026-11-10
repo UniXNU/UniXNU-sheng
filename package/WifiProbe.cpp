@@ -1047,12 +1047,17 @@ extern "C" void native_wifi_logf(int level, const char *fmt, ...) {
 }
 void netStart() {
     struct nw_wifi_status status; nw_wifi_status_get(&status);
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+    // macOS: WifiNet.cpp defines no classes there (en0 is ShengEthernet of the original IONetworkingFamily).
+    sheng_wifi_net_start(status.mac);
+#else
     void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
     if (!handle) {native_wifi_logf(3, "wifi: network classes: no module handle"); return;}
     native_wifi_net_static_init();
     const OSReturn r = OSMetaClass::postModLoad(handle);
     if (r) {native_wifi_logf(3, "wifi: network classes not registered: %d", (int)r); return;}
     sheng_wifi_net_start(status.mac);
+#endif
 }
 
 // ---- the endpoint's MSIs as a real interrupt ----
