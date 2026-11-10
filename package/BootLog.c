@@ -124,6 +124,8 @@ extern volatile int native_staged_apps_error __attribute__((weak_import));
 extern char native_staged_apps_path[96] __attribute__((weak_import));
 extern const char *boot_progress_tag(void) __attribute__((weak_import));
 extern unsigned boot_ui_trace_role_rows(unsigned, char [][120], unsigned, unsigned) __attribute__((weak_import));
+extern void boot_stuck_scan(unsigned) __attribute__((weak_import));
+extern unsigned boot_stuck_rows(char [][120], unsigned) __attribute__((weak_import));
 extern unsigned boot_ui_trace_hot_rows(char [][120], unsigned) __attribute__((weak_import));
 extern unsigned long vm_kernel_slide;
 extern volatile uint64_t native_gop_wait_stats[7] __attribute__((weak_import));
@@ -199,6 +201,8 @@ extern volatile int32_t native_mic_capture[8] __attribute__((weak_import));
 extern const ShengAudioDiag *sheng_audio_diag(void) __attribute__((weak_import));
 extern volatile uint64_t native_audio_pa __attribute__((weak_import));
 extern char native_adsp_text[96] __attribute__((weak_import));
+extern char native_iokit_busy_text[4][192] __attribute__((weak_import));
+extern volatile int sheng_software_aes_state __attribute__((weak_import));
 extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_qrtr_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_battery_raw[10] __attribute__((weak_import));
@@ -286,6 +290,12 @@ extern volatile uint32_t native_adreno_view_diag[6] __attribute__((weak_import))
 extern int boot_reset_probe(char *, unsigned) __attribute__((weak_import));
 extern int boot_reset_bootloader(char *, unsigned) __attribute__((weak_import));
 extern int boot_reset_mark_bootloader(char *, unsigned) __attribute__((weak_import));
+extern int reboot_kernel(int howto, char *message);
+// The orderly reboot of autoreset-clean (below): RB_AUTOBOOT, not RB_QUICK, so every process gets SIGTERM before the restart.
+static void clean_reboot(void *arg, wait_result_t result) {
+  (void)arg; (void)result;
+  reboot_kernel(0 /* RB_AUTOBOOT */, (char *)"autoreset");
+}
 extern int boot_reset_watchdog(uint32_t, char *, unsigned) __attribute__((weak_import));
 extern volatile uint64_t native_adreno_import_diag[10] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_import_stage __attribute__((weak_import));
@@ -480,6 +490,17 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   if (&boot_progress_ext) {
     at = put(out, at, cap, "[ext]", 8);
     for (unsigned i = 0; i < 8; ++i) {char row[56]; snprintf(row, sizeof row, "X%u %.47s", i, boot_progress_ext[i]); at = put(out, at, cap, row, sizeof row);}
+    // IOKit's busy leaves and its matching threads while the registry is not quiet (LegacyDisplayProbe.cpp busyReport); first on the
+    // page so that nothing later crowds them out, and kept here because the message buffer wraps.
+    if (&native_iokit_busy_text && native_iokit_busy_text[0][0]) {
+      for (unsigned i = 0; i < 4; ++i) {
+        if (!native_iokit_busy_text[i][0]) continue;
+        char row[200]; snprintf(row, sizeof row, "[iokit busy] %.180s", native_iokit_busy_text[i]); at = put(out, at, cap, row, sizeof row);
+      }
+    }
+    if (&sheng_software_aes_state && sheng_software_aes_state) {
+      char row[48]; snprintf(row, sizeof row, "[software aes] state=%d", sheng_software_aes_state); at = put(out, at, cap, row, sizeof row);
+    }
   }
   // The Data store's counters (NativeRamBlock), a row of their own: the ext slots they once shared are taken by other kits.
   if (&native_data_persist_state && native_data_persist_state) {
@@ -622,6 +643,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       unsigned n = boot_ui_trace_role_rows(role, rows, 64, 2);   // 2: with each thread group's deeper frames
       for (unsigned i = 0; i < n; ++i) at = put(out, at, cap, rows[i], 120);
     }
+  }
+  // Threads stuck in an uninterruptible kernel wait for 20 s or more, in any process (BootUiTraceProbe.c boot_stuck_scan).
+  if (&boot_stuck_scan && &boot_stuck_rows) {
+    static char rows[16][120];
+    boot_stuck_scan(now);
+    unsigned n = boot_stuck_rows(rows, 16);
+    at = put(out, at, cap, "[stuck]", 8);
+    for (unsigned i = 0; i < n; ++i) at = put(out, at, cap, rows[i], 120);
   }
   if (log_display_on && &native_legacy_state_words) {
     static char words[240];
@@ -1952,8 +1981,9 @@ static void writer(void *arg, wait_result_t result) {
   const uint64_t start = log_ticks();
   // The reboot-into-fastboot path, read only: PSCI features and the PMIC cell. autoreset=<seconds of log time> then writes the cell and
   // restarts once, after that round's log is on the medium, but only when the probe found the cell writable.
-  uint32_t autoreset = 0;
-  int reset_ok = 0, reset_tried = 0;
+  uint32_t autoreset = 0, clean = 1;
+  int reset_ok = 0, reset_tried = 0, clean_tried = 0;
+  PE_parse_boot_argn("autoreset-clean", &clean, sizeof clean);
   uint32_t reset_held = 0, reset_tried_at = 0;
   if (&boot_reset_probe) {
     reset_ok = boot_reset_probe(boot_log_reset_probe_text, sizeof boot_log_reset_probe_text) == 0;
@@ -2030,7 +2060,18 @@ static void writer(void *arg, wait_result_t result) {
     if (autoreset && now >= autoreset && !reset_tried && !ok) ++reset_held;
     snprintf(boot_log_autoreset_text, sizeof boot_log_autoreset_text, "armed=%us probe_ok=%d tried=%d tried_at=%us held_by_write_errors=%u diag_export_at=%us now=%us",
              autoreset, reset_ok, reset_tried, reset_tried_at, reset_held, diag_at, now);
-    if (autoreset && now >= autoreset && !reset_tried && ok) {
+    // autoreset-clean (default 1): first the kernel's orderly reboot (reboot_kernel: SIGTERM to every process, so logd writes its
+    // in-memory log to the Data volume, then the file systems are synced and the platform restarts through PSCI). The bootloader cell was
+    // marked at the start, so that restart is fastboot too. Before, the tablet was reset at once and the unified log lost everything after
+    // its last write (macOS run35/run37: the log stopped 90 s and 25 s after WindowServer started of 300 s). If the tablet is still up
+    // 40 s later, the direct reset below follows.
+    if (autoreset && now >= autoreset && !clean_tried && ok && reset_ok && clean) {
+      clean_tried = 1;
+      thread_t thread = NULL;
+      if (kernel_thread_start(clean_reboot, NULL, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+      strlcpy(boot_log_reset_result, "autoreset: orderly reboot started", sizeof boot_log_reset_result);
+    }
+    if (autoreset && now >= autoreset + (clean ? 40 : 0) && !reset_tried && ok) {
       reset_tried = 1; reset_tried_at = now;
       if (!reset_ok) strlcpy(boot_log_reset_result, "autoreset skipped: the probe found no writable cell", sizeof boot_log_reset_result);
       else {
@@ -2107,7 +2148,11 @@ void boot_log_tick(unsigned now) {
   export_lock = IOLockAlloc();
 #if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
   uint32_t diag = 0;
-  if (PE_parse_boot_argn("diag", &diag, sizeof diag) && diag == 1) boot_process_start();
+  // The process stack worker: with diag=1, or on its own with boot-ui-trace=1 (the worker checks that switch). diag=1 keeps only
+  // the latency lines of the message buffer and no slot sections, so stacks next to the full log need boot-ui-trace=1 alone.
+  uint32_t trace = 0;
+  if ((PE_parse_boot_argn("diag", &diag, sizeof diag) && diag == 1) ||
+      (PE_parse_boot_argn("boot-ui-trace", &trace, sizeof trace) && trace == 1)) boot_process_start();
 #endif
   thread_t thread;
   if (kernel_thread_start_priority(writer, 0, BASEPRI_KERNEL, &thread) == KERN_SUCCESS) thread_deallocate(thread);

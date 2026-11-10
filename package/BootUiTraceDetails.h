@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 #ifndef SHENG_BOOT_UI_TRACE_DETAILS_H
 #define SHENG_BOOT_UI_TRACE_DETAILS_H
-struct bt_main {struct bt_entry entry;uint64_t frames[32],image;unsigned error,image_error;int pid;unsigned slide;};
+// kernel, kstate, khint, kevent: the main thread's kernel side when it was sampled waiting (its kernel return addresses, thread state,
+// block hint and wait event), which tells a thread blocked inside a page fault or a trap from one running in user mode.
+struct bt_main {struct bt_entry entry;uint64_t frames[32],image;unsigned error,image_error;int pid;unsigned slide;
+                uint64_t kernel[12],kevent;unsigned kstate,khint;};
 static char bt_role_char(unsigned role,const struct bt_main *m) {
  return role==0?(m->entry.role?m->entry.role:'B'):"BSTU"[role&3];
 }

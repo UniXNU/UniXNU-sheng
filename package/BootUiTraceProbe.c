@@ -135,6 +135,7 @@ void boot_ui_trace_task(task_t task,unsigned index,int pid,const char *name,unsi
   boot_ui_trace_phase=role?3:2;
   if(samples[i].index==1) {
    struct bt_main *main=&draft_main[role];main->entry=samples[i];main->pid=pid;main->slide=slide;
+   memcpy(main->kernel,sample_k[i],sizeof(main->kernel));main->kevent=sample_event[i];main->kstate=sample_state[i];main->khint=sample_hint[i];
    if(!main->entry.error)bt_walk_n(&main->entry,read_user,map,main->frames,32);
    main->error=main->entry.error;
    uint64_t info[2]={0},image[3]={0};main->image_error=1;
@@ -234,6 +235,13 @@ unsigned boot_ui_trace_role_rows(unsigned role,char rows[][120],unsigned max,uns
   for(unsigned row=0;row<3;++row) {
    int at=snprintf(rows[n],120,"STK%c %02u",c,row*8+1);
    for(unsigned i=0;i<8 && at>0 && at<119;++i)at+=snprintf(rows[n]+at,120-at," %llx",m->frames[row*8+i]);
+   ++n;
+  }
+  // The kernel side of the same sample (macOS run38: loginwindow's main thread stayed at one load from the shared cache for minutes).
+  if(n<max)snprintf(rows[n++],120,"STK%c kern st=%x hint=%u ev=%llx",c,m->kstate,m->khint,(unsigned long long)VM_KERNEL_UNSLIDE_OR_PERM(m->kevent));
+  for(unsigned row=0;row<2 && n<max && m->kernel[row*6];++row) {
+   int at=snprintf(rows[n],120,"STK%c k%02u",c,row*6+1);
+   for(unsigned i=0;i<6 && at>0 && at<119;++i)at+=snprintf(rows[n]+at,120-at," %llx",(unsigned long long)VM_KERNEL_UNSLIDE(m->kernel[row*6+i]));
    ++n;
   }
  } else if(published_pid[role]) {
@@ -355,6 +363,31 @@ int boot_kthread_report(const char *name,char *out,unsigned size) {
  task_unlock(kernel_task);
  return found;
 }
+// The nth kernel thread whose name starts with prefix (IOKit's matching threads, "IOConfigThread_..."): its name, then the same line as
+// boot_kthread_report. 0 when found, -1 when busy or when there are fewer.
+int boot_kthread_report_nth(const char *prefix,unsigned nth,char *name,unsigned name_size,char *out,unsigned size) {
+ out[0]=0;name[0]=0;
+ if(!task_lock_try(kernel_task))return -1;
+ int found=-1;thread_t thread;unsigned seen=0;const size_t plen=strlen(prefix);
+ queue_iterate(&kernel_task->threads,thread,thread_t,task_threads) {
+  char tn[64];tn[0]=0;thread_get_thread_name(thread,tn);
+  if(strncmp(tn,prefix,plen) || seen++!=nth)continue;
+  strlcpy(name,tn,name_size);
+  uint64_t frames[BT_KFRAMES]={0};unsigned state=0,hint=0;uint64_t event=0;
+  bool irq=ml_set_interrupts_enabled(false);
+  if(simple_lock_try(&thread->sched_lock,&thread_lck_grp)) {
+   bt_kernel_stack(thread,frames);state=(unsigned)thread->state;hint=(unsigned)thread->block_hint;event=(uint64_t)thread->wait_event;
+   thread_unlock(thread);found=0;
+  }
+  ml_set_interrupts_enabled(irq);
+  if(found)break;
+  int at=snprintf(out,size,"st=%x hint=%u ev=%llx k",state,hint,(unsigned long long)VM_KERNEL_UNSLIDE_OR_PERM(event));
+  for(unsigned i=0;i<BT_KFRAMES && frames[i] && at>0 && (unsigned)at<size;++i)at+=snprintf(out+at,size-(unsigned)at," %llx",(unsigned long long)VM_KERNEL_UNSLIDE(frames[i]));
+  break;
+ }
+ task_unlock(kernel_task);
+ return found;
+}
 // Every other processor asked to check its ASTs again, as the scheduler's own preemption signal does. For a thread that was made runnable
 // while the processor meant to run it never took the signal. out: per processor its state, the priority it runs at and the signal bits
 // still pending before this one was sent (bits that stay set mean a processor that does not take its interrupts).
@@ -463,6 +496,65 @@ static int cs_ptime_one(proc_t p,void *arg) {
  r.abs=cs_ptime_now;r.pid=pid;r.user_us=cs_us(du);r.system_us=cs_us(ds);r.priority=(int16_t)task->priority;
  const uint32_t n=boot_ptime_count;boot_ptime_ring[n&(CS_PTIME_RING-1)]=r;boot_ptime_count=n+1;
  return 0;   // PROC_RETURNED
+}
+// Stuck threads: any user process's thread that has sat in the same uninterruptible wait, without a context switch, for 20 s or more.
+// An uninterruptible wait is a kernel-side one (a busy page, a lock, I/O); one that never ends is a kernel deadlock, and the process
+// just stops without a word (macOS: loginwindow in the 4K shared region pager; securityd, run46). Rows: pid, name, seconds, block hint,
+// wait event and the kernel return addresses (unslid). boot_stuck_scan(seconds) is called once per log round.
+extern void proc_name(int,char *,int);
+#define BT_STUCK 6
+#define BT_STUCK_SEEN 512
+struct bt_stuck {int pid;char name[20];uint64_t tid,event,kernel[BT_KFRAMES];unsigned hint,seconds;};
+static struct bt_stuck stuck_draft[BT_STUCK],stuck_published[BT_STUCK];
+static unsigned stuck_draft_count,stuck_published_count,stuck_clock,stuck_total;
+static struct {uint64_t tid,event;unsigned switches,since;} stuck_seen[BT_STUCK_SEEN];
+static int stuck_one(proc_t p,void *arg) {
+ (void)arg;
+ task_t task=proc_task(p);
+ if(!task || task==kernel_task || !task_lock_try(task))return 0;
+ const int pid=proc_pid(p);unsigned visited=0;thread_t thread;
+ queue_iterate(&task->threads,thread,thread_t,task_threads) {
+  if(++visited>96)break;
+  bool irq=ml_set_interrupts_enabled(false);
+  if(!simple_lock_try(&thread->sched_lock,&thread_lck_grp)){ml_set_interrupts_enabled(irq);continue;}
+  if((thread->state&(TH_WAIT|TH_UNINT|TH_RUN))==(TH_WAIT|TH_UNINT)) {
+   const uint64_t tid=thread->thread_id,event=(uint64_t)thread->wait_event;const unsigned switches=thread->c_switch;
+   __typeof__(stuck_seen[0]) *seen=&stuck_seen[tid&(BT_STUCK_SEEN-1)];
+   if(seen->tid!=tid || seen->event!=event || seen->switches!=switches){seen->tid=tid;seen->event=event;seen->switches=switches;seen->since=stuck_clock;}
+   else if(stuck_clock-seen->since>=20) {
+    ++stuck_total;
+    if(stuck_draft_count<BT_STUCK) {
+     struct bt_stuck *r=&stuck_draft[stuck_draft_count++];
+     r->pid=pid;r->tid=tid;r->event=event;r->hint=(unsigned)thread->block_hint;r->seconds=stuck_clock-seen->since;
+     bt_kernel_stack(thread,r->kernel);
+    }
+   }
+  }
+  thread_unlock(thread);ml_set_interrupts_enabled(irq);
+ }
+ task_unlock(task);
+ return 0;   // PROC_RETURNED
+}
+void boot_stuck_scan(unsigned seconds) {
+ static unsigned last;
+ if(seconds<last+5)return;
+ last=seconds;stuck_clock=seconds;stuck_draft_count=0;stuck_total=0;
+ proc_iterate((1U<<0)|(1U<<2),stuck_one,NULL,NULL,NULL);
+ for(unsigned i=0;i<stuck_draft_count;++i){stuck_draft[i].name[0]=0;proc_name(stuck_draft[i].pid,stuck_draft[i].name,sizeof(stuck_draft[i].name));}
+ memcpy(stuck_published,stuck_draft,sizeof(stuck_published));stuck_published_count=stuck_draft_count;
+}
+unsigned boot_stuck_rows(char rows[][120],unsigned max) {
+ unsigned n=0;
+ if(n<max)snprintf(rows[n++],120,"stuck threads now %u (shown %u)",stuck_total,stuck_published_count);
+ for(unsigned i=0;i<stuck_published_count && n+2<=max;++i) {
+  const struct bt_stuck *r=&stuck_published[i];
+  snprintf(rows[n++],120,"SK%u p%d %s tid=%llx %us hint=%u ev=%llx",i,r->pid,r->name,(unsigned long long)r->tid,r->seconds,r->hint,
+           (unsigned long long)VM_KERNEL_UNSLIDE_OR_PERM(r->event));
+  int at=snprintf(rows[n],120,"SK%u k",i);
+  for(unsigned k=0;k<BT_KFRAMES && r->kernel[k] && at>0 && at<104;++k)at+=snprintf(rows[n]+at,120-at," %llx",(unsigned long long)VM_KERNEL_UNSLIDE(r->kernel[k]));
+  ++n;
+ }
+ return n;
 }
 static void cs_ptime_pass(void) {
  cs_ptime_now=mach_absolute_time();
@@ -892,4 +984,33 @@ void boot_user_stack_here(struct boot_user_stack *out) {
   if(known)continue;
   out->images[images].base=hit.base;memcpy(out->images[images].uuid,hit.uuid,16);++images;
  }
+}
+
+// exit-trace=NAME[,NAME...] (default WindowServer,loginwindow): the user frames of a listed process's exit() call, on the kernel log, with
+// the shared cache slide (subtract it, then symbolize against the cache). macOS run37: WindowServer called exit(0) 19 s after it started
+// with nothing in its own log that said why. The kernel's exit() calls this (macos-droidvm-k27-parity.patch) before exit1.
+void native_exit_trace(int pid,const char *name,int status) {
+ static char list[128];static int state;
+ if(!state){state=PE_parse_boot_arg_str("exit-trace",list,sizeof(list))?2:1;if(state==1)strlcpy(list,"WindowServer,loginwindow",sizeof(list));}
+ if(!name||!*name)return;
+ const size_t length=strlen(name);bool listed=false;
+ for(const char *at=list;*at;){
+  const char *end=strchr(at,',');const size_t n=end?(size_t)(end-at):strlen(at);
+  if(n==length && !strncmp(at,name,n)){listed=true;break;}
+  if(!end)break;at=end+1;
+ }
+ if(!listed)return;
+ thread_t thread=current_thread();arm_saved_state_t *saved=thread->machine.upcb;
+ if(!saved || !is_saved_state64(saved))return;
+ struct bt_entry e;memset(&e,0,sizeof(e));
+ e.pc=BT_STRIP_USER_PC((uint64_t)get_saved_state_pc(saved));e.lr=BT_STRIP_USER_PC((uint64_t)get_saved_state_lr(saved));
+ e.fp=(uint64_t)get_saved_state_fp(saved);
+ uint64_t frames[18]={e.pc,e.lr};
+ vm_map_t map=current_map();
+ bt_walk_n(&e,read_user,map,&frames[2],16);
+ const unsigned slide=(unsigned)current_task()->task_shared_region_slide;
+ printf("exit-trace: pid %d %s status %d cache+%x frames %llx %llx %llx %llx %llx %llx %llx %llx %llx\n",pid,name,status,slide,
+  frames[0],frames[1],frames[2],frames[3],frames[4],frames[5],frames[6],frames[7],frames[8]);
+ printf("exit-trace: pid %d more %llx %llx %llx %llx %llx %llx %llx %llx %llx\n",pid,frames[9],frames[10],frames[11],frames[12],frames[13],
+  frames[14],frames[15],frames[16],frames[17]);
 }
