@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""Check, in the emitted iPadOS 27 kernel, that the display backend's references reach the original Legacy code:
-the constructor's branch to the original C2 and an inherited vtable entry (slot 180, swap_submit)."""
+"""Check, in an emitted kernel, that the display backend's references reach the original Legacy code:
+the constructor's branch to the original C2 and the inherited swap_submit vtable entry.
+
+usage: check-legacy27-binds.py KERNEL [ABI]; ABI defaults to legacy-display-24A446.json (iPadOS 27), and
+legacy-display-26C5035r.json checks a macOS 27.3 kernel."""
 import json, struct, subprocess, sys
 from pathlib import Path
 SERIES = Path(__file__).resolve().parents[2]
@@ -8,7 +11,7 @@ sys.path.insert(0, str(SERIES / 'UniXNU/kits/XnuPrelink'))
 from kc_image import Image
 import capstone
 K = sys.argv[1]
-abi = json.load(open(str(SERIES / 'UniXNU-sheng/scripts/legacy-display-24A446.json')))
+abi = json.load(open(sys.argv[2] if len(sys.argv) > 2 else str(SERIES / 'UniXNU-sheng/scripts/legacy-display-24A446.json')))
 cs = int(abi['collection_slide'], 16)
 sym = {l.split()[2]: int(l.split()[0], 16) for l in subprocess.run(['nm', K], capture_output=True, text=True).stdout.splitlines()
        if len(l.split()) == 3 and l[:1] in '0123456789abcdef'}
@@ -41,10 +44,17 @@ for e in images:
     except Exception:
         pass
 vt = sym['__ZTV19NativeLegacyDisplay'] + 16
-want = int(abi['slots'][180][0], 16) + cs
-got = fix.get(vt + 8 * 180)
+# swap_submit is slot 180 on iPadOS 27 and 284 on macOS 27.3 (more IOService padding). Its discriminator comes from the
+# mangled name, so it is the same in both: find the slot by it.
+SWAP_SUBMIT = 0x7dea
+index = [i for i, (_, disc) in enumerate(abi['slots']) if int(disc, 16) == SWAP_SUBMIT]
+if len(index) != 1:
+    sys.exit(f'expected one swap_submit slot (discriminator {SWAP_SUBMIT:#x}), found {index}')
+index = index[0]
+want = int(abi['slots'][index][0], 16) + cs
+got = fix.get(vt + 8 * index)
 slot = through(got[0]) if got else None
-print('vtable slot 180', hex(slot) if slot else None, 'signed' if got and got[1] else 'unsigned', 'want', hex(want), 'OK' if slot == want else 'BAD')
+print(f'vtable slot {index} (swap_submit)', hex(slot) if slot else None, 'signed' if got and got[1] else 'unsigned', 'want', hex(want), 'OK' if slot == want else 'BAD')
 # The metaclass constructors load the original gMetaClass from a GOT entry: it must hold the original address.
 meta = int(abi['bindings']['__ZN25IOMobileFramebufferLegacy10gMetaClassE'], 16) + cs
 ctor = sym['__ZN19NativeLegacyDisplay9MetaClassC2Ev']
