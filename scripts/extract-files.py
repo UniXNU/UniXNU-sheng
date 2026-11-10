@@ -8,13 +8,15 @@ SOURCE is, in the manner of LineageOS extract-files:
   HOST:DIR       a running system, read with "ssh HOST cat"; nothing on it is changed
   (none)         the public mirror named by "@fetch" in proprietary-files.txt
 --check only verifies what is in .cache/firmware and exits 1 when a required file is missing or wrong.
-Files already present with the right hash are left alone; a file with a wrong hash is never kept.
+Files with matching hashes are reused. Failed replacements leave the previous cache untouched.
+Run network extraction from UniXNU, or set UNIXNU_ROOT to that checkout.
 """
 import argparse
 import hashlib
 import subprocess
+import os
+import tempfile
 import sys
-import urllib.request
 from pathlib import Path
 
 
@@ -47,12 +49,35 @@ def read_source(source, base, name):
     if source is None:
         if not base:
             raise SystemExit('no SOURCE given and proprietary-files.txt has no @fetch')
-        with urllib.request.urlopen(urllib.request.Request(base + name, headers={'User-Agent': 'unixnu-extract-files'}), timeout=60) as reply:
-            return reply.read()
+        candidates = [Path(__file__).resolve().parent, Path.cwd() / 'scripts']
+        if os.environ.get('UNIXNU_ROOT'):
+            candidates.insert(0, Path(os.environ['UNIXNU_ROOT']) / 'scripts')
+        for directory in candidates:
+            if (directory / 'github_download.py').is_file():
+                sys.path.insert(0, str(directory))
+                break
+        else:
+            raise ValueError('Run from the UniXNU checkout or set UNIXNU_ROOT to it')
+        from github_download import fetch_bytes
+        print(f'Fetching {name}', flush=True)
+        return fetch_bytes(base + name, timeout=60, max_bytes=16 * 1024 * 1024)
     if ':' in source and not Path(source).exists():
         host, _, directory = source.partition(':')
         return subprocess.run(['ssh', '-o', 'BatchMode=yes', host, 'cat', f'{directory.rstrip("/")}/{name}'], check=True, capture_output=True).stdout
     return (Path(source) / name).read_bytes()
+
+
+def install(target, data):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=target.name + '.', delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(data)
+        temporary.replace(target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def main():
@@ -78,8 +103,13 @@ def main():
             failed += not optional
             continue
         try:
-            data = read_source(args.source, base, name)
-        except (OSError, subprocess.CalledProcessError, ValueError) as error:
+            local = root / 'firmware' / name
+            if (args.source is None and local.is_file() and
+                    hashlib.sha256(local.read_bytes()).hexdigest() == digest):
+                data = local.read_bytes()
+            else:
+                data = read_source(args.source, base, name)
+        except (OSError, subprocess.SubprocessError, ValueError, RuntimeError) as error:
             print(f'{"optional " if optional else "FAILED   "}{name}: {error}')
             failed += not optional
             continue
@@ -87,10 +117,10 @@ def main():
             print(f'FAILED   {name}: sha256 differs, not kept')
             failed += 1
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
+        install(target, data)
         print(f'extracted {name} ({len(data)} bytes)')
     return 1 if failed else 0
 
 
-sys.exit(main())
+if __name__ == '__main__':
+    sys.exit(main())

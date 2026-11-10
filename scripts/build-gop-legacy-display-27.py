@@ -23,6 +23,10 @@ if ARCH != 'arm64e' or IOS_VERSION.split('.')[0] != '27' or (BUILD, MACOS) not i
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'build/native-legacy-display'
 OUT.mkdir(parents=True, exist_ok=True)
+DEVICE = Path(os.environ.get('UNIXNU_DEVICE') or ROOT.parents[5] / 'UniXNU-sheng')
+# Both input firmware files are required before compiling their embedded objects.
+subprocess.run([sys.executable, DEVICE / 'scripts/extract-files.py', '--device', DEVICE],
+               cwd=ROOT, check=True)
 sys.path.insert(0, str(ROOT / 'kits/XnuPrelink'))
 ABI_PATH = Path(__file__).resolve().with_name(f'legacy-display-{BUILD}.json')
 abi = json.loads(ABI_PATH.read_text())
@@ -396,7 +400,6 @@ run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--global
      gop / 'NativeGOPPresenter.o', gop_late])
 # Keyboard, buttons and touch, the iPadOS 17 drivers: their source-API objects (public IOHIDFamily headers, so every IOHIDDevice
 # virtual keeps its real name and pointer-authentication discriminator), linked against the original IOHIDDevice of this fileset.
-DEVICE = Path(os.environ.get('UNIXNU_DEVICE') or ROOT.parents[5] / 'UniXNU-sheng')
 # The UniXNU checkout's copy: it reads the OS profile next to it.
 # The HID source is the tree's refer link (a clean pinned clone of the feed), not a hand-placed copy.
 print(run(['python3', ROOT.parents[4] / 'scripts/build-sheng-source-drivers.py', '--tree', ROOT, '--device', DEVICE], text=True), end='')

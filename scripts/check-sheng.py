@@ -89,4 +89,6 @@ if __name__ == '__main__':
     print(f'{len(errors)} static errors; {len(missing)} vendor inputs still missing; hardware unverified')
     for error in errors:
         print(error)
-    raise SystemExit(bool(errors))
+    for path in missing:
+        print(f'Missing vendor input: {path}')
+    raise SystemExit(bool(errors or missing))

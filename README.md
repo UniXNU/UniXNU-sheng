@@ -64,6 +64,10 @@ UNIXNU_UNIQUE_CHIP_ID=<8 hex digits> scripts/package.sh --os 27 --uefi ../uefi-s
   Extracted firmware lives in no repository.
 - `UNIXNU_UNIQUE_CHIP_ID` is the platform seed of the device, 8 hex digits.
   It is baked into the images and stays out of every repository.
+- The Legacy display build prepares keyboard and touch firmware from the fixed
+  commit in `proprietary-files.txt`, verifies SHA-256 and reuses matching files.
+  For manual extraction, run `UNIXNU_ROOT=/path/to/UniXNU python3 scripts/extract-files.py`
+  from this repository.
 - The kernelcache, trust caches and OS volumes come from the IPSW the OS
   profile pins; the generated GPU headers come from the pinned sources the
   kernel archives fetch.

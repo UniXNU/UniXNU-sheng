@@ -145,11 +145,18 @@ if stock_config.exists():
 uefi = Path(os.environ.get('UNIXNU_UEFI') or ROOT / 'uefi-sheng')
 link = uefi / 'Binaries/sheng'
 generated = (output / 'manifest.json')
-if link.is_dir() and (link / 'manifest.json').is_file() and (link / 'manifest.json').read_bytes() == generated.read_bytes():
+matches = (link.is_dir() and (link / 'manifest.json').is_file()
+           and (link / 'manifest.json').read_bytes() == generated.read_bytes()
+           and all((link / path.relative_to(output)).is_file()
+                   and (link / path.relative_to(output)).read_bytes() == path.read_bytes()
+                   for path in output.rglob('*') if path.is_file()))
+if matches:
     print(f'Binaries/sheng already matches {output}')
 else:
-    if link.is_symlink() or link.exists():
-        print(f'{link} holds older content; regenerating')
+    if link.is_symlink():
+        link.unlink()
+    elif link.exists():
+        print(f'{link} holds older or incomplete content; regenerating')
         shutil.rmtree(link)
     link.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(output, link, symlinks=True)

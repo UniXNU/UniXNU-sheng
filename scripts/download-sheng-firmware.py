@@ -13,19 +13,16 @@ import time
 import urllib.request
 
 import tomllib
+from firmware_cache import retained_inputs
 
 ROOT = Path(__file__).resolve().parents[1]
 directory = ROOT / '.cache/firmware/sheng'
 BOARD = Path(os.environ.get('UNIXNU_DEVICE') or ROOT) / 'board.toml'
 image = tomllib.load(open(BOARD, 'rb'))['firmware']['image']
 URL, MD5 = image['url'], image['md5']
-retained = directory / 'porting-inputs.json'
-if retained.is_file():
-    import json
-    record = json.loads(retained.read_text())
-    if record.get('archive_deleted') and record.get('source_url') == URL and record.get('archive_sha256') == image['sha256']:
-        print(f'firmware inputs already extracted from {URL.rsplit("/", 1)[1]}')
-        raise SystemExit(0)
+if retained_inputs(directory, image):
+    print('Firmware inputs verified - Reusing extracted stock files', flush=True)
+    raise SystemExit(0)
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--connections', type=int, default=32)
 args = parser.parse_args()
@@ -42,6 +39,8 @@ with urllib.request.urlopen(request, timeout=30) as response:
         raise SystemExit('Expected a ranged gzip response; refusing a whole-body fallback')
     size = int(match[1])
     etag = response.headers.get('ETag')
+if size != image['bytes']:
+    raise SystemExit('Remote firmware archive size differs from board.toml')
 chunk_size = 8 * 1024 * 1024
 count = (size + chunk_size - 1) // chunk_size
 state = {'url': URL, 'bytes': size, 'etag': etag, 'chunk_bytes': chunk_size, 'completed': {}}
