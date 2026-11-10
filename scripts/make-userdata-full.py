@@ -3,14 +3,16 @@
 
 Content, byte for byte as scripts/unixnu/userdata.py lays it out: SHNGROOT manifest at 0, window OS at 1 MiB, window SystemOS
 after it, then any further windows (macOS: App) in the order of ROOT.json, each 1 MiB aligned; then zeros up to the end of the
-partition (the persistent Data store and the UFS log are cleared).
+partition (the persistent Data store and the UFS log are cleared). Data objects (--object NAME=FILE, such as the
+<window>.vroot hash tables of header-only root policies) follow the windows, 1 MiB aligned, in a version 2 manifest.
 Zero 4 KiB blocks become FILL chunks (written as zeros), the rest RAW chunks. Each window's SHA-256 is checked against the
 earlier userdata-root.json, and the manifest's against its manifest_sha256.
 
-  make-userdata-full.py OS.dmg SYSTEMOS.dmg ROOT.json PARTITION_BYTES OUTPUT [WINDOW.dmg ...]
+  make-userdata-full.py OS.dmg SYSTEMOS.dmg ROOT.json PARTITION_BYTES OUTPUT [WINDOW.dmg ...] [--object NAME=FILE ...]
 """
 import hashlib
 import json
+import os
 import plistlib
 import re
 import struct
@@ -89,7 +91,12 @@ class Writer:
 def main():
     os_dmg, sys_dmg, root_json, partition, output = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5]
     pins = json.load(open(root_json))
-    dmgs = [os_dmg, sys_dmg] + sys.argv[6:]
+    extra, object_specs = sys.argv[6:], []
+    while '--object' in extra:
+        at = extra.index('--object')
+        object_specs.append(extra[at + 1])
+        del extra[at:at + 2]
+    dmgs = [os_dmg, sys_dmg] + extra
     if len(dmgs) != len(pins['windows']):
         sys.exit(f'{root_json} has {len(pins["windows"])} windows; give one disk image for each')
     layout, cursor = [], MIB
@@ -98,6 +105,14 @@ def main():
         size = image_size(dmg)
         layout.append((name, dmg, cursor, size))
         cursor += (size + MIB - 1) // MIB * MIB
+    objects = []
+    for spec in object_specs:
+        name, _, path = spec.partition('=')
+        size = os.path.getsize(path)
+        objects.append((name, path, cursor, size))
+        cursor += (size + MIB - 1) // MIB * MIB
+    if [(n, o, s) for n, _, o, s in objects] != [(o['name'], o['offset'], o['size']) for o in pins.get('objects', [])]:
+        sys.exit(f'objects differ from {root_json}')
     total = cursor
     for (name, _, offset, size), pin in zip(layout, pins['windows']):
         if (name, offset, size) != (pin['name'], pin['offset'], pin['size']):
@@ -139,12 +154,26 @@ def main():
             sys.exit(f'{name} sha256 {digest.hexdigest()} differs from the pin {pin["sha256"]}')
         entries.append((name, offset, size, digest.digest()))
         print(f'{name}: {size} bytes at {offset:#x} sha256 {digest.hexdigest()} (matches)', flush=True)
+    object_entries = []
+    for name, path, offset, size in objects:
+        assert position == offset
+        data = open(path, 'rb').read()
+        digest = hashlib.sha256(data)
+        pin = next(o for o in pins['objects'] if o['name'] == name)
+        if digest.hexdigest() != pin['sha256']:
+            sys.exit(f'object {name} sha256 {digest.hexdigest()} differs from the pin {pin["sha256"]}')
+        aligned = (size + MIB - 1) // MIB * MIB
+        writer.data(data + bytes(aligned - size))
+        position += aligned
+        object_entries.append((name, offset, size, digest.digest()))
+        print(f'object {name}: {size} bytes at {offset:#x} sha256 {digest.hexdigest()} (matches)', flush=True)
     writer.zeros((partition - total) // BLOCK)
     header = bytearray(4096)
     header[0:8] = b'SHNGROOT'
-    struct.pack_into('<IIQ', header, 8, 1, len(entries), total)
-    for index, (name, offset, size, digest) in enumerate(entries):
-        struct.pack_into('<32sQQII32s40s', header, 24 + 128 * index, name.encode(), offset, size, 512, 1, digest, bytes(40))
+    struct.pack_into('<IIQ', header, 8, 2 if object_entries else 1, len(entries) + len(object_entries), total)
+    rows = [(e, 512, 1) for e in entries] + [(e, 4096, 3) for e in object_entries]
+    for index, ((name, offset, size, digest), block, flags) in enumerate(rows):
+        struct.pack_into('<32sQQII32s40s', header, 24 + 128 * index, name.encode(), offset, size, block, flags, digest, bytes(40))
     header[4064:4096] = hashlib.sha256(bytes(header[:4064])).digest()
     if hashlib.sha256(bytes(header)).hexdigest() != pins['manifest_sha256']:
         sys.exit('manifest differs from the pin')
