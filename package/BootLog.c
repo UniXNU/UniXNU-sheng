@@ -2253,6 +2253,18 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if (boot_log_reset_watchdog[0]) at = put(out, at, cap, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
     if (boot_log_reset_result[0]) at = put(out, at, cap, boot_log_reset_result, sizeof boot_log_reset_result);
   }
+  // The command line the kernel parses: its length, whether autoreset is in it, and its last 80 characters.
+  {
+    extern char *PE_boot_args(void);
+    const char *args = PE_boot_args();
+    const size_t len = args ? strnlen(args, 2048) : 0;
+    uint32_t armed = 0;
+    const int found = PE_parse_boot_argn("autoreset", &armed, sizeof armed);
+    char row[160];
+    snprintf(row, sizeof row, "[cmdline] len=%lu autoreset=%d/%u tail=%s", (unsigned long)len, found, armed,
+             len > 80 ? args + len - 80 : (args ? args : ""));
+    at = put(out, at, cap, row, sizeof row);
+  }
   if (boot_diag_status) {
     char row[120];
     snprintf(row, sizeof row, "[diag] status=%d files=%u skipped=%u errors=%u bytes=%u first=%u alloc=%u", boot_diag_status, &boot_diag_files ? boot_diag_files : 0,
