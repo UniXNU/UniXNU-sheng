@@ -125,6 +125,8 @@ extern char native_staged_apps_path[96] __attribute__((weak_import));
 extern const char *boot_progress_tag(void) __attribute__((weak_import));
 extern unsigned boot_ui_trace_role_rows(unsigned, char [][120], unsigned, unsigned) __attribute__((weak_import));
 extern void boot_stuck_scan(unsigned) __attribute__((weak_import));
+extern void boot_kcpu_scan(unsigned) __attribute__((weak_import));
+extern unsigned boot_kcpu_rows(char [][120], unsigned) __attribute__((weak_import));
 extern unsigned boot_stuck_rows(char [][120], unsigned) __attribute__((weak_import));
 extern unsigned boot_ui_trace_hot_rows(char [][120], unsigned) __attribute__((weak_import));
 extern unsigned long vm_kernel_slide;
@@ -650,6 +652,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     boot_stuck_scan(now);
     unsigned n = boot_stuck_rows(rows, 16);
     at = put(out, at, cap, "[stuck]", 8);
+    for (unsigned i = 0; i < n; ++i) at = put(out, at, cap, rows[i], 120);
+  }
+  // The busiest kernel threads of the last interval (BootUiTraceProbe.c boot_kcpu_scan).
+  if (&boot_kcpu_scan && &boot_kcpu_rows) {
+    static char rows[6][120];
+    boot_kcpu_scan(now);
+    unsigned n = boot_kcpu_rows(rows, 6);
+    if (n) at = put(out, at, cap, "[kernel cpu]", 13);
     for (unsigned i = 0; i < n; ++i) at = put(out, at, cap, rows[i], 120);
   }
   if (log_display_on && &native_legacy_state_words) {

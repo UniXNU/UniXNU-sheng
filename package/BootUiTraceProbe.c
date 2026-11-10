@@ -556,6 +556,61 @@ unsigned boot_stuck_rows(char rows[][120],unsigned max) {
  }
  return n;
 }
+// Busiest kernel threads: CPU time each kernel_task thread used since the last scan, the top BT_KCPU by time, as
+// "name(or tid) ms" over the interval. macOS run47: top showed kernel_task at 178 % of a CPU on an idle desktop.
+#define BT_KCPU 8
+#define BT_KCPU_SEEN 1024
+struct bt_kcpu {uint64_t tid,used;char name[28];};
+static struct bt_kcpu kcpu_published[BT_KCPU];
+static unsigned kcpu_published_count,kcpu_interval,kcpu_total_ms;
+static struct {uint64_t tid,time;} kcpu_seen[BT_KCPU_SEEN];
+void boot_kcpu_scan(unsigned seconds) {
+ static unsigned last;
+ if(seconds<last+10)return;
+ const unsigned interval=seconds-last;last=seconds;
+ if(!task_lock_try(kernel_task))return;
+ struct bt_kcpu top[BT_KCPU];memset(top,0,sizeof(top));uint64_t total=0;thread_t thread;unsigned visited=0;
+ queue_iterate(&kernel_task->threads,thread,thread_t,task_threads) {
+  if(++visited>2000)break;
+  const uint64_t tid=thread->thread_id,now=recount_thread_time_mach(thread);
+  __typeof__(kcpu_seen[0]) *seen=&kcpu_seen[tid&(BT_KCPU_SEEN-1)];
+  const uint64_t used=seen->tid==tid && now>=seen->time?now-seen->time:0;
+  const bool known=seen->tid==tid;seen->tid=tid;seen->time=now;
+  if(!known || !used || (thread->state&TH_IDLE))continue;
+  total+=used;
+  for(unsigned k=0;k<BT_KCPU;++k) {
+   if(top[k].used>=used)continue;
+   for(unsigned m=BT_KCPU-1;m>k;--m)top[m]=top[m-1];
+   // thread_get_thread_name writes up to MAXTHREADNAMESIZE (64) bytes: into a buffer of that size, then the row's shorter field.
+   // (Writing it straight into the 28-byte field overran the stack: "Kernel stack memory corruption detected", macOS run48.)
+   char full[64];full[0]=0;thread_get_thread_name(thread,full);full[sizeof(full)-1]=0;
+   top[k].tid=tid;top[k].used=used;strlcpy(top[k].name,full,sizeof(top[k].name));
+   break;
+  }
+ }
+ task_unlock(kernel_task);
+ uint64_t frequency=0;__asm__ volatile("mrs %0, cntfrq_el0":"=r"(frequency));
+ // recount_thread_time_mach is in mach time units; the board's user timebase may be scaled, the ratio between rows is what counts.
+ for(unsigned k=0;k<BT_KCPU;++k)top[k].used=frequency?top[k].used*1000/frequency:0;
+ memcpy(kcpu_published,top,sizeof(kcpu_published));kcpu_published_count=BT_KCPU;kcpu_interval=interval;
+ kcpu_total_ms=frequency?(unsigned)(total*1000/frequency):0;
+}
+unsigned boot_kcpu_rows(char rows[][120],unsigned max) {
+ unsigned n=0;
+ if(!kcpu_interval || !max)return 0;
+ snprintf(rows[n++],120,"kernel threads: %u ms of CPU in %u s",kcpu_total_ms,kcpu_interval);
+ for(unsigned i=0;i<kcpu_published_count && n<max;i+=2) {
+  int at=snprintf(rows[n],120,"KC");
+  for(unsigned k=i;k<i+2 && k<kcpu_published_count && at>0 && at<100;++k) {
+   const struct bt_kcpu *r=&kcpu_published[k];
+   if(!r->used)continue;
+   if(r->name[0])at+=snprintf(rows[n]+at,120-at," %s %llums",r->name,(unsigned long long)r->used);
+   else at+=snprintf(rows[n]+at,120-at," t%llx %llums",(unsigned long long)r->tid,(unsigned long long)r->used);
+  }
+  ++n;
+ }
+ return n;
+}
 static void cs_ptime_pass(void) {
  cs_ptime_now=mach_absolute_time();
  proc_iterate((1U<<0)|(1U<<2),cs_ptime_one,NULL,NULL,NULL);
