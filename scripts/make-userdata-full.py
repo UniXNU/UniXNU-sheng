@@ -2,11 +2,12 @@
 """Stream a whole-partition Android sparse image for sheng's userdata, without an intermediate raw file.
 
 Content, byte for byte as scripts/unixnu/userdata.py lays it out: SHNGROOT manifest at 0, window OS at 1 MiB, window SystemOS
-after it (1 MiB aligned); then zeros up to the end of the partition (the persistent Data store and the UFS log are cleared).
+after it, then any further windows (macOS: App) in the order of ROOT.json, each 1 MiB aligned; then zeros up to the end of the
+partition (the persistent Data store and the UFS log are cleared).
 Zero 4 KiB blocks become FILL chunks (written as zeros), the rest RAW chunks. Each window's SHA-256 is checked against the
 earlier userdata-root.json, and the manifest's against its manifest_sha256.
 
-  make-userdata-full.py OS.dmg SYSTEMOS.dmg ROOT.json PARTITION_BYTES OUTPUT
+  make-userdata-full.py OS.dmg SYSTEMOS.dmg ROOT.json PARTITION_BYTES OUTPUT [WINDOW.dmg ...]
 """
 import hashlib
 import json
@@ -88,8 +89,12 @@ class Writer:
 def main():
     os_dmg, sys_dmg, root_json, partition, output = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5]
     pins = json.load(open(root_json))
+    dmgs = [os_dmg, sys_dmg] + sys.argv[6:]
+    if len(dmgs) != len(pins['windows']):
+        sys.exit(f'{root_json} has {len(pins["windows"])} windows; give one disk image for each')
     layout, cursor = [], MIB
-    for name, dmg in (('OS', os_dmg), ('SystemOS', sys_dmg)):
+    for pin, dmg in zip(pins['windows'], dmgs):
+        name = pin['name']
         size = image_size(dmg)
         layout.append((name, dmg, cursor, size))
         cursor += (size + MIB - 1) // MIB * MIB
