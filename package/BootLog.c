@@ -179,6 +179,9 @@ extern volatile uint32_t native_dpu_more[40] __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_smmu[24] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_surfaces[14] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_swapstat[16] __attribute__((weak_import));
+extern volatile uint64_t native_legacy_center_half[2] __attribute__((weak_import));
+extern volatile uint32_t native_charger_pmic[2 + 5 * 7] __attribute__((weak_import));
+extern void sheng_charger_pmic_sample(void) __attribute__((weak_import));
 extern volatile uint32_t native_adreno_tl_count __attribute__((weak_import));
 extern volatile uint32_t native_adreno_stall_log_count __attribute__((weak_import));
 extern volatile uint32_t native_gpu_dcvs_log_count __attribute__((weak_import));
@@ -1374,6 +1377,22 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
     at = put(out, at, cap, row, sizeof row);
   }
+  // The centre pixel of the last sampled half-float frame, in thousandths (1000 = 1.0): a known grey shown there tells whether the compositor
+  // writes linear or encoded values (sRGB 128 is 216 linear and 502 encoded).
+  if (&native_legacy_center_half && native_legacy_center_half[1]) {
+    char row[120];
+    const uint64_t packed = native_legacy_center_half[0];
+    unsigned milli[4];
+    for (unsigned i = 0; i < 4; ++i) {
+      const unsigned h = (unsigned)(packed >> (16 * i)) & 0xffff, e = (h >> 10) & 31, m = h & 1023;
+      const uint64_t scaled = (uint64_t)(e ? 1024 + m : m) * 1000;
+      const unsigned shift = e ? 25 - e : 24;   /* value = (1024 + m) * 2^(e - 25) */
+      milli[i] = (h & 0x8000) || e == 31 ? 0 : e > 25 ? (unsigned)(scaled << (e - 25)) : (unsigned)(scaled >> shift);
+    }
+    snprintf(row, sizeof row, "[fb centre] half r=%u g=%u b=%u a=%u (x1000) samples=%llu", milli[0], milli[1], milli[2], milli[3],
+             (unsigned long long)native_legacy_center_half[1]);
+    at = put(out, at, cap, row, sizeof row);
+  }
   // The swap lifecycle's counters (NativeLegacyDisplay.cpp native_legacy_swapstat) and how many entries the kernel rings hold; the rings are in the
   // export's kernel.rings.txt.
   if (log_display_on && &native_legacy_swapstat && native_legacy_swapstat[0]) {
@@ -1491,6 +1510,19 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                native_battery_raw[0], native_battery_raw[1], native_battery_raw[2], native_battery_raw[3], native_battery_raw[4],
                native_battery_raw[5], native_battery_raw[6], native_battery_raw[7], native_battery_raw[8]);
       at = put(out, at, cap, row, sizeof row);
+    }
+    // the charger PMIC's own registers (WifiProbe.cpp sheng_charger_pmic_sample): per page type/subtype, registers 06-09, 0a-0d, 40-43, 44-47
+    if (&sheng_charger_pmic_sample && &native_charger_pmic) {
+      sheng_charger_pmic_sample();
+      if (native_charger_pmic[0]) {
+        for (unsigned k = 0; k < 7; ++k) {
+          const volatile uint32_t *w = native_charger_pmic + 2 + 5 * k;
+          if (!w[0]) continue;
+          snprintf(row, sizeof row, "[pmic chg] s%x p%02x t%02x/%02x st %08x %08x cfg %08x %08x", w[0] >> 24, (w[0] >> 16) & 0xff, (w[0] >> 8) & 0xff,
+                   w[0] & 0xff, w[1], w[2], w[3], w[4]);
+          at = put(out, at, cap, row, sizeof row);
+        }
+      }
     }
     // the charger (ShengBattery.cpp native_charger_stats): USB online, type, adapter type, the board's adapter type, input limit and port
     // maximum (mA), USB mV and mA, battery status, charge type, thermal level, charge current (mA), adapter watts, authentication and
