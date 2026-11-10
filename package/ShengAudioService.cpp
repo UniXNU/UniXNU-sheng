@@ -74,7 +74,13 @@ class ShengAudio : public IOService {
 public:
     bool startAudio() {
         // iOS's audio server is sandboxed against unknown user clients; the kernel lets these processes open this service.
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+        // macOS: the audio server runs drivers of /Library/Audio/Plug-Ins/HAL in its driver service helper
+        // (com.apple.audio.Core-Audio-Driver-Service.helper, compared by its first 16 characters).
+        setProperty("NativeSandboxGrantProcess", "coreaudiod,com.apple.audio.Core-Audio-Driver-Service.helper");
+#else
         setProperty("NativeSandboxGrantProcess", "audiomxd,mediaserverd");
+#endif
         setProperty("IOUserClientClass", "ShengAudioUserClient");
         registerService();
         return true;

@@ -3,6 +3,7 @@
 // stream (the microphones). Samples move through rings shared with the kernel service ShengAudio (package/ShengAudioAbi.h); the service
 // feeds the audio DSP. Objects: the plug-in (1), the device (2), the output stream (3), the input stream (4), the output volume (5).
 #include <CoreAudio/AudioServerPlugIn.h>
+#include <TargetConditionals.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <dlfcn.h>
 #if __has_feature(ptrauth_calls)
@@ -78,6 +79,12 @@ static kern_return_t call(uint32_t selector) {return gConnect ? IOConnectCallSca
 // is taken from those two instructions and the service sets the constant (on the shared page it cannot be written from here).
 static void setHostClock(void) {
     ShengAudioDiag *diag = (ShengAudioDiag *)((uint8_t *)gControl + SHENG_AUDIO_DIAG_OFFSET);
+#if TARGET_OS_OSX
+    // macOS keeps the constant in CoreAudio's __TEXT,__const, a code-signed page: rewriting it invalidated the page and the kernel killed
+    // the driver service helper (SIGKILL, Code Signature Invalid, macOS run32). The clock difference stays to be handled another way.
+    diag->host_clock_result = -2;
+    return;
+#endif
     // dlsym signs the pointer for an arm64e caller: the code is read through the stripped address and called through the signed one
     // (an arm64 build sees the signature bits only in an arm64e server, and neither reads nor calls through them).
     void *const signed_symbol = dlsym(RTLD_DEFAULT, "AudioGetHostClockFrequency");
