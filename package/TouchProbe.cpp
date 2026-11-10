@@ -337,6 +337,10 @@ extern "C" {volatile uint32_t native_touch_jitter[3];}
 // then frames of type 2 and type 4, then the smoothed steps of the jitter frames (summed, largest), merges, then the most maxima in a frame, frames that overflowed the
 // peak table and frames that moved the reference.
 extern "C" {volatile uint32_t native_touch_hold[14];}
+// The controller leaves its doze mode at the first touch and then sends every frame of its active scan for good; the host puts it back
+// (the same host command as after the firmware download) once no finger has been down for three seconds. [0] requests, [1] requests the
+// firmware did not take, [2] frames read after the last request.
+extern "C" {volatile uint32_t native_touch_doze[3];}
 static void (*gTouchSink)(void *);
 static void *gTouchSinkContext;
 extern "C" void native_touch_set_sink(void (*sink)(void *), void *context) {gTouchSinkContext = context; __atomic_store_n(&gTouchSink, sink, __ATOMIC_RELEASE);}
@@ -729,6 +733,9 @@ static void touchThread(void *, wait_result_t) {
         unsigned pollOnly = 0;
         PE_parse_boot_argn("touch-poll", &pollOnly, sizeof pollOnly);
         initPathTrace();
+        uint64_t dozeAfter = 0, lastContact = mach_absolute_time();
+        nanoseconds_to_absolutetime(3000000000ull, &dozeAfter);
+        bool dozeAsked = false;
         const bool irqArmed = !pollOnly && armTouchIrq(*s);
         uint32_t seen = gTouchIrqEvents;
         for (;;) {
@@ -793,6 +800,18 @@ static void touchThread(void *, wait_result_t) {
                 native_touch_hold[13] = static_cast<uint32_t>(s->core->reference_frames);
                 native_touch_loop_step = 7;
                 native_touch_frames = native_touch_frames + 1;
+                {
+                    const uint64_t now = mach_absolute_time();
+                    if (n > 0 || gScriptedDown) {
+                        lastContact = now; dozeAsked = false;
+                    } else if (dozeAsked) {
+                        native_touch_doze[2] = native_touch_doze[2] + 1;
+                    } else if (now - lastContact >= dozeAfter) {
+                        dozeAsked = true;
+                        native_touch_doze[0] = native_touch_doze[0] + 1; native_touch_doze[2] = 0;
+                        if (nvt_set_custom_cmd(&s->chip, 0x01, 0x02)) native_touch_doze[1] = native_touch_doze[1] + 1;
+                    }
+                }
                 if (n > 0 || (n == 0 && !gScriptedDown)) {
                     native_touch_contacts = static_cast<uint32_t>(n);
                     if (n > 0) {native_touch_last_x = out[0].x; native_touch_last_y = out[0].y;}
