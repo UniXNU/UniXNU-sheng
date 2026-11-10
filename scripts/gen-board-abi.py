@@ -27,6 +27,10 @@ ROOT = Path(__file__).resolve().parents[1]
 UNIXNU = Path(__import__('os').environ.get('UNIXNU_ROOT', ROOT.parent / 'UniXNU'))
 HERE = Path(__file__).resolve().parent
 NATIVE_LINK_ADDRESS = 0xfffffff007004000
+IOAV_TIMING = '__ZN22IOAVVideoTimingElement8withDataEPK19IOAVVideoTimingData16IOAVStandardType23IOAVVideoTimingStandard'
+IOAV_TIMING_COLORS = '__ZN22IOAVVideoTimingElement16setColorElementsEP7OSArray'
+IOAV_COLOR = ('__ZN21IOAVVideoColorElement16withCapabilitiesE16IOAVStandardTypej22IOAVVideoPixelEncoding'
+              '26IOAVVideoColorDynamicRange18IOAVVideoColorEOTF20IOAVVideoColorimetrybPK12OSDictionaryS7_S7_PK5OSSet')
 
 # The owned display backend's methods with their prototypes (build-gop-legacy-display-27.py declares them). The labels
 # of the reference build; a macOS-only label is a pure slot of the macOS family that the backend implements.
@@ -52,6 +56,30 @@ LEGACY_MACOS = {
     'doSwapInfoNotify': ('do_swap_info_notify_gated', 'IOReturn doSwapInfoNotify(void *,const void *)=0'),
     'notifyCrcReady': ('notify_crc_ready_gated', 'IOReturn notifyCrcReady(uint32_t)=0'),
 }
+
+# Family slots whose IOMobileFramebufferLegacy code refuses the call (kIOReturnUnsupported) and that macOS's display clients make,
+# with the family method name: the backend implements them as the virtual-machine display does. Found by the family's own
+# symbol for the slot, so no oracle is needed. Pointer and enumeration parameters are declared as void * and uint32_t.
+LEGACY_MACOS_FAMILY = {
+    'setDisplayDevice': ('set_display_device', 'IOReturn setDisplayDevice(uint32_t)'),
+    'setDigitalOutMode': ('set_digital_out_mode', 'IOReturn setDigitalOutMode(uint32_t,uint32_t)'),
+    'setGammaTable': ('set_gamma_table', 'IOReturn setGammaTable(void *)'),
+    'setColorRemapMode': ('set_color_remap_mode', 'IOReturn setColorRemapMode(uint32_t)'),
+    'getColorRemapMode': ('get_color_remap_mode', 'IOReturn getColorRemapMode(uint32_t *)'),
+    'swapSetColorMatrix': ('swap_set_color_matrix', 'IOReturn swapSetColorMatrix(void *,uint32_t,uint32_t)'),
+}
+
+
+def family_overrides(kc, slots, cls='IOMobileFramebufferLegacy'):
+    """The slot of each LEGACY_MACOS_FAMILY method: the one whose target the collection names cls::method."""
+    found = {}
+    for label, (method, _) in LEGACY_MACOS_FAMILY.items():
+        marker = f'{len(cls)}{cls}{len(method)}{method}E'
+        hits = [slot for slot, (target, _) in enumerate(slots) if any(marker in n for n in kc.names.get(target, []))]
+        if len(hits) != 1:
+            raise SystemExit(f'{label}: the collection names {len(hits)} slots {cls}::{method}')
+        found[label] = hits[0]
+    return found
 
 
 def discriminator(name):
@@ -278,6 +306,9 @@ def legacy_fixture(kc, oracle, reference, build):
             raise SystemExit(f'{label}: the oracle names {len(found)} slots {method}')
         methods[label] = found[0]
         prototypes[label] = prototype
+    for label, slot in family_overrides(kc, slots).items():
+        methods[label] = slot
+        prototypes[label] = LEGACY_MACOS_FAMILY[label][1]
     if len(set(methods.values())) != len(methods):
         raise SystemExit('two methods on one slot')
     unimplemented = [slot for slot, (target, _) in enumerate(slots) if target == pure and slot not in methods.values()]
@@ -301,7 +332,14 @@ def legacy_fixture(kc, oracle, reference, build):
                '_native_legacy_surface_allocate': ('com.apple.iokit.IOSurface', '__ZN9IOSurface8allocateEv'),
                '_native_legacy_vsync_notify': (entry, '__ZN25IOMobileFramebufferLegacy26swap_notify_dispatch_gatedEyyy'),
                '_native_legacy_set_refresh_properties': (entry, '__ZN25IOMobileFramebufferLegacy27setDisplayRefreshPropertiesEv'),
-               '_native_legacy_swap_info_dispatch': (entry, '__ZN25IOMobileFramebufferLegacy31swap_info_notify_dispatch_gatedEPNS_12SwapInfoBlobE')}
+               '_native_legacy_swap_info_dispatch': (entry, '__ZN25IOMobileFramebufferLegacy31swap_info_notify_dispatch_gatedEPNS_12SwapInfoBlobE'),
+               # The display's timing and color elements (macOS reads its modes from them): IOAVFamily's constructors.
+               '_native_legacy_ioav_timing': ('com.apple.iokit.IOAVFamily', IOAV_TIMING),
+               '_native_legacy_ioav_timing_colors': ('com.apple.iokit.IOAVFamily', IOAV_TIMING_COLORS),
+               '_native_legacy_ioav_color': ('com.apple.iokit.IOAVFamily', IOAV_COLOR),
+               # macOS: the panel reported plugged in (IOMobileFramebufferGetDigitalOutState); unplugged, WindowServer keeps the
+               # display disabled and composites a virtual main display (macOS-DroidVM, AppleParavirtDisplay's start_hardware).
+               '_native_legacy_hotplug_notify': (entry, '__ZN25IOMobileFramebufferLegacy14hotPlug_notifyEy')}
     bindings = kc.bindings(entry, cls)
     for name, (owner, symbol) in getters.items():
         bindings[name] = hex(kc.symbol(owner, symbol))
@@ -315,9 +353,18 @@ def legacy_fixture(kc, oracle, reference, build):
     # links from the virtual-machine display's program_hardware_gated and swap_begin_gated.
     display = {'current': 0x2000, 'head': 0x2008, 'tail': 0x2010, 'vsync_clients': 0x2078, 'width': 0x21b0, 'height': 0x21b4,
                'default_surface': 0x2118, 'surface_root': 0x2100, 'swap_info_time': 0x108, 'swap_info_held': 0x239a}
-    request = {'rect0': 33, 'rect1': 97, 'masks': 0x478, 'options': 0x484, 'dims': 0x490, 'surfaces': 0xd08,
+    request = {'rect0': 0x11, 'rect1': 0x51, 'masks': 0x478, 'options': 0x484, 'dims': 0x490, 'surfaces': 0xd08,
                'next': 0xfc8, 'prev': 0xfd0, 'drop_reasons': 0x48c, 'swap_info_a': 0x430, 'swap_info_b': 0x470}
     notify = {'async_reference': 0x18, 'mask': 0x78, 'last_time': 0x80}
+    # The current swap's source and destination rectangles of layer 0, and its layer mask, as getCurrentSrcRect_gated and
+    # getCurrentDstRect_gated read them: ldr w10, [x9, #masks] (the layer's bit), then add x9, x9, #rect.
+    for key, symbol in (('rect0', '__ZN25IOMobileFramebufferLegacy23getCurrentSrcRect_gatedEj'),
+                        ('rect1', '__ZN25IOMobileFramebufferLegacy23getCurrentDstRect_gatedEj')):
+        words = struct.unpack('<16I', kc.code(kc.symbol(entry, symbol), 64))
+        if 0xb9400000 | (request['masks'] // 4) << 10 | 9 << 5 | 10 not in words:
+            raise SystemExit(f'{symbol} does not test the layer mask at {request["masks"]:#x}')
+        if 0x91000000 | request[key] << 10 | 9 << 5 | 9 not in words:
+            raise SystemExit(f'{symbol} does not take the rectangle at {request[key]:#x}')
     width = kc.code(kc.symbol(entry, '__ZNK25IOMobileFramebufferLegacy13display_widthEv'), 12)
     if struct.unpack_from('<I', width, 4)[0] != 0xb9400000 | (display['width'] // 4) << 10:
         raise SystemExit('display_width does not load the width field')
@@ -345,6 +392,44 @@ def hid_fixture(kc):
             'vtable': hex(start), 'instance_size': hex(kc.instance_size(entry, cls)),
             'slots': [[hex(t), hex(d)] for t, d in slots], 'base_slots': kc.service_slots(), 'pure_target': hex(kc.pure()),
             'bindings': kc.bindings(entry, cls)}
+
+
+def ether_fixture(kc):
+    """macOS: IONetworkingFamily's IOEthernetController, for the board's Ethernet controller (ShengEthernet.cpp, compiled with the
+    SDK's public IONetworkingFamily headers). The vtable is checked slot by slot at build time; the bindings are every exported
+    symbol of the family classes the controller uses, so the build binds what the object imports and nothing else."""
+    entry, cls = 'com.apple.iokit.IONetworkingFamily', 'IOEthernetController'
+    start, slots = kc.vtable(entry, cls)
+    prefixes = tuple(f'__ZN{len(c)}{c}' for c in ('IONetworkController', 'IOEthernetController', 'IONetworkMedium',
+                                                  'IONetworkInterface', 'IOEthernetInterface', 'IOOutputQueue'))
+    prefixes += tuple('__ZNK' + p[4:] for p in prefixes)
+    bindings = dict(kc.bindings(entry, cls))
+    for name, address in sorted(kc.by_entry[entry].items()):
+        if name.startswith(prefixes) and '_os_log' not in name and 'kalloc_type_view' not in name and '.cold' not in name:
+            bindings.setdefault(name, hex(address))
+    return {'kernelcache_sha256': kc.sha256, 'collection_slide': hex(NATIVE_LINK_ADDRESS - kc.cache.base),
+            'vtable': hex(start), 'instance_size': hex(kc.instance_size(entry, cls)),
+            'slots': [[hex(t), hex(d)] for t, d in slots], 'base_slots': kc.service_slots(), 'pure_target': hex(kc.pure()),
+            'bindings': bindings}
+
+
+def aes_fixture(kc):
+    """macOS: IOCryptoAcceleratorFamily's IOAESAccelerator, for the software AES-CBC provider (UniXNU drivers/SoftwareAES, NativeAES.cpp
+    with OriginalAESABI.h). AppleImage4's start waits for an IOAESAccelerator service without a limit (kmod_expert_finalize,
+    waitForMatchingService); this board has no AES engine node. The vtable is checked slot by slot at build time; the bindings are the
+    exported symbols of the family's two classes."""
+    entry, cls = 'com.apple.iokit.IOCryptoAcceleratorFamily', 'IOAESAccelerator'
+    start, slots = kc.vtable(entry, cls)
+    prefixes = tuple(f'__ZN{len(c)}{c}' for c in ('IOCryptoAccelerator', 'IOAESAccelerator'))
+    prefixes += tuple('__ZNK' + p[4:] for p in prefixes)
+    bindings = dict(kc.bindings(entry, cls))
+    for name, address in sorted(kc.by_entry[entry].items()):
+        if name.startswith(prefixes) and '_os_log' not in name and 'kalloc_type_view' not in name and '.cold' not in name:
+            bindings.setdefault(name, hex(address))
+    return {'kernelcache_sha256': kc.sha256, 'collection_slide': hex(NATIVE_LINK_ADDRESS - kc.cache.base),
+            'vtable': hex(start), 'instance_size': hex(kc.instance_size(entry, cls)),
+            'slots': [[hex(t), hex(d)] for t, d in slots], 'base_slots': kc.service_slots(), 'pure_target': hex(kc.pure()),
+            'bindings': bindings}
 
 
 def usb_fixture(kc, reference, entry, cls, macros):
@@ -394,6 +479,8 @@ def main():
                                 {179: 'XDCI_KEEP_CONFIGURATIONS', 227: 'XDCI_DESIRED_POWER', 267: 'XDCI_TRANSPORT_ACTIVE',
                                  268: 'XDCI_POWER_ON', 269: 'XDCI_POWER_OFF', 270: 'XDCI_PARAMETERS', 275: 'XDCI_CONTROLLER_RESET',
                                  277: 'XDCI_PERIODIC_USAGE', 278: 'XDCI_PERIODIC_SET'}),
+        'net-ether': ether_fixture(kc),
+        'software-aes': aes_fixture(kc),
         'usb-xhci': usb_fixture(kc, reference('usb-xhci'), 'com.apple.driver.usb.AppleUSBXHCI', 'AppleUSBXHCI',
                                 {188: 'XHCI_DESIRED_POWER', 315: 'XHCI_READ64', 317: 'XHCI_WRITE64'}),
     }

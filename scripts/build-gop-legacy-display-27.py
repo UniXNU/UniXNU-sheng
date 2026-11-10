@@ -718,6 +718,130 @@ run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--global
      USB_OUT / 'QcomDwc3.o', usb_late])
 input_objects += [usb_late, USB_OUT / 'usb-bindings.o', USB_OUT / 'usb-addresses.o', USB_OUT / 'UsbProbe.o']
 print(f'USB: {len(usb_bindings)} original bindings, {usb_vt} and {xhci_vt} match the original diversities')
+# macOS: the board's Ethernet controller en0 (ShengEthernet.cpp), an IOEthernetController of the original IONetworkingFamily compiled with
+# the macOS SDK's public family headers (after the kernel's own, so only IOKit/network comes from there). Its vtable must be the
+# collection's slot for slot (net-ether-<build>.json): every entry signed with the original diversity, every inherited entry bound to
+# the original target, every family import bound to the collection's symbol.
+if MACOS:
+    ETH_OUT = board_dir / 'ethernet'
+    ETH_OUT.mkdir(parents=True, exist_ok=True)
+    eth_abi = json.loads(Path(__file__).resolve().with_name(f'net-ether-{BUILD}.json').read_text())
+    require(eth_abi['kernelcache_sha256'] == abi['kernelcache_sha256'], 'Ethernet fixture of the same collection')
+    macsdk = run(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], text=True).strip()
+    # The SDK declares IONetworkController's reserved slots 2-5 unused; the shipped family uses them (outputStart,
+    # setInputPacketPollingEnable, pollInputPackets, networkInterfaceNotification). Apple's published IONetworkingFamily headers
+    # declare them under __PRIVATE_SPI__, so those headers, as IOKit/network, come first.
+    ionet = ROOT / '.cache/IONetworkingFamily-188'
+    if not (ionet / 'IONetworkController.h').is_file():
+        subprocess.run(['git', 'clone', '-q', '--depth', '1', '--branch', 'IONetworkingFamily-188',
+                        'https://github.com/apple-oss-distributions/IONetworkingFamily.git', str(ionet)], check=True)
+    ionet_include = ETH_OUT / 'include/IOKit'
+    ionet_include.mkdir(parents=True, exist_ok=True)
+    if not (ionet_include / 'network').exists():
+        (ionet_include / 'network').symlink_to(ionet)
+    compile_cpp(KITS / 'ShengEthernet.cpp', ETH_OUT / 'ShengEthernet.o',
+                ('-I', str(ETH_OUT / 'include'), '-idirafter', f'{macsdk}/System/Library/Frameworks/Kernel.framework/Headers'))
+    eth_raw = (ETH_OUT / 'ShengEthernet.o').read_bytes()
+    eth_found = object_symbols(eth_raw)
+    eth_slots = [(int(t, 16), int(d, 16)) for t, d in eth_abi['slots']]
+    eth_pure = int(eth_abi['pure_target'], 16)
+    eth_bindings = {n: int(v, 16) + slide for n, v in eth_abi['bindings'].items()}
+    eth_vt = '__ZTV13ShengEthernet'
+    family = tuple(f'{len(c)}{c}' for c in ('IONetworkController', 'IOEthernetController', 'IONetworkMedium', 'IONetworkInterface',
+                                           'IOEthernetInterface', 'IOOutputQueue'))
+    eth_entries = object_vtable(eth_raw, eth_found, eth_vt, len(eth_slots) + 1)
+    require(all(eth_entries[:len(eth_slots)]) and not eth_entries[len(eth_slots)], f'{eth_vt}: exactly the {len(eth_slots)} IOEthernetController entries')
+    own = ('__ZN13ShengEthernet', '__ZNK13ShengEthernet')
+    override_slot = {}
+    for i, (name, word) in enumerate(eth_entries[:len(eth_slots)]):
+        require(word >> 63 and word >> 48 & 1 and word >> 49 & 3 == 0 and (word >> 32) & 0xffff == eth_slots[i][1],
+                f'{eth_vt} slot {i} ({name}) signed with the original diversity {eth_slots[i][1]:#x}')
+        if name.startswith(own):
+            override_slot[name[len(own[0]) if name.startswith(own[0]) else len(own[1]):]] = i
+        elif any(c in name for c in family):
+            require(eth_slots[i][0] != eth_pure, f'{eth_vt} slot {i}: the abstract original slot is implemented')
+            require(eth_bindings.setdefault(name, eth_slots[i][0] + slide) == eth_slots[i][0] + slide,
+                    f'{eth_vt} slot {i} ({name}) is the original entry')
+        else:
+            # The kernel's own classes (OSObject, IOService): the kernel defines these, the link resolves them.
+            require(i < BASE, f'{eth_vt} slot {i} ({name}) is a kernel method within the IOService slots')
+    eth_used = {n for n, _, k in eth_found if k == 1 and any(c in n for c in family)}
+    for name in sorted(eth_used - set(eth_bindings)):
+        # A qualified call of a base method the family class does not override itself (IOEthernetController::start is
+        # IONetworkController's): the original entry of the slot this class overrides with the same method.
+        tail = next((name[len(p):] for p in ('__ZN20IOEthernetController', '__ZNK20IOEthernetController') if name.startswith(p)), None)
+        require(tail in override_slot, f'{name}: bound to the collection')
+        eth_bindings[name] = eth_slots[override_slot[tail]][0] + slide
+    eth_used |= {e[0] for e in eth_entries[:len(eth_slots)] if not e[0].startswith(own) and any(c in e[0] for c in family)}
+    eth_text, eth_addresses = '.text\n.p2align 2\n', ''
+    for name in sorted(eth_used):
+        va = eth_bindings[name]
+        if name.endswith('10gMetaClassE') or name.startswith('__ZTV'):
+            eth_addresses += f'.globl {name}\n.set {name}, {va:#x}\n'
+        else:
+            eth_addresses += f'.globl {name}.original\n.set {name}.original, {va:#x}\n'
+            eth_text += f'.globl {name}\n{name}:\n bti c\n b {name}.original\n'
+    (ETH_OUT / 'eth-bindings.S').write_text(eth_text)
+    (ETH_OUT / 'eth-addresses.S').write_text(eth_addresses)
+    for stem in ('eth-bindings', 'eth-addresses'):
+        run(['xcrun', 'clang', '-target', TRIPLE, '-isysroot', sdk, '-c', ETH_OUT / (stem + '.S'), '-o', ETH_OUT / (stem + '.o')])
+    eth_late = ETH_OUT / 'ShengEthernet.late.o'
+    run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_ShengEthernet.cpp',
+         ETH_OUT / 'ShengEthernet.o', eth_late])
+    input_objects += [eth_late, ETH_OUT / 'eth-bindings.o', ETH_OUT / 'eth-addresses.o']
+    print(f'Ethernet: {len(eth_used)} original bindings, {eth_vt} matches the original {len(eth_slots)} diversities')
+# macOS: the software AES-CBC provider (UniXNU drivers/SoftwareAES, NativeAES.cpp), an IOAESAccelerator of the original
+# IOCryptoAcceleratorFamily. AppleImage4's start waits for an IOAESAccelerator service without a limit (kmod_expert_finalize), holding its
+# expert lock; this board has no AES engine. Its vtable must be the collection's slot for slot (software-aes-<build>.json), as Ethernet's.
+if MACOS:
+    AES_OUT = board_dir / 'software-aes'
+    AES_OUT.mkdir(parents=True, exist_ok=True)
+    aes_abi = json.loads(Path(__file__).resolve().with_name(f'software-aes-{BUILD}.json').read_text())
+    require(aes_abi['kernelcache_sha256'] == abi['kernelcache_sha256'], 'AES fixture of the same collection')
+    require(int(aes_abi['instance_size'], 16) == 0x120, 'IOAESAccelerator instance size of OriginalAESABI.h')
+    compile_cpp(ROOT / 'drivers/SoftwareAES/NativeAES.cpp', AES_OUT / 'NativeAES.o', ('-DNATIVE_AES_DARWIN26=1',))
+    aes_raw = (AES_OUT / 'NativeAES.o').read_bytes()
+    aes_found = object_symbols(aes_raw)
+    aes_slots = [(int(t, 16), int(d, 16)) for t, d in aes_abi['slots']]
+    aes_pure = int(aes_abi['pure_target'], 16)
+    aes_bindings = {n: int(v, 16) + slide for n, v in aes_abi['bindings'].items()}
+    aes_vt = '__ZTV9NativeAES'
+    aes_family = ('19IOCryptoAccelerator', '16IOAESAccelerator')
+    aes_entries = object_vtable(aes_raw, aes_found, aes_vt, len(aes_slots) + 1)
+    require(all(aes_entries[:len(aes_slots)]) and not aes_entries[len(aes_slots)], f'{aes_vt}: exactly the {len(aes_slots)} IOAESAccelerator entries')
+    aes_own = ('__ZN9NativeAES', '__ZNK9NativeAES')
+    for i, (name, word) in enumerate(aes_entries[:len(aes_slots)]):
+        require(word >> 63 and word >> 48 & 1 and word >> 49 & 3 == 0 and (word >> 32) & 0xffff == aes_slots[i][1],
+                f'{aes_vt} slot {i} ({name}) signed with the original diversity {aes_slots[i][1]:#x}')
+        if name.startswith(aes_own):
+            continue
+        if any(c in name for c in aes_family):
+            require(aes_slots[i][0] != aes_pure, f'{aes_vt} slot {i}: the abstract original slot is implemented')
+            require(aes_bindings.setdefault(name, aes_slots[i][0] + slide) == aes_slots[i][0] + slide,
+                    f'{aes_vt} slot {i} ({name}) is the original entry')
+        else:
+            require(i < BASE, f'{aes_vt} slot {i} ({name}) is a kernel method within the IOService slots')
+    aes_used = {n for n, _, k in aes_found if k == 1 and any(c in n for c in aes_family)}
+    require(not (aes_used - set(aes_bindings)), f'AES imports bound to the collection: {sorted(aes_used - set(aes_bindings))}')
+    aes_used |= {e[0] for e in aes_entries[:len(aes_slots)] if not e[0].startswith(aes_own) and any(c in e[0] for c in aes_family)}
+    aes_text, aes_addresses = '.text\n.p2align 2\n', ''
+    for name in sorted(aes_used):
+        va = aes_bindings[name]
+        if name.endswith('10gMetaClassE') or name.startswith('__ZTV'):
+            aes_addresses += f'.globl {name}\n.set {name}, {va:#x}\n'
+        else:
+            aes_addresses += f'.globl {name}.original\n.set {name}.original, {va:#x}\n'
+            aes_text += f'.globl {name}\n{name}:\n bti c\n b {name}.original\n'
+    (AES_OUT / 'aes-bindings.S').write_text(aes_text)
+    (AES_OUT / 'aes-addresses.S').write_text(aes_addresses)
+    for stem in ('aes-bindings', 'aes-addresses'):
+        run(['xcrun', 'clang', '-target', TRIPLE, '-isysroot', sdk, '-c', AES_OUT / (stem + '.S'), '-o', AES_OUT / (stem + '.o')])
+    aes_late = AES_OUT / 'NativeAES.late.o'
+    run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_NativeAES.cpp',
+         AES_OUT / 'NativeAES.o', aes_late])
+    compile_cpp(KITS / 'SoftwareAesProbe.cpp', AES_OUT / 'SoftwareAesProbe.o', ())
+    input_objects += [aes_late, AES_OUT / 'aes-bindings.o', AES_OUT / 'aes-addresses.o', AES_OUT / 'SoftwareAesProbe.o']
+    print(f'AES: {len(aes_used)} original bindings, {aes_vt} matches the original {len(aes_slots)} diversities')
 print(f'Board drivers: {len(board_objects)} objects')
 archive = OUT / 'libNativeLegacyDisplay.late.a'
 archive.unlink(missing_ok=True)
