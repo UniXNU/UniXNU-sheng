@@ -549,9 +549,11 @@ keyboard_pin = next(line.split('|', 1)[1].strip() for line in (DEVICE / 'proprie
                     if line.lstrip('-').startswith('nanosic/MCU_Upgrade.bin|'))
 keyboard_bytes = keyboard_firmware.read_bytes()
 require(hashlib.sha256(keyboard_bytes).hexdigest() == keyboard_pin, f'{keyboard_firmware}: not the pinned image')
+# macOS: in __DATA, as the touch image (build-sheng-source-drivers.py).
+keyboard_placement = '__attribute__((section("__DATA,__firmware"))) ' if MACOS else ''
 (board_dir / 'Wn8030Firmware.c').write_text('/* Generated vendor firmware; build output only. */\n#include <stdint.h>\n'
                                             f'const uint32_t native_keyboard_firmware_size = {len(keyboard_bytes)};\n'
-                                            f'const uint8_t native_keyboard_firmware[{len(keyboard_bytes)}] = {{' +
+                                            f'{keyboard_placement}const uint8_t native_keyboard_firmware[{len(keyboard_bytes)}] = {{' +
                                             ','.join(str(b) for b in keyboard_bytes) + '};\n')
 compile_c(board_dir / 'Wn8030Firmware.c', board_dir / 'Wn8030Firmware.o')
 board_objects.append(board_dir / 'Wn8030Firmware.o')
