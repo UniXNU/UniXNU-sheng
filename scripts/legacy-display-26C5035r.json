@@ -1962,7 +1962,13 @@
   "executeFactoryConfigurations": 362,
   "setFrameInfoNotificationState": 428,
   "doSwapInfoNotify": 429,
-  "notifyCrcReady": 463
+  "notifyCrcReady": 463,
+  "setDisplayDevice": 289,
+  "setDigitalOutMode": 291,
+  "setGammaTable": 307,
+  "setColorRemapMode": 312,
+  "getColorRemapMode": 313,
+  "swapSetColorMatrix": 343
  },
  "leaves": [],
  "prototypes": {
@@ -1984,7 +1990,13 @@
   "executeFactoryConfigurations": "IOReturn executeFactoryConfigurations()=0",
   "setFrameInfoNotificationState": "IOReturn setFrameInfoNotificationState(void *,bool)=0",
   "doSwapInfoNotify": "IOReturn doSwapInfoNotify(void *,const void *)=0",
-  "notifyCrcReady": "IOReturn notifyCrcReady(uint32_t)=0"
+  "notifyCrcReady": "IOReturn notifyCrcReady(uint32_t)=0",
+  "setDisplayDevice": "IOReturn setDisplayDevice(uint32_t)",
+  "setDigitalOutMode": "IOReturn setDigitalOutMode(uint32_t,uint32_t)",
+  "setGammaTable": "IOReturn setGammaTable(void *)",
+  "setColorRemapMode": "IOReturn setColorRemapMode(uint32_t)",
+  "getColorRemapMode": "IOReturn getColorRemapMode(uint32_t *)",
+  "swapSetColorMatrix": "IOReturn swapSetColorMatrix(void *,uint32_t,uint32_t)"
  },
  "bindings": {
   "__ZN25IOMobileFramebufferLegacyC2EPK11OSMetaClass": "0xfffffe000ac244b4",
@@ -2001,7 +2013,11 @@
   "_native_legacy_surface_allocate": "0xfffffe000aede790",
   "_native_legacy_vsync_notify": "0xfffffe000ac2e678",
   "_native_legacy_set_refresh_properties": "0xfffffe000ac329d0",
-  "_native_legacy_swap_info_dispatch": "0xfffffe000ac2e8a0"
+  "_native_legacy_swap_info_dispatch": "0xfffffe000ac2e8a0",
+  "_native_legacy_ioav_timing": "0xfffffe000a7e8d68",
+  "_native_legacy_ioav_timing_colors": "0xfffffe000a7ea2ac",
+  "_native_legacy_ioav_color": "0xfffffe000a7e80c0",
+  "_native_legacy_hotplug_notify": "0xfffffe000ac2e954"
  },
  "checks": [
   [
@@ -2042,8 +2058,8 @@
   "swap_info_held": 9114
  },
  "request": {
-  "rect0": 33,
-  "rect1": 97,
+  "rect0": 17,
+  "rect1": 81,
   "masks": 1144,
   "options": 1156,
   "dims": 1168,
@@ -2128,16 +2144,8 @@
    "opaque288_111179",
    "Ev"
   ],
-  "opaque289": [
-   "opaque289_120906",
-   "Ev"
-  ],
   "isMainDisplay": [
    "opaque290_131932",
-   "Ev"
-  ],
-  "opaque291": [
-   "opaque291_159300",
    "Ev"
   ],
   "opaque292": [
@@ -2200,10 +2208,6 @@
    "opaque306_116180",
    "Ev"
   ],
-  "opaque307": [
-   "opaque307_141032",
-   "Ev"
-  ],
   "opaque308": [
    "opaque308_170013",
    "Ev"
@@ -2218,14 +2222,6 @@
   ],
   "opaque311": [
    "opaque311_148438",
-   "Ev"
-  ],
-  "opaque312": [
-   "opaque312_109894",
-   "Ev"
-  ],
-  "opaque313": [
-   "opaque313_187779",
    "Ev"
   ],
   "opaque314": [
@@ -2342,10 +2338,6 @@
   ],
   "opaque342": [
    "opaque342_104239",
-   "Ev"
-  ],
-  "opaque343": [
-   "opaque343_164806",
    "Ev"
   ],
   "opaque344": [
@@ -2903,6 +2895,30 @@
   "opaque482": [
    "opaque482_151514",
    "Ev"
+  ],
+  "setDisplayDevice": [
+   "opaque289_156203",
+   "Ej"
+  ],
+  "setDigitalOutMode": [
+   "opaque291_220910",
+   "Ejj"
+  ],
+  "setGammaTable": [
+   "opaque307_106766",
+   "EPv"
+  ],
+  "setColorRemapMode": [
+   "opaque312_238157",
+   "Ej"
+  ],
+  "getColorRemapMode": [
+   "opaque313_224351",
+   "EPj"
+  ],
+  "swapSetColorMatrix": [
+   "opaque343_100630",
+   "EPvjj"
   ]
  },
  "caller_diversity": {},
