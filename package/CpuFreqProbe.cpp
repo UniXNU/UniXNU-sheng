@@ -32,6 +32,12 @@
 // never left 2803 MHz (99 % busy), so both are gone; a touch still holds the P domains at the top.
 // Throttle count: in a window where a domain's busiest CPU was at least half busy, its domain state (the frequency the hardware
 // runs, which also drops while the whole cluster idles) under 80 % of the vote counts as a throttled window, with the lowest seen.
+// Ramp count: over the last 10 s, per domain, the windows whose busiest CPU was at least 90 % busy (such a cluster is rarely all
+// idle at the read), how many of them still ran under a vote below the highest level (the window before the jump), and the running
+// frequency in them as a percentage of the vote. The first two say what the governor's reaction costs, the third what the firmware
+// limit costs. macOS runs 56 to 61, 10 s rows at 95 % busy or more: the mean vote was 98.8 to 100 % of the highest level in all 146,
+// while the hardware ran d1 under 80 % of its vote in 15 to 36 % of those windows (as low as 1171 MHz of 2803), d2 in 2 to 13 %
+// and d0 in none. The limit grows with the time all clusters stay loaded (run56 d1: 3 % of the windows at 50 s, 60 % at 200 s).
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
@@ -50,6 +56,9 @@ volatile uint32_t native_cpufreq_boosts;
 volatile uint32_t native_cpufreq_frame[2];
 // Mode 4, per domain: busy windows (busiest CPU >= 50 %), throttled ones among them, lowest domain state (MHz) in a throttled one
 volatile uint32_t native_cpufreq_throttle[9];
+// Mode 4, per domain over the last 10 s: windows whose busiest CPU was at least 90 % busy, those of them voted below the highest level,
+// the running frequency in them as a percentage of the vote
+volatile uint32_t native_cpufreq_ramp[9];
 // Mode 4, one record per 16 ms window while the diagnostic export holds a ring (BootDiagExport.c kernel.cpufreq.bin): the window's end
 // (mach units), per domain the voted and the running frequency (MHz, the domain state register) and the busiest CPU's busy share (per
 // mille), and flags (1 touch boost, 2 frame floor). native_cpufreq_count counts every record; the ring keeps the last CpuFreqRing.
@@ -218,6 +227,8 @@ void governorThread(void *, wait_result_t) {
     uint32_t submits = &native_adreno_method_stats ? native_adreno_method_stats[5][0] : 0, recent = 0;
     uint64_t winNs = 0, khzNs[3] = {}, busyNs[3] = {};
     uint32_t changes[3] = {};
+    uint32_t full[3] = {}, late[3] = {};
+    uint64_t fullVote[3] = {}, fullState[3] = {};   // sums of MHz over the windows counted in full
     for (;;) {
         IOSleep(16);
         const uint64_t t = mach_absolute_time(), dt = t - lastT;
@@ -281,6 +292,12 @@ void governorThread(void *, wait_result_t) {
                     th[1] = th[1] + 1;
                     if (!th[2] || stateKHz / 1000 < th[2]) th[2] = stateKHz / 1000;
                 }
+                if (busy[d] >= 900 && stateKHz) {
+                    ++full[d];
+                    if (cur[d] + 1 < l.count) ++late[d];
+                    fullVote[d] += l.khz[cur[d]] / 1000;
+                    fullState[d] += stateKHz / 1000;
+                }
             }
             if (framing)
                 while (want + 1 < l.count && (uint64_t)l.khz[want] * 100 < (uint64_t)l.khz[l.count - 1] * gFramePct) ++want;
@@ -314,6 +331,10 @@ void governorThread(void *, wait_result_t) {
                 native_cpufreq_gov[d * 3 + 1] = (uint32_t)(khzNs[d] / winNs);
                 native_cpufreq_gov[d * 3 + 2] = (uint32_t)(busyNs[d] / winNs);
                 changes[d] = 0; khzNs[d] = busyNs[d] = 0;
+                native_cpufreq_ramp[d * 3] = full[d];
+                native_cpufreq_ramp[d * 3 + 1] = late[d];
+                native_cpufreq_ramp[d * 3 + 2] = fullVote[d] ? (uint32_t)(fullState[d] * 100 / fullVote[d]) : 0;
+                full[d] = late[d] = 0; fullVote[d] = fullState[d] = 0;
             }
             winNs = 0;
         }

@@ -523,7 +523,7 @@ BLUETOOTH = Path(os.environ.get('QCA_BLUETOOTH_DIR') or
                  (ROOT / 'drivers/QcaBluetooth' if (ROOT / 'drivers/QcaBluetooth').is_dir() else DEVICE / 'drivers/QcaBluetooth'))
 require((BLUETOOTH / 'include/qbt.h').exists(), 'QcaBluetooth module directory')
 board_objects = []
-for stem, extra in [('CpuFreqProbe', ()), ('WifiProbe', ('-I', str(WIFI / 'include'))),
+for stem, extra in [('CpuFreqProbe', ()), ('ThermalProbe', ()), ('BoardClock', ()), ('WifiProbe', ('-I', str(WIFI / 'include'))),
                     ('BluetoothProbe', ('-I', str(BLUETOOTH / 'include'), '-I', str(ROOT / 'kits/Sm8550Platform'))),
                     ('AdspProbe', ()), ('AudioProbe', ()),
                     ('BacklightProbe', ()), ('DisplayTimingProbe', ()), ('BatteryProbe', ()), ('KeyboardProbe', ()),
@@ -739,40 +739,53 @@ if MACOS:
     ionet_include.mkdir(parents=True, exist_ok=True)
     if not (ionet_include / 'network').exists():
         (ionet_include / 'network').symlink_to(ionet)
+    # The family's instance sizes as the collection has them: the source asserts the SDK headers give the same.
     compile_cpp(KITS / 'ShengEthernet.cpp', ETH_OUT / 'ShengEthernet.o',
-                ('-I', str(ETH_OUT / 'include'), '-idirafter', f'{macsdk}/System/Library/Frameworks/Kernel.framework/Headers'))
+                ('-I', str(ETH_OUT / 'include'), '-idirafter', f'{macsdk}/System/Library/Frameworks/Kernel.framework/Headers',
+                 f'-DSHENG_ETHERNET_CONTROLLER_SIZE={eth_abi["instance_size"]}',
+                 f'-DSHENG_ETHERNET_INTERFACE_SIZE={eth_abi["interface_instance_size"]}'))
     eth_raw = (ETH_OUT / 'ShengEthernet.o').read_bytes()
     eth_found = object_symbols(eth_raw)
-    eth_slots = [(int(t, 16), int(d, 16)) for t, d in eth_abi['slots']]
     eth_pure = int(eth_abi['pure_target'], 16)
     eth_bindings = {n: int(v, 16) + slide for n, v in eth_abi['bindings'].items()}
-    eth_vt = '__ZTV13ShengEthernet'
     family = tuple(f'{len(c)}{c}' for c in ('IONetworkController', 'IOEthernetController', 'IONetworkMedium', 'IONetworkInterface',
                                            'IOEthernetInterface', 'IOOutputQueue'))
-    eth_entries = object_vtable(eth_raw, eth_found, eth_vt, len(eth_slots) + 1)
-    require(all(eth_entries[:len(eth_slots)]) and not eth_entries[len(eth_slots)], f'{eth_vt}: exactly the {len(eth_slots)} IOEthernetController entries')
-    own = ('__ZN13ShengEthernet', '__ZNK13ShengEthernet')
-    override_slot = {}
-    for i, (name, word) in enumerate(eth_entries[:len(eth_slots)]):
-        require(word >> 63 and word >> 48 & 1 and word >> 49 & 3 == 0 and (word >> 32) & 0xffff == eth_slots[i][1],
-                f'{eth_vt} slot {i} ({name}) signed with the original diversity {eth_slots[i][1]:#x}')
-        if name.startswith(own):
-            override_slot[name[len(own[0]) if name.startswith(own[0]) else len(own[1]):]] = i
-        elif any(c in name for c in family):
-            require(eth_slots[i][0] != eth_pure, f'{eth_vt} slot {i}: the abstract original slot is implemented')
-            require(eth_bindings.setdefault(name, eth_slots[i][0] + slide) == eth_slots[i][0] + slide,
-                    f'{eth_vt} slot {i} ({name}) is the original entry')
-        else:
-            # The kernel's own classes (OSObject, IOService): the kernel defines these, the link resolves them.
-            require(i < BASE, f'{eth_vt} slot {i} ({name}) is a kernel method within the IOService slots')
     eth_used = {n for n, _, k in eth_found if k == 1 and any(c in n for c in family)}
+
+    def family_vtable(cls, base, slots):
+        """Check the vtable of cls, a subclass of the family's class base, against base's slots in the collection; the slots cls overrides."""
+        vt = f'__ZTV{len(cls)}{cls}'
+        own = (f'__ZN{len(cls)}{cls}', f'__ZNK{len(cls)}{cls}')
+        entries = object_vtable(eth_raw, eth_found, vt, len(slots) + 1)
+        require(all(entries[:len(slots)]) and not entries[len(slots)], f'{vt}: exactly the {len(slots)} {base} entries')
+        override_slot = {}
+        for i, (name, word) in enumerate(entries[:len(slots)]):
+            require(word >> 63 and word >> 48 & 1 and word >> 49 & 3 == 0 and (word >> 32) & 0xffff == slots[i][1],
+                    f'{vt} slot {i} ({name}) signed with the original diversity {slots[i][1]:#x}')
+            if name.startswith(own):
+                override_slot[name[len(own[0]) if name.startswith(own[0]) else len(own[1]):]] = i
+            elif any(c in name for c in family):
+                require(slots[i][0] != eth_pure, f'{vt} slot {i}: the abstract original slot is implemented')
+                require(eth_bindings.setdefault(name, slots[i][0] + slide) == slots[i][0] + slide,
+                        f'{vt} slot {i} ({name}) is the original entry')
+            else:
+                # The kernel's own classes (OSObject, IOService): the kernel defines these, the link resolves them.
+                require(i < BASE, f'{vt} slot {i} ({name}) is a kernel method within the IOService slots')
+        for name in sorted(eth_used - set(eth_bindings)):
+            # A qualified call of a base method the family class does not override itself (IOEthernetController::start is
+            # IONetworkController's): the original entry of the slot this class overrides with the same method.
+            tail = next((name[len(q):] for q in (f'__ZN{len(base)}{base}', f'__ZNK{len(base)}{base}') if name.startswith(q)), None)
+            if tail in override_slot:
+                eth_bindings[name] = slots[override_slot[tail]][0] + slide
+        eth_used.update(e[0] for e in entries[:len(slots)] if not e[0].startswith(own) and any(c in e[0] for c in family))
+        return vt
+
+    eth_slots = [(int(t, 16), int(d, 16)) for t, d in eth_abi['slots']]
+    interface_slots = [(int(t, 16), int(d, 16)) for t, d in eth_abi['interface_slots']]
+    eth_vt = family_vtable('ShengEthernet', 'IOEthernetController', eth_slots)
+    interface_vt = family_vtable('ShengWifiInterface', 'IOEthernetInterface', interface_slots)
     for name in sorted(eth_used - set(eth_bindings)):
-        # A qualified call of a base method the family class does not override itself (IOEthernetController::start is
-        # IONetworkController's): the original entry of the slot this class overrides with the same method.
-        tail = next((name[len(p):] for p in ('__ZN20IOEthernetController', '__ZNK20IOEthernetController') if name.startswith(p)), None)
-        require(tail in override_slot, f'{name}: bound to the collection')
-        eth_bindings[name] = eth_slots[override_slot[tail]][0] + slide
-    eth_used |= {e[0] for e in eth_entries[:len(eth_slots)] if not e[0].startswith(own) and any(c in e[0] for c in family)}
+        require(False, f'{name}: bound to the collection')
     eth_text, eth_addresses = '.text\n.p2align 2\n', ''
     for name in sorted(eth_used):
         va = eth_bindings[name]
@@ -789,7 +802,8 @@ if MACOS:
     run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_ShengEthernet.cpp',
          ETH_OUT / 'ShengEthernet.o', eth_late])
     input_objects += [eth_late, ETH_OUT / 'eth-bindings.o', ETH_OUT / 'eth-addresses.o']
-    print(f'Ethernet: {len(eth_used)} original bindings, {eth_vt} matches the original {len(eth_slots)} diversities')
+    print(f'Ethernet: {len(eth_used)} original bindings, {eth_vt} matches the original {len(eth_slots)} diversities, '
+          f'{interface_vt} the {len(interface_slots)} of IOEthernetInterface')
 # macOS: the software AES-CBC provider (UniXNU drivers/SoftwareAES, NativeAES.cpp), an IOAESAccelerator of the original
 # IOCryptoAcceleratorFamily. AppleImage4's start waits for an IOAESAccelerator service without a limit (kmod_expert_finalize), holding its
 # expert lock; this board has no AES engine. Its vtable must be the collection's slot for slot (software-aes-<build>.json), as Ethernet's.

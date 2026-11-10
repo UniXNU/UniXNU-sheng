@@ -38,6 +38,9 @@ volatile uint32_t native_bluetooth_processes[4];
 /* log-bluetooth=2: printable runs in controller output, which carry its assert text. */
 char *volatile native_bluetooth_boot_text;
 volatile uint32_t native_bluetooth_boot_text_length;
+/* In-band sleep: wake indications sent, wake acknowledgements sent, sleep indications sent, clock stops undone by a wake
+ * inside the stop, writes an idle UART refused, interrupts of the shared line that found the wake disarmed, RX stop timeouts, wakes taken. */
+volatile uint64_t native_bluetooth_ibs[8];
 }
 namespace {
 struct Region {IOMemoryMap *map;volatile uint32_t *va;};
@@ -110,7 +113,11 @@ void pin(unsigned gpio,uint32_t cfg,int output=-1) {
 void rxIrq(void *) {
     volatile uint32_t *r=bt.tlmm.va+kRx*4096/4;
     if(!(r[3]&1))return;
+    /* Raw status stays on after the wake is disarmed, so every UART start bit latches it again, and each pin of the
+     * shared TLMM summary line calls this handler. Only the armed interrupt is a wake. */
+    if(!(r[2]&1)){native_bluetooth_ibs[5]=native_bluetooth_ibs[5]+1;return;}
     r[2]&=~1u;r[3]=0;barrier();
+    native_bluetooth_ibs[7]=native_bluetooth_ibs[7]+1;
     __atomic_store_n(&bt.rx_wake,1u,__ATOMIC_RELEASE);wake(nullptr);
 }
 void disarmRxWake(){bt.tlmm.va[(kRx*4096+8)/4]&=~1u;bt.tlmm.va[(kRx*4096+12)/4]=0;pin(kRx,3u|(1u<<2));}
@@ -165,8 +172,9 @@ void pump(void *) {
     }
     if(__atomic_exchange_n(&bt.rx_wake,0u,__ATOMIC_ACQ_REL) && bt.powered) {
         qbt_rx_wake(bt.core);
-        /* The GPIO consumed the first IBS wake byte while the UART was gated. */
-        const uint8_t wakeByte=0xfd;(void)qbt_receive(bt.core,&wakeByte,1);
+        /* The GPIO consumed the first IBS wake byte while the UART was gated. It counts as received, so a clock stop
+         * in progress (quiesce() pumps too) sees it and backs out. */
+        const uint8_t wakeByte=0xfd;bt.rx_sequence++;(void)qbt_receive(bt.core,&wakeByte,1);
     }
     if(!bt.gated) {
         if(qbt_geni_service(&bt.geni))wake(nullptr);
@@ -466,6 +474,9 @@ void worker(void *,wait_result_t) {
             native_bluetooth_stats[26]=stats.malformed;native_bluetooth_stats[27]=stats.unmatched_events;
             native_bluetooth_stats[28]=bt.geni.stats.rx_dma;native_bluetooth_stats[29]=bt.geni.stats.tx_dma;
             native_bluetooth_stats[15]=bt.geni.stats.line_errors;native_bluetooth_stats[16]=bt.geni.stats.dma_errors;
+            native_bluetooth_ibs[0]=stats.wake_ind;native_bluetooth_ibs[1]=stats.wake_ack;native_bluetooth_ibs[2]=stats.sleep_ind;
+            native_bluetooth_ibs[3]=stats.clock_reverts;native_bluetooth_ibs[4]=stats.tx_refused;
+            native_bluetooth_ibs[6]=bt.geni.stats.cancel_timeouts;
             health=t+1000000000ULL;
         }
         uint64_t deadline=bt.powered?qbt_deadline(bt.core):UINT64_MAX;

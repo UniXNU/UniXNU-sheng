@@ -1,0 +1,125 @@
+A two-cluster Edge matrix that this scheduler accepts and whose steal rule works.
+
+The matrix is built when the CPU driver calls ml_cpu_init_completed (ArmCpu, boot argument armcpu-edge=1). Without the
+call every edge stays closed: no thread moves between the E cluster (three A510 cores) and the P cluster, in either
+direction. The macOS boot arguments do not carry the argument. In runs 56 to 61 the busiest E core was at 90 % or more
+in 13 to 28 % of the 10 s rows, and in run 61 the busiest core of cpu3 to cpu6 was at 60 % or less in 10 of those 12
+rows ([cpu gov]).
+
+The matrix the board patch builds does not do what it says on this kernel:
+- P -> E is closed for the fixed priority, foreground and user-initiated buckets and open for default and lower. The
+  scheduler requires an edge to be at least as open for a higher bucket as for a lower one
+  (sched_edge_config_verify_non_decreasing_qos_strictness; its searches stop at the first closed bucket), so the check
+  fails.
+- E -> P allows stealing without migration, for an idle P core to take E work. The steal search admits a cluster's
+  threads only when the fixed priority bucket of that edge may migrate (scr_incoming_migration_allowed,
+  sched_edge_pset_peek_steal_possible), so a P core never takes them.
+
+Here P -> E is closed for every bucket, so a thread that prefers P runs on P as it does today. E -> P allows stealing
+for every bucket with the weight of a weighted spill (a steal then needs more runnable threads than E cores) and
+migration for the fixed priority bucket alone, which opens the steal search and moves nothing: no thread group prefers
+E for that bucket.
+
+Two counters, each with index 0 for the E and 1 for the P cluster type: sheng_edge_cross_type_steals counts the threads
+a cluster took from the run queues of the other type, and sheng_edge_idle_beside_excess counts the times a core found
+nothing to run while the other type had more runnable threads than cores. The second works with the matrix unbuilt:
+against the idle entries of cpu3 to cpu7 it says how often a P core went idle beside waiting E work.
+
+Applies after zzyf-sheng-amp.patch and zzzz-sheng-ipados27-bringup.patch. Has not run on hardware.
+diff --git a/osfmk/kern/sched_clutch.c b/osfmk/kern/sched_clutch.c
+--- a/osfmk/kern/sched_clutch.c
++++ b/osfmk/kern/sched_clutch.c
+@@ -1401,15 +1401,13 @@
+ }
+ 
+ /*
+- * sheng: fixed priority, UI and user-initiated threads that prefer the P cluster neither migrate nor get stolen to the E cluster.
+- * The A510 cores run at a fraction of the P cores' speed and no performance controller raises their clock for a frame, so
+- * such a thread waits for (or preempts lower work on) a P core instead.
++ * sheng: what the two cluster types do for each other, index 0 for an E pset and 1 for a P pset.
++ * sheng_edge_cross_type_steals: threads a pset of that type took from the run queues of a pset of the other type.
++ * sheng_edge_idle_beside_excess: times a core of that type found nothing to run while a pset of the other type had more
++ * runnable threads than cores (what a steal across a weighted edge requires), whatever the Edge matrix allows.
+  */
+-static bool
+-sched_edge_ui_bucket_stays_on_p(pset_type_t from, pset_type_t to, sched_bucket_t bucket)
+-{
+-	return from == PSET_AMP_P && to == PSET_AMP_E && bucket < TH_BUCKET_SHARE_DF;
+-}
++volatile uint32_t sheng_edge_cross_type_steals[2];
++volatile uint32_t sheng_edge_idle_beside_excess[2];
+ #endif /* CONFIG_SCHED_EDGE */
+ 
+ /*
+@@ -4952,6 +4950,9 @@
+ 			sched_clutch_thread_remove(&steal_from_pset->pset_clutch_root, stolen_thread, current_timestamp, SCHED_CLUTCH_BUCKET_OPTIONS_NONE);
+ 			SCHED(update_pset_load_average)(steal_from_pset, current_timestamp);
+ 			KDBG(MACHDBG_CODE(DBG_MACH_SCHED_CLUTCH, MACH_SCHED_EDGE_STEAL) | DBG_FUNC_NONE, thread_tid(stolen_thread), idle_pset->pset_id, steal_from_pset->pset_id, 0);
++			if (steal_from_pset->pset_type != idle_pset->pset_type) {
++				os_atomic_inc(&sheng_edge_cross_type_steals[idle_pset->pset_type == PSET_AMP_P], relaxed);
++			}
+ 		}
+ 
+ 		pset_unlock(steal_from_pset);
+@@ -5000,6 +5001,21 @@
+ 
+ 	/* No foreign-enqueued threads found; find a thread to steal from all psets based on weights/loads etc. */
+ 	thread = sched_edge_steal_thread(pset, pset->native_psets[0] | pset->foreign_psets[0]);
++	if (thread == THREAD_NULL) {
++		/* sheng: this core has nothing to run; note when a pset of the other type has threads waiting for a core */
++		for (pset_id_t other_id = 0; other_id < sched_num_psets; other_id++) {
++			processor_set_t other = os_atomic_load(&pset_array[other_id], acquire);
++			if ((other == PROCESSOR_SET_NULL) || (other->pset_type == pset->pset_type)) {
++				continue;
++			}
++			int other_cpus = pset_available_cpu_count(other);
++			if ((other_cpus > 0) &&
++			    (os_atomic_load(&other->pset_runnable_depth[TH_BUCKET_SHARE_BG], relaxed) > (uint32_t)other_cpus)) {
++				os_atomic_inc(&sheng_edge_idle_beside_excess[pset->pset_type == PSET_AMP_P], relaxed);
++				break;
++			}
++		}
++	}
+ 	return thread;
+ }
+ 
+@@ -6399,10 +6415,23 @@
+ 	edge_config_defaults[PSET_AMP_P][PSET_AMP_P] = free_spill;
+ 	/* E -> E */
+ 	edge_config_defaults[PSET_AMP_E][PSET_AMP_E] = free_spill;
++	/*
++	 * sheng: no performance controller moves thread groups, so the two edges between the E and the P cluster stay as set here.
++	 *
++	 * P -> E is closed for every bucket. The A510 cores run at a fraction of the P cores' speed and nothing raises their clock
++	 * for a frame, so fixed priority, UI and user-initiated threads wait for (or preempt lower work on) a P core. An edge has
++	 * to be at least as open for a higher bucket as for a lower one (sched_edge_config_verify; the steal search stops at the
++	 * first closed bucket), so default threads stay on P as well.
++	 *
++	 * E -> P lets a P core that goes idle take utility and background threads queued behind a full E cluster. Stealing is
++	 * open for every bucket; with the weight of a weighted spill a steal needs more runnable threads than E cores. Migration is opened below for
++	 * the fixed priority bucket alone: the steal search admits a cluster's threads only when that bucket may migrate
++	 * (scr_incoming_migration_allowed), and no thread group prefers E for it (sched_edge_default_preferred_pset).
++	 */
+ 	/* P -> E */
+-	edge_config_defaults[PSET_AMP_P][PSET_AMP_E] = weighted_spill;
+-	/* E -> P; sheng: an idle P core may steal E work, as no controller moves thread groups */
+-	edge_config_defaults[PSET_AMP_E][PSET_AMP_P] = (sched_clutch_edge){.sce_migration_weight = 0, .sce_migration_allowed = 0, .sce_steal_allowed = 1};
++	edge_config_defaults[PSET_AMP_P][PSET_AMP_E] = no_spill;
++	/* E -> P */
++	edge_config_defaults[PSET_AMP_E][PSET_AMP_P] = (sched_clutch_edge){.sce_migration_weight = weighted_spill.sce_migration_weight, .sce_migration_allowed = 0, .sce_steal_allowed = 1};
+ #if HAS_MCORE
+ 	/* M -> M */
+ 	edge_config_defaults[PSET_AMP_M][PSET_AMP_M] = free_spill;
+@@ -6486,8 +6515,10 @@
+ 				 * values when deciding to enforce performance islands for certain buckets.
+ 				 */
+ #endif /* CONFIG_SCHED_PERF_ISLANDS */
+-				if (sched_edge_ui_bucket_stays_on_p(src_pset->pset_type, dst_pset->pset_type, bucket)) {
+-					edge_config = no_spill;
++				if ((src_pset->pset_type == PSET_AMP_E) && (dst_pset->pset_type == PSET_AMP_P) &&
++				    (bucket == PERMISSIVE_MIGRATION_BUCKET)) {
++					/* sheng: the steal gate of the E -> P edge, see above */
++					edge_config.sce_migration_allowed = 1;
+ 				}
+ 				sched_edge_config_set(src_pset_id, dst_pset_id, bucket, edge_config);
+ 				if (edge_config.sce_migration_allowed) {

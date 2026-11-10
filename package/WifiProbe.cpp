@@ -1194,6 +1194,20 @@ void wifiStack(volatile uint32_t *m, uint64_t barBytes) {
     volatile uint32_t *st = native_wifi_mhi;
     if (!arenaInit()) {st[0] = (uint32_t)-11; return;}
     pLog(6, native_ufs_extra_uncached ? "wifi: DMA window mapped uncached" : "wifi: DMA window mapped cached (no second mapping)");
+    uint32_t diagnostics = 0; PE_parse_boot_argn("log-wifi", &diagnostics, sizeof diagnostics);
+    // log-wifi=1: what reading the window costs the CPU next to ordinary memory. Every received frame is read out of the window once
+    // (the copy into the stack's buffer), and the driver reads its descriptors and headers there.
+    if (diagnostics) {
+        constexpr size_t kProbe = 256 * 1024;
+        if (uint8_t *plain = static_cast<uint8_t *>(IOMallocData(2 * kProbe))) {
+            memset(plain, 0x5a, 2 * kProbe);
+            const uint64_t began = pNowNs(); memcpy(plain, gArena.va + 4096, kProbe);
+            const uint64_t middle = pNowNs(); memcpy(plain, plain + kProbe, kProbe);
+            const uint64_t ended = pNowNs();
+            native_wifi_logf(6, "wifi: reading 256 KiB of the DMA window %llu us, of ordinary memory %llu us", (middle - began) / 1000, (ended - middle) / 1000);
+            IOFreeData(plain, 2 * kProbe);
+        }
+    }
     if (!findCaps()) {st[0] = (uint32_t)-12; return;}
     static const struct lx_platform plat = {pNow, pSleep, pPoll, pLog, pHalt, hAlloc, hFree, pDmaAlloc, pDmaFree, pDmaMap, pDmaSync, pFwGet, pNowNs, pBootNs, pBusyDelayUs, _disable_preemption, _enable_preemption};
     nw_wifi_set_platform(&plat);
@@ -1201,6 +1215,7 @@ void wifiStack(volatile uint32_t *m, uint64_t barBytes) {
     gNwBar = m;
     board.bar = const_cast<uint32_t *>(m); board.bar_len = barBytes; board.device_id = (uint16_t)(gCfg[0] >> 16); board.msi_cap = (uint16_t)gMsiCap; board.irq_base = 1000;
     board.cfg_read = pCfgRead; board.cfg_write = pCfgWrite; board.msi_target = pMsiTarget; board.map_phys = nullptr;
+    board.diagnostics = diagnostics;   // log-wifi=1: the module also asks the firmware for its receive statistics ("wifi: fw stats" lines)
     // the board's address window for the endpoint to reach sleep clock and sibling blocks is already set up by the earlier stages
     st[0] = 20;
     Fw firmware{};
@@ -1221,7 +1236,8 @@ void wifiStack(volatile uint32_t *m, uint64_t barBytes) {
     pLog(6, msi ? "wifi: MSI line not attached, polling" : "wifi: MSI line attached (SPI 141), sleeping between interrupts");
     if (msi) native_wifi_logf(4, "wifi: MSI attach result %d", msi);
     uint64_t nextReport = 0, sliceStarted = pNowNs(), reportStarted = sliceStarted;
-    uint64_t activeNs = 0, longestStep = 0, rounds = 0, yields = 0;
+    uint64_t activeNs = 0, longestStep = 0, rounds = 0, yields = 0, reportedCpu = thread_get_runtime_self();
+    uint32_t reportedFrames = 0, reportedMsis = 0;
     for (uint64_t n = 0;; ++n) {
         const uint64_t began = pNowNs();
         const int busy = nw_wifi_step();
@@ -1250,6 +1266,13 @@ void wifiStack(volatile uint32_t *m, uint64_t barBytes) {
             const uint64_t end = pNowNs(), elapsed = end - reportStarted;
             native_wifi_logf(6, "wifi: worker rounds %llu active-permille %llu max-step-us %llu yields %llu",
                             rounds, elapsed ? activeNs * 1000 / elapsed : 0, longestStep / 1000, yields);
+            // What this thread cost in that time and what it moved: its processor time (the steps' time above includes their
+            // waits), the frames handed to the network side and the interrupts that woke it.
+            const uint64_t cpu = thread_get_runtime_self(); uint64_t cpuNs = 0; absolutetime_to_nanoseconds(cpu - reportedCpu, &cpuNs);
+            const uint32_t frames = nw_wifi_stats.frames, msis = gMsiCount;
+            native_wifi_logf(6, "wifi: worker cpu-ms %llu step-ms %llu frames %u interrupts %u", cpuNs / 1000000, activeNs / 1000000,
+                            frames - reportedFrames, msis - reportedMsis);
+            reportedCpu = cpu; reportedFrames = frames; reportedMsis = msis;
             activeNs = longestStep = rounds = yields = 0; reportStarted = end;
         }
         if ((n & 63) == 0) st[1] = nw_wifi_stats.stage | nw_wifi_stats.scans << 8 | nw_wifi_stats.bss_seen << 16;
@@ -1687,6 +1710,10 @@ extern "C" {volatile uint32_t native_charger_pmic[2 + 5 * 7];}
 // register 0x46 (bit 7 enabled), [2] the seconds counter at 0x48-0x4b. Whether the counter is wall time or only counts since some
 // power-on decides how a real-time clock service can use it.
 extern "C" {volatile uint32_t native_pmic_rtc[3];}
+// The offset that turns the PMK8550 counter into wall time, where Linux keeps it for this board: four bytes, little endian, at 0xbc
+// of the second SDAM (SID 0, peripheral 0x71); wall time is counter + offset. [0] 1 when read, [1] the offset, [2] the execution
+// environment that owns the peripheral (a write needs ownership, this side is 0).
+extern "C" {volatile uint32_t native_pmic_rtc_offset[3];}
 extern "C" void sheng_charger_pmic_sample(void)
 {
     static const uint8_t pages[7] = {0x11, 0x26, 0x27, 0x28, 0x29, 0x2b, 0x2c};
@@ -1728,6 +1755,17 @@ extern "C" void sheng_charger_pmic_sample(void)
             native_pmic_rtc[1] = control;
             native_pmic_rtc[2] = (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
             native_pmic_rtc[0] = 1;
+        }
+    }
+    const int sdam = pmicApid(p, 0x071, &owner);
+    if (sdam >= 0) {
+        uint8_t o[4] = {0, 0, 0, 0};
+        bool ok = true;
+        for (unsigned i = 0; i < 4 && ok; ++i) ok = !br_read8(p.obs.va, &p.arb, sdam, (uint8_t)(0xbc + i), &o[i]);
+        if (ok) {
+            native_pmic_rtc_offset[1] = (uint32_t)o[0] | (uint32_t)o[1] << 8 | (uint32_t)o[2] << 16 | (uint32_t)o[3] << 24;
+            native_pmic_rtc_offset[2] = (uint32_t)owner;
+            native_pmic_rtc_offset[0] = 1;
         }
     }
 }

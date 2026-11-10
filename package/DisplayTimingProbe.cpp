@@ -13,7 +13,9 @@
 
 // [0] stage (1 mapped, 2 first sample, 3 second sample; negative: the step that failed), [1] MDP hardware version,
 // per interface i (0, 1) at [2 + 8 * i]: timing engine enable, config, frame/line counter enable, frame count at the first sample,
-// frame count one second later, line count, vsync period (lines), status; [18] microseconds between the two samples.
+// frame count one second later, line count, vsync period (lines), status; [18] microseconds between the two samples; [19] the frame period
+// in microseconds, timed on the line counter of interface 1 (0: the counter does not move). The panel's refresh rate is that period's
+// inverse, or the frames counted in [18]; the display driver's own refresh tick (boot argument vsync) is a timer and says nothing about it.
 extern "C" {volatile uint32_t native_dpu_stats[20];}
 // Per pipe (VIG 0..3, DMA 0..5): source size, source address 0, stride 0, source format; [40] the boot framebuffer's physical address
 // (low 32 bits), [41] its high bits; per CTL 0..3 at [42 + 3 * n]: layer mixer 0 setting, flush, interface active.
@@ -23,14 +25,15 @@ extern "C" {volatile uint32_t native_dpu_pipes[54];}
 // master; interfaces 1 and 2 at [27 + 2 * i]: tear check enable, autorefresh configuration.
 // dpu=3 also writes each VIG pipe's current address back and flushes the two pipes on CTL 0 (the picture cannot change), to time the
 // latch: [31] flush before, [32] right after the write, [33] microseconds until the pipe bits clear (all ones: still set after 100 ms),
-// [34] flush at the end, [35] interface 1 frame count before, [36] after.
+// [34] flush at the end, [35] interface 1 frame count before, [36] after. Every level: [37] and [38] the horizontal sync control of interfaces
+// 1 and 2 (pulse width, period << 16), which with the vsync period names the panel mode the boot loader set.
 extern "C" {volatile uint32_t native_dpu_more[40];}
 
 namespace {
 constexpr uint64_t kMdp = 0xae01000, kMdpBytes = 0x8f000;
 constexpr uint32_t kIntf[2] = {0x35000, 0x36000};
 constexpr uint32_t kTimingEnable = 0x6c, kConfig = 0x04, kCountEnable = 0xa8, kFrameCount = 0xac, kLineCount = 0xb0,
-                   kVsyncPeriod = 0x0c, kStatus = 0x26c;
+                   kVsyncPeriod = 0x0c, kStatus = 0x26c, kHsyncControl = 0x08;
 constexpr uint32_t kPipes[10] = {0x4000, 0x6000, 0x8000, 0xa000, 0x24000, 0x26000, 0x28000, 0x2a000, 0x2c000, 0x2e000};
 constexpr uint32_t kSrcSize = 0x00, kSrc0 = 0x14, kStride0 = 0x24, kFormat = 0x30;
 constexpr uint32_t kCtl = 0x15000, kCtlStride = 0x1000, kCtlLayer0 = 0x00, kCtlFlush = 0x18, kCtlIntfActive = 0xf4;
@@ -38,6 +41,34 @@ constexpr uint32_t kPipeMore[9] = {0x08, 0x0c, 0x10, 0x18, 0x34, 0x38, 0x44, 0x4
 constexpr uint32_t kCtlMore[7] = {0x14, 0x1c, 0xfc, 0x110, 0x12c, 0x130, 0x134};
 constexpr uint32_t kTearCheck = 0x284, kAutorefresh = 0x2b4;
 unsigned gLevel;
+
+// The frame period in microseconds on an interface's line counter: the shortest time between two wraps seen within 100 ms. A wrap is a count
+// that fell below half the one before it; one missed while the thread was off the CPU only makes an interval longer, so the shortest
+// is the period. 0 when the counter does not move.
+uint32_t framePeriodUs(volatile uint32_t *mdp, uint32_t intf) {
+    const uint64_t began = mach_absolute_time();
+    uint64_t lastWrap = 0;
+    uint32_t best = 0, previous = mdp[(intf + kLineCount) / 4];
+    for (;;) {
+        const uint32_t line = mdp[(intf + kLineCount) / 4];
+        const uint64_t now = mach_absolute_time();
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(now - began, &ns);
+        if (ns > 100000000ull) break;
+        if (line < previous / 2) {
+            if (lastWrap) {
+                uint64_t gap = 0;
+                absolutetime_to_nanoseconds(now - lastWrap, &gap);
+                const uint32_t us = uint32_t(gap / 1000);
+                if (us && (!best || us < best)) best = us;
+            }
+            lastWrap = now;
+        }
+        previous = line;
+        IODelay(10);
+    }
+    return best;
+}
 
 void dpuThread(void *, wait_result_t) {
     thread_set_thread_name(current_thread(), "dpu");
@@ -64,6 +95,16 @@ void dpuThread(void *, wait_result_t) {
     for (unsigned i = 0; i < 2; ++i) native_dpu_stats[2 + 8 * i + 4] = rd(kIntf[i] + kFrameCount);
     absolutetime_to_nanoseconds(mach_absolute_time() - began, &elapsed);
     native_dpu_stats[18] = uint32_t(elapsed / 1000);
+    native_dpu_stats[19] = framePeriodUs(mdp, kIntf[0]);
+    for (unsigned i = 0; i < 2; ++i) native_dpu_more[37 + i] = rd(kIntf[i] + kHsyncControl);
+    {
+        // One line for the system log, which keeps it without the display log group: the rate by both measurements, in thousandths of a hertz.
+        const uint32_t frames = native_dpu_stats[6] - native_dpu_stats[5], us = native_dpu_stats[18], period = native_dpu_stats[19];
+        const uint32_t counted = us ? uint32_t(uint64_t(frames) * 1000000000ull / us) : 0, timed = period ? 1000000000u / period : 0;
+        IOLog("sheng-dpu: interface 1 counted %u frames in %u us (%u.%03u Hz), frame period %u us (%u.%03u Hz), hsync %#x vsync period %u, "
+              "timing %u counters %u\n", frames, us, counted / 1000, counted % 1000, period, timed / 1000, timed % 1000, native_dpu_more[37],
+              native_dpu_stats[8], native_dpu_stats[2], native_dpu_stats[4]);
+    }
     for (unsigned p = 0; p < 10; ++p) {
         native_dpu_pipes[4 * p] = rd(kPipes[p] + kSrcSize); native_dpu_pipes[4 * p + 1] = rd(kPipes[p] + kSrc0);
         native_dpu_pipes[4 * p + 2] = rd(kPipes[p] + kStride0); native_dpu_pipes[4 * p + 3] = rd(kPipes[p] + kFormat);
