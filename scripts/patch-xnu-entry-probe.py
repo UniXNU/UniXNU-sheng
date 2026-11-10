@@ -207,30 +207,32 @@ def assemble_c(source, va, workdir, symbols):
                     '-mgeneral-regs-only', '-fno-pic', '-mcmodel=tiny', '-Oz', f'-DVINFO={VINFO_VA:#x}UL',
                     *definitions, f'-I{font_dir}', '-c', source, '-o', obj], check=True)
     script = workdir / 'panic.ld'
-    script.write_text('SECTIONS { . = %#x; .text : { *(.text.a_entry) *(.text.a_common) *(.text*) *(.rodata*) } /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) *(.ARM.*) } }\n' % va)
-    size = shutil.which('llvm-size') or '/opt/homebrew/opt/llvm/bin/llvm-size'
-    sizes = subprocess.run([size, '--format=berkeley', obj], capture_output=True, text=True, check=True).stdout.splitlines()[-1].split()
-    if int(sizes[1]) or int(sizes[2]):
-        # The code runs from the kernel's read-only text: a global would fault on its first store.
-        raise SystemExit(f'{source.name} has writable data (data {sizes[1]}, bss {sizes[2]}); use the stack')
+    # The probe executes from read-only kernel text. Reject writable allocated
+    # sections at link time and use an ELF symbol for the linked text address.
+    script.write_text(f"""
+SECTIONS {{
+  . = {va:#x};
+  .writable : {{ INPUT_SECTION_FLAGS (SHF_ALLOC & SHF_WRITE) *(*) *(COMMON) }}
+  .text : {{ *(.text.a_entry) *(.text.a_common) *(.text*) *(.rodata*) }}
+  __panic_text_start = ADDR(.text);
+  /DISCARD/ : {{ *(.comment) *(.note*) *(.eh_frame*) *(.ARM.*) }}
+}}
+ASSERT(SIZEOF(.writable) == 0, "{source.name} has writable data; use the stack")
+""")
     subprocess.run([lld, '-T', script, '-e', 'panic_screen', obj, '-o', elf], check=True)
     # Only .text: a plain binary dump would start at the ELF headers kept in front of it.
     subprocess.run([objcopy, '-O', 'binary', '-j', '.text', elf, binary], check=True)
-    readelf = shutil.which('llvm-readelf') or '/opt/homebrew/opt/llvm/bin/llvm-readelf'
-    load = None
-    for line in subprocess.run([readelf, '-S', elf], capture_output=True, text=True, check=True).stdout.splitlines():
-        parts = line.replace('[', ' ').replace(']', ' ').split()
-        if len(parts) >= 4 and parts[1] == '.text':
-            load = int(parts[3], 16)
-    if load is None or load < va:
-        raise SystemExit('Cannot find where the linker put .text')
-    entry = None
+    addresses = {}
     for line in subprocess.run([nm, elf], capture_output=True, text=True, check=True).stdout.splitlines():
         parts = line.split()
-        if len(parts) == 3 and parts[2] == 'panic_screen':
-            entry = int(parts[0], 16)
+        if len(parts) == 3 and parts[2] in ('__panic_text_start', 'panic_screen'):
+            addresses[parts[2]] = int(parts[0], 16)
+    load = addresses.get('__panic_text_start')
+    entry = addresses.get('panic_screen')
+    if load is None or load < va:
+        raise SystemExit('Cannot find where the linker put .text')
     if entry != load:
-        raise SystemExit(f'panic_screen at {entry:#x} is not the first byte {load:#x}')
+        raise SystemExit('panic_screen is not the first byte of .text')
     return binary.read_bytes(), load, entry
 
 
