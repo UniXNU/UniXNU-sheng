@@ -173,9 +173,11 @@ unsigned wn8030_pointer_report(struct wn8030_pointer *state, const uint8_t touch
     if (fingers) {x /= (int32_t)fingers; y /= (int32_t)fingers;}
     /* A finger that came, went or changed places starts from where it is: no jump. */
     if (fingers && fingers == state->fingers && (fingers > 1 || contact == state->contact)) {
-        const int32_t dx = x - state->x, dy = y - state->y;
+        /* In the report as it arrives here Y grows away from the user (seen on the tablet: with Y taken as growing downwards the
+         * pointer went down when the finger went up), so the pointer's Y is its negative and moving up scrolls up. */
+        const int32_t dx = x - state->x, dy = state->y - y;
         if (fingers == 1) {state->move_x += dx; state->move_y += dy;}
-        else {state->scroll_x += dx; state->scroll_y -= dy;}   /* fingers moving up scroll up */
+        else {state->scroll_x += dx; state->scroll_y -= dy;}
     }
     if (fingers != state->fingers) state->move_x = state->move_y = state->scroll_x = state->scroll_y = 0;
     state->fingers = (uint8_t)fingers; state->contact = (uint8_t)contact; state->x = x; state->y = y;
