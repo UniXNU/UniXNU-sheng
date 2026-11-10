@@ -182,6 +182,7 @@ extern volatile uint32_t native_legacy_swapstat[16] __attribute__((weak_import))
 extern volatile uint64_t native_legacy_center_half[2] __attribute__((weak_import));
 extern volatile uint32_t native_charger_pmic[2 + 5 * 7] __attribute__((weak_import));
 extern void sheng_charger_pmic_sample(void) __attribute__((weak_import));
+extern volatile uint32_t native_pmic_rtc[3] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_tl_count __attribute__((weak_import));
 extern volatile uint32_t native_adreno_stall_log_count __attribute__((weak_import));
 extern volatile uint32_t native_gpu_dcvs_log_count __attribute__((weak_import));
@@ -1515,6 +1516,10 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if (&sheng_charger_pmic_sample && &native_charger_pmic) {
       sheng_charger_pmic_sample();
       if (native_charger_pmic[0]) {
+        if (&native_pmic_rtc && native_pmic_rtc[0]) {
+          snprintf(row, sizeof row, "[pmic rtc] control=%02x seconds=%u", native_pmic_rtc[1], native_pmic_rtc[2]);
+          at = put(out, at, cap, row, sizeof row);
+        }
         for (unsigned k = 0; k < 7; ++k) {
           const volatile uint32_t *w = native_charger_pmic + 2 + 5 * k;
           if (!w[0]) continue;
