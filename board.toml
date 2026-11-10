@@ -22,12 +22,6 @@
 "patch_series" = ["arch:patches/xnu/series", "soc:patches/xnu-12377/series", "os:patches/xnu/series", "device:patches/xnu-12377/series"]
 
 
-["kernel"."prelink"]
-# The profile's roots plus the USB device and host stacks. Host mode reaches AppleOnboardSerial and AppleSMC only through a metaclass in an
-# OSDynamicCast, and they bring Skywalk, RTBuddy and more: left out, that cast finds nothing.
-"roots" = ["com.apple.AppleFSCompression.AppleFSCompressionTypeZlib", "com.apple.driver.AppleARMPlatform", "com.apple.driver.AppleARMWatchdogTimer", "com.apple.driver.AppleAudioClockLibs", "com.apple.driver.AppleEffaceableStorage", "com.apple.driver.AppleIISController", "com.apple.driver.AppleM2ScalerCSCDriver", "com.apple.driver.AppleMobileFileIntegrity", "com.apple.driver.ApplePMGR", "com.apple.driver.IODARTFamily", "com.apple.filesystems.apfs", "com.apple.iokit.CoreAnalyticsFamily", "com.apple.iokit.IOAVFamily", "com.apple.iokit.IOAudio2Family", "com.apple.iokit.IOCECFamily", "com.apple.iokit.IOCryptoAcceleratorFamily", "com.apple.iokit.IOGPUFamily", "com.apple.iokit.IOHDCPFamily", "com.apple.iokit.IOMobileGraphicsFamily", "com.apple.iokit.IOReportFamily", "com.apple.iokit.IOSlowAdaptiveClockingFamily", "com.apple.iokit.IOStorageFamily", "com.apple.iokit.IOSurface", "com.apple.kec.Libm", "com.apple.kec.corecrypto", "com.apple.kext.AppleMatch", "com.apple.kext.CoreTrust", "com.apple.security.AppleImage4", "com.apple.security.sandbox", "com.apple.iokit.IOHIDFamily", "com.apple.iokit.IOHIDEventDriver", "com.apple.iokit.IOUSBDeviceFamily", "com.apple.driver.AppleUSBXDCI", "com.apple.driver.AppleUSBDeviceMux", "com.apple.iokit.IOUSBHostFamily", "com.apple.driver.usb.AppleUSBXHCI", "com.apple.driver.usb.AppleUSBHub", "com.apple.driver.usb.AppleUSBHostCompositeDevice", "com.apple.driver.usb.IOUSBHostHIDDevice", "com.apple.iokit.IOUSBMassStorageDriver", "com.apple.iokit.IOSCSIArchitectureModelFamily", "com.apple.iokit.IOSCSIBlockCommandsDevice", "!com.apple.driver.AppleOnboardSerial", "!com.apple.driver.AppleSMC"]
-
-
 ["firmware"]
 "config" = "sheng"
 "dsc" = "Platforms/Xiaomi/shengPkg/sheng.dsc"
@@ -208,6 +202,33 @@ CI_ENABLE_METAL_GPU = "0"
 
 ["os_overrides"."ipados-26.5.2-23F84"]
 "remove" = ["payload.install", "payload.root_policies", "payload.runtime", "kernel.prelink.roots"]
+
+["os_overrides"."ipados-27.0.1-24A446"."kernel"."prelink"]
+# The iPadOS 27 profile's roots plus the USB device and host stacks. Host mode reaches AppleOnboardSerial and AppleSMC only through a metaclass in an
+# OSDynamicCast, and they bring Skywalk, RTBuddy and more: left out, that cast finds nothing.
+"roots" = ["com.apple.AppleFSCompression.AppleFSCompressionTypeZlib", "com.apple.driver.AppleARMPlatform", "com.apple.driver.AppleARMWatchdogTimer", "com.apple.driver.AppleAudioClockLibs", "com.apple.driver.AppleEffaceableStorage", "com.apple.driver.AppleIISController", "com.apple.driver.AppleM2ScalerCSCDriver", "com.apple.driver.AppleMobileFileIntegrity", "com.apple.driver.ApplePMGR", "com.apple.driver.IODARTFamily", "com.apple.filesystems.apfs", "com.apple.iokit.CoreAnalyticsFamily", "com.apple.iokit.IOAVFamily", "com.apple.iokit.IOAudio2Family", "com.apple.iokit.IOCECFamily", "com.apple.iokit.IOCryptoAcceleratorFamily", "com.apple.iokit.IOGPUFamily", "com.apple.iokit.IOHDCPFamily", "com.apple.iokit.IOMobileGraphicsFamily", "com.apple.iokit.IOReportFamily", "com.apple.iokit.IOSlowAdaptiveClockingFamily", "com.apple.iokit.IOStorageFamily", "com.apple.iokit.IOSurface", "com.apple.kec.Libm", "com.apple.kec.corecrypto", "com.apple.kext.AppleMatch", "com.apple.kext.CoreTrust", "com.apple.security.AppleImage4", "com.apple.security.sandbox", "com.apple.iokit.IOHIDFamily", "com.apple.iokit.IOHIDEventDriver", "com.apple.iokit.IOUSBDeviceFamily", "com.apple.driver.AppleUSBXDCI", "com.apple.driver.AppleUSBDeviceMux", "com.apple.iokit.IOUSBHostFamily", "com.apple.driver.usb.AppleUSBXHCI", "com.apple.driver.usb.AppleUSBHub", "com.apple.driver.usb.AppleUSBHostCompositeDevice", "com.apple.driver.usb.IOUSBHostHIDDevice", "com.apple.iokit.IOUSBMassStorageDriver", "com.apple.iokit.IOSCSIArchitectureModelFamily", "com.apple.iokit.IOSCSIBlockCommandsDevice", "!com.apple.driver.AppleOnboardSerial", "!com.apple.driver.AppleSMC"]
+
+["os_overrides"."macos-27.3-26C5035r"."payload"]
+# The macOS kernel collection takes 137 MiB; 192 MiB is the largest boot image ramdisk the loader accepts.
+"size_mib" = 192
+# First macOS bring-up: storage, display, HID, USB and CPU. No GPU, audio, Wi-Fi, Bluetooth or AppSync
+# userland exists for macOS yet, and the launchd watchdog policy (lite) names iPadOS jobs.
+"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "offline-key-events=1", "aks=1", "aks-sls=3", "offline-hid-input=1", "touch=4", "touch-hid=1", "buttons=1", "keyboard=1", "log=1", "smp=1", "armcpu-spi-ipi=1", "armcpu-self-ipi=1", "data-persist=2", "backlight=1", "cpufreq=4", "dpu-scanout=2", "no-lc=1", "vsync=120", "vsync-fixed=1", "disable-watchdogd=1", "usb=1"]
+
+["os_overrides"."macos-27.3-26C5035r"."payload"."adt"]
+# T6050, the chip of Mac17,11.
+"chip_id" = "6050"
+
+["os_overrides"."macos-27.3-26C5035r"."payload"."runtime"]
+"target" = "macos27"
+"build" = "26C5035r"
+"gpu_addon" = false
+# The macOS seed keeps the Data template's owners, so it is made as root (runtime.py prints the command).
+"data_seed_tool" = "scripts/make-macos-data-seed.py"
+"skip_setup" = false
+
+["os_overrides"."macos-27.3-26C5035r"]
+"remove" = ["payload.install", "payload.skip_setup_tool", "payload.runtime.wallpapers", "payload.runtime.audio_tool", "payload.runtime.audio_target", "payload.runtime.audio_system_plugins", "payload.runtime.wifi_tool", "payload.runtime.wifi_target", "payload.runtime.wifi_launchd_cache", "payload.runtime.wifi_bin_prefix", "payload.runtime.bluetooth_tool", "payload.runtime.bluetooth_target", "payload.runtime.appsync", "payload.runtime.launchd_job_environment"]
 
 ["os_overrides"."macos-27.3-26C5035r"."kernel"]
 "defconfig" = "sheng_macos_defconfig"
