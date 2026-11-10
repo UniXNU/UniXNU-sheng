@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build QcaBluetooth and SM8550 transport operations for the selected native kernel."""
-import argparse,hashlib,json,subprocess,sys
+import argparse,hashlib,json,os,subprocess,sys
 from pathlib import Path
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('component',type=Path);p.add_argument('output',type=Path);p.add_argument('--tree',type=Path,required=True)
@@ -10,7 +10,9 @@ record=tree/'build/sheng-source-storage/BootDiagExport.command.json'
 base=json.loads(record.read_text());bsd=tree/'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/bsd/DEVELOPMENT/kern_exec.o.json'
 cwd=Path(json.loads('['+bsd.read_text().strip().rstrip(',')+']')[0]['directory'])
 soc=tree/'kits/Sm8550Platform'
-sources=[component/f for f in ('src/qbt_core.c','src/qbt_linux.c','src/qbt_geni.c','src/qbt_transport.c','out/linux/btqca.c')]
+# The front end the OS's bluetoothd uses: the UART.SK kernel control on iPadOS, the serial device /dev/cu.BLTH on macOS.
+front='src/qbt_tty.c' if os.environ.get('UNIXNU_XNU_TARGET')=='macosx' else 'src/qbt_transport.c'
+sources=[component/f for f in ('src/qbt_core.c','src/qbt_linux.c','src/qbt_geni.c',front,'out/linux/btqca.c')]
 sources += [soc/f for f in ('Sm8550GeniUart.c','Sm8550Gcc.c','Sm8550QupDma.c')]
 objects=[]
 for source in sources:
