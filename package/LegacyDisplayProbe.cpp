@@ -112,7 +112,16 @@ bool native_legacy_prepare_scanout(void) {
     if(boot_progress_cancel_scanout)boot_progress_cancel_scanout();
     return false;
 }
-__attribute__((noinline)) void native_legacy_display_checkpoint(void) {__asm__ volatile("" ::: "memory");}
+// Every exit of the display probes passes here. A probe that did not publish the display (stage 10) says where it stopped, once
+// per exit: without the display the OS finds no framebuffer, and the stage is otherwise visible only in memory.
+__attribute__((noinline)) void native_legacy_display_checkpoint(void) {
+    __asm__ volatile("" ::: "memory");
+    if(native_legacy_stage==10)return;
+    IOLog("NativeLegacyDisplay: not published: stage %u meta %d init %u surface %d/%u probe %u start %u dt %u scale %d\n",
+          native_legacy_stage,native_legacy_meta_status,native_legacy_init_result,native_legacy_surface_status,
+          native_legacy_surface_found,native_legacy_probe_match,native_legacy_start_result,native_legacy_dt_attached,
+          native_legacy_unit_scale_status);
+}
 __attribute__((noinline)) void native_legacy_gop_mapping_checkpoint(void) {__asm__ volatile("" ::: "memory");}
 __attribute__((noinline)) void native_legacy_client_checkpoint(void) {__asm__ volatile("" ::: "memory");}
 void native_legacy_pm_observed(unsigned stage,IOReturn status,unsigned long ordinal) {
@@ -526,9 +535,18 @@ void native_legacy_display_late_probe(void) {
     if (sheng_keyboard_probe) sheng_keyboard_probe();
     sheng_dpu_probe();
     native_hid_input_probe();
-    IOService *display=pendingLegacyDisplay;if(!display)return;pendingLegacyDisplay=nullptr;
+    IOService *display=pendingLegacyDisplay;if(!display){native_legacy_display_checkpoint();return;}pendingLegacyDisplay=nullptr;
     native_legacy_surface_status=OSKextLoadKextWithIdentifier("com.apple.iokit.IOSurface");
-    OSDictionary *matching=IOService::nameMatching("IOCoreSurfaceRoot");
+    // The IOSurface root service: iOS and iPadOS name it IOCoreSurfaceRoot; macOS leaves it unnamed, so its name is its class,
+    // IOSurfaceRoot. IONameMatch takes either.
+    OSDictionary *matching=OSDictionary::withCapacity(1);
+    {
+        const OSObject *names[]={OSString::withCString("IOCoreSurfaceRoot"),OSString::withCString("IOSurfaceRoot")};
+        OSArray *list=names[0] && names[1]?OSArray::withObjects(names,2):nullptr;
+        if(!matching || !list || !matching->setObject(gIONameMatchKey,list))OSSafeReleaseNULL(matching);
+        OSSafeReleaseNULL(list);
+        for(const OSObject *name:names)if(name)name->release();
+    }
     IOService *surface=matching?IOService::waitForMatchingService(matching,5000000000ULL):nullptr;
     native_legacy_surface_found=surface!=nullptr;OSSafeReleaseNULL(surface);OSSafeReleaseNULL(matching);
     PE_Video video={};
