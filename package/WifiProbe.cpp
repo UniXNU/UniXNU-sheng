@@ -1683,6 +1683,10 @@ extern "C" void sheng_wifi_probe(void) {
 // arbiter's observer channel. [0] SID + 1 (0 none found), [1] samples; then per page five words: SID<<24 | page<<16 | type<<8 | subtype,
 // registers 0x06-0x09, 0x0a-0x0d, 0x40-0x43, 0x44-0x47 (first register in the low byte; 0xee = not readable).
 extern "C" {volatile uint32_t native_charger_pmic[2 + 5 * 7];}
+// The PMIC's real-time clock (PMK8550, SID 0, peripheral 0x61, as Linux's qcom,pmk8350-rtc reads it): [0] 1 when read, [1] the control
+// register 0x46 (bit 7 enabled), [2] the seconds counter at 0x48-0x4b. Whether the counter is wall time or only counts since some
+// power-on decides how a real-time clock service can use it.
+extern "C" {volatile uint32_t native_pmic_rtc[3];}
 extern "C" void sheng_charger_pmic_sample(void)
 {
     static const uint8_t pages[7] = {0x11, 0x26, 0x27, 0x28, 0x29, 0x2b, 0x2c};
@@ -1715,5 +1719,16 @@ extern "C" void sheng_charger_pmic_sample(void)
         }
     }
     native_charger_pmic[1] = native_charger_pmic[1] + 1;
+    const int rtc = pmicApid(p, 0x061, &owner);
+    if (rtc >= 0) {
+        uint8_t control = 0, b[4] = {0, 0, 0, 0};
+        bool ok = !br_read8(p.obs.va, &p.arb, rtc, 0x46, &control);
+        for (unsigned i = 0; i < 4 && ok; ++i) ok = !br_read8(p.obs.va, &p.arb, rtc, (uint8_t)(0x48 + i), &b[i]);
+        if (ok) {
+            native_pmic_rtc[1] = control;
+            native_pmic_rtc[2] = (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
+            native_pmic_rtc[0] = 1;
+        }
+    }
 }
 
