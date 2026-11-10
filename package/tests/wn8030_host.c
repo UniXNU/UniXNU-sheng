@@ -166,6 +166,32 @@ int main(int argc, char **argv)
         printf("CHUNKS %u CODE %u\n", count, fw_code);
         free(fw);
     }
+    {   /* The touchpad as a pointer (macOS): one finger moves, two scroll, the click is left and with two fingers right. */
+        struct wn8030_pointer st; memset(&st, 0, sizeof st);
+        uint8_t r[WN8030_TOUCHPAD_REPORT], o[WN8030_POINTER_REPORT];
+        memset(r, 0, sizeof r); r[0] = WN8030_TOUCHPAD_ID;
+#define FINGER(i, tip, id, x, y) do {uint8_t *f = r + 2 + 6 * (i); f[0] = (tip) ? 7 : 0; f[1] = (id); f[2] = (uint8_t)(x); f[3] = (uint8_t)((x) >> 8); \
+                                     f[4] = (uint8_t)(y); f[5] = (uint8_t)((y) >> 8);} while (0)
+#define S16(p) ((int16_t)((p)[0] | (p)[1] << 8))
+        FINGER(0, 1, 3, 1000, 1000);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0);                       /* the first touch does not move */
+        FINGER(0, 1, 3, 1021, 990);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[0] == WN8030_POINTER_ID && S16(o + 2) == 10 && S16(o + 4) == -5 && !o[6] && !o[7]);
+        FINGER(0, 1, 3, 1022, 990);                                         /* the half count left over is kept */
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && S16(o + 2) == 1 && S16(o + 4) == 0);
+        FINGER(1, 1, 4, 1500, 990);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0);                       /* a second finger does not jump */
+        FINGER(0, 1, 3, 1022, 890); FINGER(1, 1, 4, 1500, 890);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && (int8_t)o[6] == 2 && !S16(o + 2) && !S16(o + 4));   /* up by 100: two steps */
+        r[1] = 1;
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[1] == 2);   /* click with two fingers: right */
+        r[1] = 0; FINGER(1, 0, 0, 0, 0);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[1] == 0 && !S16(o + 2) && !S16(o + 4));
+        r[1] = 1;
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[1] == 1);   /* click with one finger: left */
+#undef FINGER
+#undef S16
+    }
     printf("PASS WN8030: %u checks\n", checks);
     return 0;
 }
