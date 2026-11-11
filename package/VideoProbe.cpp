@@ -35,6 +35,12 @@ extern volatile int native_gpu_addon_stage;
  * [15] the last table status, [16] bytes mapped / 4 KiB, [17] live buffers. native_video_text: the firmware's image version. */
 volatile int32_t native_video_stats[24];
 char native_video_text[128];
+/* The firmware's last debug messages (log-video=1 asks it for errors, fatal and high ones), newest last. */
+char native_video_fw_text[4][100];
+volatile uint32_t native_video_fw_lines;
+/* Its error messages (VFW_E), whole: the first two kept, then the newest four. */
+char native_video_fw_error[6][200];
+volatile uint32_t native_video_fw_errors;
 }
 
 namespace {
@@ -387,7 +393,17 @@ uint64_t nowOp(void *) {return nowMs();}
 void logText(void *, const char *text)
 {
     if (!strncmp(text, "video-firmware", 14) || !strncmp(text, "vfw", 3)) strlcpy(native_video_text, text, sizeof native_video_text);
-    else IOLog("[video] %s\n", text);
+    else {
+        const uint32_t n = native_video_fw_lines;
+        strlcpy(native_video_fw_text[n & 3], text, sizeof native_video_fw_text[0]);
+        native_video_fw_lines = n + 1;
+        if (!strncmp(text, "<VFW_E", 6)) {
+            const uint32_t e = native_video_fw_errors;
+            strlcpy(native_video_fw_error[e < 2 ? e : 2 + (e & 3)], text, sizeof native_video_fw_error[0]);
+            native_video_fw_errors = e + 1;
+        }
+        IOLog("[video] %s\n", text);
+    }
 }
 const struct qcom_iris_core_ops kOps = {nullptr, powerOnController, powerOnHardware, setHwmode, powerOffHardware, powerOffController,
     loadFirmware, unloadFirmware, setRemoteState, enableIrq, disableIrq, waitInit, signalInit, scheduleRecovery, scheduleSuspend, nowOp,
@@ -612,6 +628,10 @@ bool start()
     const struct qcom_iris_queues queues = {base, v.uc.iova};
     qcom_iris_core_setup(&v.core, &kOps, &v.vpuIo, &queues, reinterpret_cast<volatile uint32_t *>(base + QCOM_IRIS_QUEUE_BYTES),
                          v.uc.iova + (uint32_t)QCOM_IRIS_QUEUE_BYTES, 4);
+    {   /* log-video=1: the firmware writes its error, fatal and high messages to the debug queue ([video fw] rows). */
+        uint32_t logging = 0;
+        if (PE_parse_boot_argn("log-video", &logging, sizeof logging) && logging) v.core.debug_level = 1 | 2 | 8;
+    }
     native_video_stats[0] = StQueues;
 
     // Requested disabled, as the line stays until the first power-on enables it.

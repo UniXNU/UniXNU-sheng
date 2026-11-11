@@ -88,6 +88,10 @@ int qcom_iris_core_init(struct qcom_iris_core *c)
         n = qcom_iris_system_image_version(c->command, sizeof c->command, &c->header_id, &c->packet_id);
         ret = n ? write_locked(c, c->command, n) : -EINVAL;
     }
+    if (!ret && c->debug_level) {
+        n = qcom_iris_system_debug(c->command, sizeof c->command, &c->header_id, &c->packet_id, c->debug_level);
+        ret = n ? write_locked(c, c->command, n) : -EINVAL;
+    }
     if (!ret) {
         n = qcom_iris_system_interframe_powercollapse(c->command, sizeof c->command, &c->header_id, &c->packet_id);
         ret = n ? write_locked(c, c->command, n) : -EINVAL;

@@ -257,6 +257,10 @@ extern unsigned NativeAdrenoGpuContextInputBits(void) __attribute__((weak_import
 extern volatile uint32_t native_adreno_recovery[8] __attribute__((weak_import));
 extern volatile int32_t native_video_stats[24] __attribute__((weak_import));
 extern char native_video_text[128] __attribute__((weak_import));
+extern char native_video_fw_text[4][100] __attribute__((weak_import));
+extern volatile uint32_t native_video_fw_lines __attribute__((weak_import));
+extern char native_video_fw_error[6][200] __attribute__((weak_import));
+extern volatile uint32_t native_video_fw_errors __attribute__((weak_import));
 extern volatile uint32_t vt_paravirt_stage __attribute__((weak_import)), vt_paravirt_opens __attribute__((weak_import)),
     vt_paravirt_messages __attribute__((weak_import)), vt_paravirt_refused __attribute__((weak_import));
 extern volatile uint32_t vt_host_sessions __attribute__((weak_import)), vt_host_frames_in __attribute__((weak_import)),
@@ -266,6 +270,8 @@ extern volatile int32_t vt_host_error_value __attribute__((weak_import));
 extern volatile uint32_t iris_media_stats[14] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recovery_fault[5] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recover_trace[4] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_vm_fail[4] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_global_fault[4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_fault_place[4] __attribute__((weak_import));
 extern char native_adreno_fault_owner[20] __attribute__((weak_import));
 extern uint32_t native_gpu_restart[4] __attribute__((weak_import));
@@ -1202,6 +1208,21 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15], v[16], v[17],
              &native_video_text ? native_video_text : "");
     at = put(out, at, cap, row, sizeof row);
+    // [video fw]: the firmware's last four debug messages, oldest first, after how many it wrote.
+    if (&native_video_fw_lines && native_video_fw_lines) {
+      const uint32_t n = native_video_fw_lines;
+      for (uint32_t i = n > 4 ? n - 4 : 0; i < n; ++i) {
+        snprintf(row, sizeof row, "[video fw] %u %.99s", n, native_video_fw_text[i & 3]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+    }
+    // [video fw error]: the firmware's error messages, whole: how many, then the first two and the newest four.
+    if (&native_video_fw_errors && native_video_fw_errors) {
+      for (uint32_t i = 0; i < 6 && i < native_video_fw_errors; ++i) {
+        snprintf(row, sizeof row, "[video fw error] %u %.199s", native_video_fw_errors, native_video_fw_error[i]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+    }
     if (&vt_paravirt_stage && &vt_host_sessions) {
       snprintf(row, sizeof row, "[video vt] %u %u %u %u | %u %u %u %u %u %u/%d",
                vt_paravirt_stage, vt_paravirt_opens, vt_paravirt_messages, vt_paravirt_refused, vt_host_sessions, vt_host_frames_in,
@@ -1232,6 +1253,18 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_adreno_recovery_fault ? native_adreno_recovery_fault[4] : 0);
     at = put(out, at, cap, row, sizeof row);
     // Where the last recover() stopped: step (1 fence read, 2 restart hook, 3 table write, 4 nop, 5 replay vm, 6 replay submit), the status there, fence, last submitted.
+    // An address space taken out of use: how many, the last one's status, source line (NativeAdrenoVm.cpp) and 1 for a process's.
+    if (&native_adreno_vm_fail && native_adreno_vm_fail[0]) {
+      snprintf(row, sizeof row, "[gpu vm fail] %u st %u line %u proc %u", native_adreno_vm_fail[0], native_adreno_vm_fail[1],
+               native_adreno_vm_fail[2], native_adreno_vm_fail[3]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    // The SMMU's global fault status: seen by an address space's check (count, word), cleared at a recovery (count, word).
+    if (&native_adreno_global_fault && (native_adreno_global_fault[0] || native_adreno_global_fault[2])) {
+      snprintf(row, sizeof row, "[gpu global fault] seen %u %x cleared %u %x", native_adreno_global_fault[0], native_adreno_global_fault[1],
+               native_adreno_global_fault[2], native_adreno_global_fault[3]);
+      at = put(out, at, cap, row, sizeof row);
+    }
     if (&native_adreno_recover_trace && native_adreno_recover_trace[0]) {
       snprintf(row, sizeof row, "[gpu recover stop] step %u st %x fence %u last %u", native_adreno_recover_trace[0], native_adreno_recover_trace[1],
                native_adreno_recover_trace[2], native_adreno_recover_trace[3]);
