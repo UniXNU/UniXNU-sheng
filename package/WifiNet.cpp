@@ -507,7 +507,10 @@ int answer_value(apple80211req &rq, uint32_t value) {
 // The raw bytes, their length in req_len.
 int answer_bytes(apple80211req &rq, const void *src, uint32_t size) {
   if (!rq.req_data) return EINVAL;
-  const uint32_t n = rq.req_len < size ? rq.req_len : size; rq.req_len = size; return copyout(src, rq.req_data, n);
+  const uint32_t n = rq.req_len < size ? rq.req_len : size; rq.req_len = size;
+  // A request the kernel made (the user client's) carries a kernel buffer: copyout refuses it with EFAULT.
+  if (rq.req_kernel) { memcpy(reinterpret_cast<void *>(rq.req_data), src, n); return 0; }
+  return copyout(src, rq.req_data, n);
 }
 int copy_in(const apple80211req &rq, void *dst, size_t size) {
   if (!rq.req_data) return EINVAL;
