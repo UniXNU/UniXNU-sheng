@@ -38,10 +38,28 @@ static const char lite_jobs[]=
 // The board's always-on switches (pexpert/gen/bootargs.c reads them after the command line, which wins), so the boot loader's line,
 // at most 1000 bytes, carries only what changes between images: the staged system apps' view over /Applications (their icons), the
 // data-protection class kept on the unencrypted Data volume (PosterBoard's wallpaper store), and the camera daemon off (no camera:
-// it held a GPU client and wrote denied trace files every 5 s). The scheduler hygiene checks of a development kernel trace instead
-// of panicking, as a shipping (release) kernel has none: an interrupts-off window of 786 us in a work queue thread's priority change
-// panicked the board (untagged-203fd45bf).
-char PE_builtin_boot_args[]="owner-staged-apps=1 owner-dataprotect=1 disable-jobs=com.apple.cameracaptured sched_preemption_disable_debug_mode=1 interrupt-masked-debug-mode=1";
+// it held a GPU client and wrote denied trace files every 5 s).
+// The scheduler hygiene checks of a development kernel are off, as a shipping (release) kernel has none. Their default mode (2)
+// panics: an interrupts-off window of 786 us in a work queue thread's priority change panicked the board (untagged-203fd45bf).
+// Mode 1 (trace) reports only to kdebug and DTrace, which nothing on this board records, and keeps the whole measurement: every outermost
+// preemption disable masks interrupts and takes a three-frame backtrace and a timestamp, every matching enable another timestamp
+// (osfmk/arm/preemption_disable.c). The interrupt check of xnu-12377 takes a timestamp at every interrupt mask and unmask in any
+// mode, as long as its static key is on (osfmk/arm/machine_routines_common.c; xnu-10063 takes it only while a mode is on). So both
+// modes are 0 and validation_disables turns the two static keys off (0x10000 preemption, 0x40 interrupts; this takes a kernel whose
+// static keys read the built-in arguments, otherwise only the modes apply). Its bit 0x1000 stops the development kernel from
+// zero-filling every other page a process releases with madvise (madvise_free_debug_sometimes, osfmk/vm/vm_object.c), which a
+// release kernel never does. The checks that find kernel defects (assertions 0x800, mapping list 0x4, process reference tracking
+// 0x20000) stay on.
+// The command line wins: validation_disables=0 sched_preemption_disable_debug_mode=1 interrupt-masked-debug-mode=1 traces again.
+// macOS 27.3 also takes here the switches only its kernel reads, which do not fit the command line any more: userspace reads the
+// scaled timebase itself, signatures are authenticated per block at first use, the cover touchpad takes a lone contact, the
+// scheduler's two-cluster matrix, the boot payload's memory returned, the thermal probe (sampled every 100 ms) and the level macOS
+// reads from it, and the board clock. The Metal plugin reads its own switches from kern.bootargs, so they stay on the command line.
+char PE_builtin_boot_args[]="owner-staged-apps=1 owner-dataprotect=1 disable-jobs=com.apple.cameracaptured sched_preemption_disable_debug_mode=0 interrupt-masked-debug-mode=0 validation_disables=0x11040"
+#if XNU_TARGET_OS_OSX
+    " timebase-user=1 cs-lazy=1 keyboard-lone=1 armcpu-edge=1 boot-payload-release=1 thermal=1 thermal-ms=100 thermal-level=1 board-clock=7 gpu-pool=0"
+#endif
+    ;
 static char policy[2048],jobs[200];
 volatile int sheng_watchdog_policy_status=-1;
 

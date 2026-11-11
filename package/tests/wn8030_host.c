@@ -166,6 +166,152 @@ int main(int argc, char **argv)
         printf("CHUNKS %u CODE %u\n", count, fw_code);
         free(fw);
     }
+    {   /* The touchpad as a pointer (macOS): one finger moves, two scroll, the click is left and with two fingers right. */
+        struct wn8030_pointer st; memset(&st, 0, sizeof st);
+        uint8_t r[WN8030_TOUCHPAD_REPORT], o[WN8030_POINTER_REPORT];
+        memset(r, 0, sizeof r); r[0] = WN8030_TOUCHPAD_ID;
+#define FINGER(i, tip, id, x, y) do {uint8_t *f = r + 2 + 6 * (i); f[0] = (tip) ? 7 : 0; f[1] = (id); f[2] = (uint8_t)(x); f[3] = (uint8_t)((x) >> 8); \
+                                     f[4] = (uint8_t)(y); f[5] = (uint8_t)((y) >> 8);} while (0)
+#define S16(p) ((int16_t)((p)[0] | (p)[1] << 8))
+        FINGER(0, 1, 3, 1000, 1000);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0);                       /* the first touch does not move */
+        FINGER(0, 1, 3, 1021, 990);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[0] == WN8030_POINTER_ID && S16(o + 2) == 10 && S16(o + 4) == 5 && !o[6] && !o[7]);   /* Y falling by 10: the pointer goes down */
+        FINGER(0, 1, 3, 1022, 990);                                         /* the half count left over is kept */
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && S16(o + 2) == 1 && S16(o + 4) == 0);
+        FINGER(1, 1, 4, 1500, 990);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0);                       /* a second finger does not jump */
+        FINGER(0, 1, 3, 1022, 1090); FINGER(1, 1, 4, 1500, 1090);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && (int8_t)o[6] == 2 && !S16(o + 2) && !S16(o + 4));   /* away from the user by 100: two steps up */
+        r[1] = 1;
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[1] == 2);   /* click with two fingers: right */
+        r[1] = 0; FINGER(1, 0, 0, 0, 0);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[1] == 0 && !S16(o + 2) && !S16(o + 4));
+        r[1] = 1;
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[1] == 1);   /* click with one finger: left */
+
+        /* One press is one button. A second finger landing during a left click leaves it left; when the click ends and begins
+         * again with both fingers down it is right, and stays right while one of them lifts before the click ends. */
+        FINGER(1, 1, 4, 1500, 1090);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0 && st.buttons == 1);
+        r[1] = 0;
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[1] == 0);
+        r[1] = 1;
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[1] == 2);
+        FINGER(1, 0, 0, 0, 0);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0 && st.buttons == 2);
+        FINGER(0, 0, 0, 0, 0);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0 && st.buttons == 2);                 /* no finger left, the pad still pressed */
+        r[1] = 0;
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[1] == 0);
+        r[1] = 2;                                                                        /* the report's second button is the right one */
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[1] == 2);
+        r[1] = 0;
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[1] == 0);
+
+        /* No movement is lost to the division: 101 steps of one count are 50 pointer counts with one half count pending, and a step
+         * back takes that half count away again. */
+        memset(&st, 0, sizeof st);
+        FINGER(0, 1, 7, 500, 500);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0);
+        int total = 0;
+        for (int i = 1; i <= 101; ++i) {
+            FINGER(0, 1, 7, 500 + i, 500);
+            if (wn8030_pointer_report(&st, r, o)) {CHECK(S16(o + 2) == 1 && !S16(o + 4)); ++total;}
+        }
+        CHECK(total == 50 && st.move_x == 1);
+        FINGER(0, 1, 7, 600, 500);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0 && st.move_x == 0);
+        FINGER(0, 1, 7, 597, 503);                                          /* three counts back and three up: one count each, a half left */
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && S16(o + 2) == -1 && S16(o + 4) == -1 && st.move_x == -1 && st.move_y == -1);
+        /* Another contact in the finger's place is a new start, not a jump. */
+        FINGER(0, 1, 8, 2500, 100);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0 && st.move_x == -1);
+        FINGER(0, 1, 8, 2504, 100);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && S16(o + 2) == 1 && !S16(o + 4));
+
+        /* Scroll: 48 counts a step, the rest kept; more steps than a report holds go out with the next reports. */
+        memset(&st, 0, sizeof st);
+        FINGER(0, 1, 1, 1000, 1000); FINGER(1, 1, 2, 1400, 1000);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0);
+        FINGER(0, 1, 1, 1000, 1047); FINGER(1, 1, 2, 1400, 1047);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0 && st.scroll_y == 47);
+        FINGER(0, 1, 1, 1000, 1048); FINGER(1, 1, 2, 1400, 1048);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && (int8_t)o[6] == 1 && !o[7] && st.scroll_y == 0);
+        FINGER(0, 1, 1, 1000 - 50, 1048 - 100); FINGER(1, 1, 2, 1400 - 50, 1048 - 100);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && (int8_t)o[6] == -2 && (int8_t)o[7] == -1 &&
+              st.scroll_y == -4 && st.scroll_x == -2 && !S16(o + 2) && !S16(o + 4));
+        /* The same two fingers in the other slots: the same contacts, no new start and no step. */
+        FINGER(0, 1, 2, 1350, 948); FINGER(1, 1, 1, 950, 948);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0 && st.scroll_y == -4 && st.scroll_x == -2);
+        /* One of the two replaced by another contact within one report: a new start although two fingers stay down. */
+        FINGER(1, 1, 5, 2950, 1948);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0 && st.scroll_y == -4 && st.scroll_x == -2);
+        FINGER(0, 1, 2, 1350, 1948);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && (int8_t)o[6] == 10 && !o[7]);   /* 500 up at the centre, less the 4 pending */
+        /* The whole pad's height in one report: 127 steps now, the remaining ones next. */
+        memset(&st, 0, sizeof st);
+        FINGER(0, 1, 1, 1000, 0); FINGER(1, 1, 2, 1400, 0);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0);
+        FINGER(0, 1, 1, 1000, 2031); FINGER(1, 1, 2, 1400, 2031);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && (int8_t)o[6] == 42 && st.scroll_y == 2031 - 42 * 48);
+        st.scroll_y += 200 * 48;
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && (int8_t)o[6] == 127);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && (int8_t)o[6] == 73 && st.scroll_y == 2031 - 42 * 48);
+        /* A finger lifting ends the scroll: what was pending does not become pointer movement. */
+        FINGER(1, 0, 0, 0, 0);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0 && !st.scroll_y && !st.move_x && !st.move_y);
+#undef FINGER
+#undef S16
+    }
+    {   /* The census of the touchpad's reports: contacts with and without confidence, the palms' travel and the kept reports. */
+        struct wn8030_census c; memset(&c, 0, sizeof c);
+        c.palm_x[0] = c.palm_x[1] = c.palm_y[0] = c.palm_y[1] = -1;
+        uint8_t r[WN8030_TOUCHPAD_REPORT], o[WN8030_TOUCHPAD_REPORT];
+        memset(r, 0, sizeof r); r[0] = WN8030_TOUCHPAD_ID;
+#define CONTACT(i, flags, id, x, y) do {uint8_t *f = r + 2 + 6 * (i); f[0] = (flags); f[1] = (id); f[2] = (uint8_t)(x); f[3] = (uint8_t)((x) >> 8); \
+                                        f[4] = (uint8_t)(y); f[5] = (uint8_t)((y) >> 8);} while (0)
+        wn8030_touchpad_census(&c, r);
+        CHECK(c.reports == 1 && c.idle == 1 && c.palm_x[0] == -1);
+        CONTACT(0, 7, 1, 100, 200); r[20] = 1;
+        wn8030_touchpad_census(&c, r);
+        CHECK(c.fingers == 1 && !c.samples && !c.beyond);
+        CONTACT(1, 3, 2, 2962, 40);                          /* a palm beside the finger, in a slot the contact count does not cover */
+        wn8030_touchpad_census(&c, r);
+        CHECK(c.mixed == 1 && c.palm_x[0] == 2962 && c.palm_x[1] == 2962 && c.palm_y[0] == 40 && !c.palm_pairs && !c.samples);
+        CHECK(c.beyond == 1);
+        r[20] = 3;
+        CONTACT(0, 3, 1, 100, 200);                          /* both without confidence: the first report with palms only is kept */
+        wn8030_touchpad_census(&c, r);
+        CHECK(c.palms[1] == 1 && c.samples == 1 && memcmp(c.sample[0], r, sizeof r) == 0 && !c.palm_pairs);
+        CHECK(c.palm_x[0] == 100 && c.palm_x[1] == 2962 && c.palm_y[0] == 40 && c.palm_y[1] == 200);
+        CONTACT(0, 3, 1, 110, 195);                          /* one of them moves 10 + 5, the other lies still */
+        wn8030_touchpad_census(&c, r);
+        CHECK(c.palms[1] == 2 && c.palm_pairs == 2 && c.palm_travel == 15 && c.samples == 1);
+        CONTACT(1, 3, 9, 2962, 40);                          /* another contact in the slot is not a pair */
+        wn8030_touchpad_census(&c, r);
+        CHECK(c.palms[1] == 3 && c.palm_pairs == 3 && c.palm_travel == 15);
+        CONTACT(1, 0, 0, 0, 0);
+        wn8030_touchpad_census(&c, r);                       /* the fourth report with palms only is kept as well */
+        CHECK(c.palms[0] == 1 && c.palm_pairs == 4 && c.samples == 2 && memcmp(c.sample[1], r, sizeof r) == 0);
+        CONTACT(0, 7, 1, 110, 195);                          /* confident again: the next palm starts a new pair */
+        wn8030_touchpad_census(&c, r);
+        CONTACT(0, 3, 1, 300, 195);
+        wn8030_touchpad_census(&c, r);
+        CHECK(c.fingers == 2 && c.palms[0] == 2 && c.palm_pairs == 4 && c.palm_travel == 15);
+        for (unsigned i = 0; i < 2000; ++i) wn8030_touchpad_census(&c, r);
+        CHECK(c.samples == WN8030_PALM_SAMPLES && c.palm_pairs == 2004 && c.palm_travel == 15 && c.reports == 2009);
+        CHECK(c.reports == c.idle + c.fingers + c.mixed + c.palms[0] + c.palms[1] + c.palms[2] && c.beyond == 1 && !c.more);
+        r[20] = 5;                                           /* five contacts in the frame: a report holds three of them */
+        wn8030_touchpad_census(&c, r);
+        CHECK(c.more == 1 && c.beyond == 1 && c.reports == 2010);
+        r[20] = 3;
+        /* wn8030_touchpad_report counts what it is given, before it changes anything. */
+        const struct wn8030_census before = native_keyboard_census;
+        CHECK(wn8030_touchpad_report(r, o) == 1 && native_keyboard_census.reports == before.reports + 1 &&
+              native_keyboard_census.palms[0] == before.palms[0] + 1);
+#undef CONTACT
+    }
     printf("PASS WN8030: %u checks\n", checks);
     return 0;
 }

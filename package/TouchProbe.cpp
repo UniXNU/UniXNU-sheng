@@ -49,6 +49,13 @@ volatile uint32_t native_touch_stroke_count;
 volatile int32_t native_touch_extent[4] = {0x7fffffff, -1, 0x7fffffff, -1};
 extern volatile int native_hid_input_results[8] __attribute__((weak_import));
 extern volatile uint32_t native_touch_edge_stats[4] __attribute__((weak_import));
+// How the thread waits for the serial engine during a frame read (SpiWait below): [0] 0 polling (touch-spi-irq=0, or the scan has not
+// started), 1 sleeping until the engine's interrupt, 2 the interrupt could not be attached, 3 back to polling after kSpiMissLimit
+// transfers in a row whose sleep the interrupt did not end near the transfer's end; [1] the attach status; [2] engine interrupts
+// taken; [3] transfers that slept; [4] sleeps the interrupt ended; [5] sleeps the deadline ended; [6] microseconds polled from the
+// last wake to the end of the transfer, summed over the transfers of [3], and [7] the longest of them.
+volatile uint32_t native_touch_spi_wait[8];
+int armcpu_spi_mask(uint32_t, bool) __attribute__((weak_import));
 }
 
 namespace {
@@ -99,11 +106,61 @@ int smmuErrorCode(const char *e) {
 
 uint32_t ioRd(void *ctx, uint32_t reg) {return rd32(reinterpret_cast<uintptr_t>(ctx), reg);}
 void ioWr(void *ctx, uint32_t reg, uint32_t value) {wr32(reinterpret_cast<uintptr_t>(ctx), reg, value);}
-// The SPI core polls its status registers with a 1 us wait between reads. IODelay blocks the thread for even that (assert_wait_deadline and
-// thread_block, one timer interrupt and two context switches per read; int-182: the touch thread was the busiest non-idle kernel thread
-// at 0.17 core, its samples all in geni_spi_transfer's polls). A wait this short spins on the counter instead.
+// A whole frame is 5418 bytes in one transfer: 2.3 ms of clock at 19.2 MHz. Polled through, it kept the touch thread on a core for
+// that long in every 8.3 ms frame (iPadOS capture 5cfa7b18a: 2.52 ms from the controller's interrupt to the end of the read; macOS:
+// 0.385 s of CPU per second while frames stream). The thread sleeps through such a transfer instead. The engine raises its interrupt
+// (spi4: GIC SPI 357, level, in the board devicetree) when a DMA direction is done; the handler masks the line at the GIC, since the
+// status that holds it up is read and cleared by the thread, and wakes the thread, which unmasks it again before its next sleep.
+// An interrupt can come before the last byte is clocked in (the transmit direction is done once its data has left memory), so
+// within kSpiPollTailNs of the computed end the thread polls the rest out as before, and earlier than that it sleeps again, at most
+// kSpiSleepsPerTransfer times a transfer. A sleep also ends at the computed end plus kSpiWaitMarginNs, so a lost interrupt costs
+// that margin and nothing else. A transfer whose sleep the deadline ended, or that still had more than kSpiEarlyNs to poll after
+// its last wake, did not gain from the interrupt: after kSpiMissLimit of those in a row the thread polls for good. Short transfers
+// (the frame peek, page selects, host commands) are over before a sleep would pay and are always polled.
+constexpr uint32_t kSpiEngineIntid = 32 + 357;
+constexpr uint64_t kSpiWaitMarginNs = 300000, kSpiPollTailNs = 150000, kSpiEarlyNs = 500000;
+constexpr unsigned kSpiSleepsPerTransfer = 3, kSpiMissLimit = 8;
+struct SpiWait {
+    bool armed;                 // the interrupt is attached and still trusted
+    unsigned sleepsLeft;        // for the transfer running now (0: poll)
+    bool slept, woken;          // it slept; the interrupt ended its last sleep
+    uint64_t expectedEnd, deadline, pollTail, wokeAt;   // absolute time
+    unsigned missed;            // transfers in a row that did not gain from the interrupt
+};
+SpiWait gSpiWait;
+volatile uint32_t gSpiEngineEvents;
+
+// One sleep of the thread that runs the transfer, until the engine interrupts or the transfer's deadline passes.
+void engineSleep() {
+    SpiWait &w = gSpiWait;
+    const uint32_t seen = __atomic_load_n(&gSpiEngineEvents, __ATOMIC_ACQUIRE);
+    assert_wait_deadline((event_t)&gSpiEngineEvents, THREAD_UNINT, w.deadline);
+    armcpu_spi_mask(kSpiEngineIntid, false);   // a status the engine has raised by now interrupts at once
+    wait_result_t result = THREAD_AWAKENED;
+    if (__atomic_load_n(&gSpiEngineEvents, __ATOMIC_ACQUIRE) != seen) clear_wait(current_thread(), THREAD_AWAKENED);
+    else result = thread_block(THREAD_CONTINUE_NULL);
+    w.wokeAt = mach_absolute_time();
+    w.slept = true;
+    w.woken = result != THREAD_TIMED_OUT;
+    if (w.woken) native_touch_spi_wait[4] = native_touch_spi_wait[4] + 1;
+    else {
+        armcpu_spi_mask(kSpiEngineIntid, true);
+        w.sleepsLeft = 0;
+        native_touch_spi_wait[5] = native_touch_spi_wait[5] + 1;
+    }
+}
+
+// The wait between two reads of the engine's status registers. The SPI core asks for 1 us. IODelay blocks the thread for even that
+// (assert_wait_deadline and thread_block, one timer interrupt and two context switches per read; int-182: the touch thread was the
+// busiest non-idle kernel thread at 0.17 core, its samples all in geni_spi_transfer's polls), so a wait this short spins on the
+// counter, unless the transfer is one the thread sleeps through (SpiWait).
 void ioDelayUs(void *, unsigned us) {
     if (us > 50) {IODelay(us); return;}
+    SpiWait &w = gSpiWait;
+    if (w.sleepsLeft) {
+        if (mach_absolute_time() + w.pollTail < w.expectedEnd) {--w.sleepsLeft; engineSleep(); return;}
+        w.sleepsLeft = 0;
+    }
     uint64_t frequency = 0, start = 0, now = 0;
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
     __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(start));
@@ -154,7 +211,37 @@ struct Session {
 
 int busXfer(void *ctx, const uint8_t *tx, uint8_t *rx, size_t len) {
     Session *s = static_cast<Session *>(ctx);
+    SpiWait &w = gSpiWait;
+    // Half a millisecond of clock or more: the thread sleeps through it.
+    const bool sleeps = w.armed && s->actualHz && static_cast<uint64_t>(len) * 8 * 2000 >= s->actualHz;
+    if (sleeps) {
+        uint64_t clocked = 0, margin = 0;
+        nanoseconds_to_absolutetime(static_cast<uint64_t>(len) * 8 * 1000000000ull / s->actualHz, &clocked);
+        nanoseconds_to_absolutetime(kSpiWaitMarginNs, &margin);
+        nanoseconds_to_absolutetime(kSpiPollTailNs, &w.pollTail);
+        w.expectedEnd = mach_absolute_time() + clocked;
+        w.deadline = w.expectedEnd + margin;
+        w.slept = w.woken = false;
+        w.sleepsLeft = kSpiSleepsPerTransfer;
+    }
     int rc = geni_spi_transfer(&s->spi, tx, rx, len, 0);
+    if (sleeps) {
+        w.sleepsLeft = 0;
+        if (w.slept) {
+            native_touch_spi_wait[3] = native_touch_spi_wait[3] + 1;
+            uint64_t ns = 0;
+            absolutetime_to_nanoseconds(mach_absolute_time() - w.wokeAt, &ns);
+            const uint32_t polled = static_cast<uint32_t>(ns / 1000);
+            native_touch_spi_wait[6] = native_touch_spi_wait[6] + polled;
+            if (polled > native_touch_spi_wait[7]) native_touch_spi_wait[7] = polled;
+            if (w.woken && ns <= kSpiEarlyNs) w.missed = 0;
+            else if (++w.missed >= kSpiMissLimit) {
+                w.armed = false;
+                armcpu_spi_mask(kSpiEngineIntid, true);
+                native_touch_spi_wait[0] = 3;
+            }
+        }
+    }
     {
         unsigned i = s->ringN++ % 6;
         s->ringLen[i] = static_cast<uint32_t>(len);
@@ -337,6 +424,19 @@ extern "C" {volatile uint32_t native_touch_jitter[3];}
 // then frames of type 2 and type 4, then the smoothed steps of the jitter frames (summed, largest), merges, then the most maxima in a frame, frames that overflowed the
 // peak table and frames that moved the reference.
 extern "C" {volatile uint32_t native_touch_hold[14];}
+// The controller leaves its doze mode at the first touch and then announces a frame for every scan for good, whatever the frame's type;
+// the host puts it back (the same host command as after the firmware download) once no finger has been down for three seconds.
+// [0] requests, [1] requests the firmware did not take, [2] wakes after the last request, [3] the type of the last frame announced.
+extern "C" {volatile uint32_t native_touch_doze[4];}
+// Where the touch thread's time goes: [0] wakes, [1] peeks, [2] peeks with no new frame, [3] invalid headers, [4] full reads,
+// [5] frames processed, then microseconds in [6] peeks, [7] full reads, [8] processing and publishing.
+extern "C" {volatile uint32_t native_touch_cost[9];}
+static inline uint64_t touchTicks() {return mach_absolute_time();}
+static inline void touchCostAdd(unsigned slot, uint64_t from) {
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time() - from, &ns);
+    native_touch_cost[slot] = native_touch_cost[slot] + (uint32_t)(ns / 1000);
+}
 static void (*gTouchSink)(void *);
 static void *gTouchSinkContext;
 extern "C" void native_touch_set_sink(void (*sink)(void *), void *context) {gTouchSinkContext = context; __atomic_store_n(&gTouchSink, sink, __ATOMIC_RELEASE);}
@@ -617,6 +717,26 @@ static bool armTouchIrq(Session &s) {
     return true;
 }
 
+// The serial engine's interrupt (SpiWait). The line stays masked from here until the thread's next sleep.
+static void spiEngineIrq(void *) {
+    armcpu_spi_mask(kSpiEngineIntid, true);
+    native_touch_spi_wait[2] = native_touch_spi_wait[2] + 1;
+    __atomic_fetch_add(&gSpiEngineEvents, 1, __ATOMIC_RELEASE);
+    thread_wakeup((event_t)&gSpiEngineEvents);
+}
+// touch-spi-irq=0 keeps every transfer polled. Only the DMA path is slept through: its status is all the thread reads back.
+static void armSpiEngineIrq(Session &s) {
+    unsigned wanted = 1;
+    PE_parse_boot_argn("touch-spi-irq", &wanted, sizeof wanted);
+    if (!wanted || !s.spi.use_dma) return;
+    if (!armcpu_spi_attach || !armcpu_spi_mask) {native_touch_spi_wait[0] = 2; native_touch_spi_wait[1] = 0xffff; return;}
+    const int rc = armcpu_spi_attach(kSpiEngineIntid, false, spiEngineIrq, nullptr, nullptr, nullptr);
+    native_touch_spi_wait[1] = static_cast<uint32_t>(rc);
+    if (rc) {native_touch_spi_wait[0] = 2; return;}
+    gSpiWait.armed = true;
+    native_touch_spi_wait[0] = 1;
+}
+
 static void touchThread(void *, wait_result_t) {
     thread_set_thread_name(current_thread(),"touch");
     Session *s = static_cast<Session *>(IOMallocType(Session));
@@ -729,7 +849,11 @@ static void touchThread(void *, wait_result_t) {
         unsigned pollOnly = 0;
         PE_parse_boot_argn("touch-poll", &pollOnly, sizeof pollOnly);
         initPathTrace();
+        uint64_t dozeAfter = 0, lastContact = mach_absolute_time(), lastWake = lastContact;
+        nanoseconds_to_absolutetime(3000000000ull, &dozeAfter);
+        bool dozeAsked = false;
         const bool irqArmed = !pollOnly && armTouchIrq(*s);
+        armSpiEngineIrq(*s);
         uint32_t seen = gTouchIrqEvents;
         for (;;) {
             if (irqArmed) {
@@ -738,6 +862,7 @@ static void touchThread(void *, wait_result_t) {
                 else thread_block(THREAD_CONTINUE_NULL);
                 seen = gTouchIrqEvents;
             }
+            native_touch_cost[0] = native_touch_cost[0] + 1;
             for (;;) {   // every frame that is ready now
                 native_touch_loop_step = 1;
                 const uint64_t irq = __atomic_load_n(&lastTouchIrq, __ATOMIC_ACQUIRE);
@@ -746,18 +871,25 @@ static void touchThread(void *, wait_result_t) {
                 if (high) ++s->irqSeen;
                 uint8_t pk[NVT_THP_PEEK_LEN];
                 native_touch_loop_step = 2;
+                const uint64_t peekAt = touchTicks();
                 if (nvt_peek_frame_header(&s->chip, pk)) {fail(11, NVT_ERR_BUS); break;}
+                touchCostAdd(6, peekAt);
+                native_touch_cost[1] = native_touch_cost[1] + 1;
                 native_touch_loop_step = 3;
                 ++s->peeks;
                 for (unsigned q = 0; q < 24; ++q) s->thp[q] = pk[q];
                 if ((++rowTick & 255) == 0) rows(*s);
-                if (!nvt_peek_valid(pk)) {++s->bad; break;}
-                if (nvt_peek_counter(pk) == lastCounter) break;
+                if (!nvt_peek_valid(pk)) {++s->bad; native_touch_cost[3] = native_touch_cost[3] + 1; break;}
+                if (nvt_peek_counter(pk) == lastCounter) {native_touch_cost[2] = native_touch_cost[2] + 1; break;}
                 ++s->fresh;
                 const unsigned peekType = nvt_peek_type(pk);
+                native_touch_doze[3] = peekType;
                 if (peekType != 2 && peekType != 4) {lastCounter = nvt_peek_counter(pk); break;}
                 native_touch_loop_step = 4;
+                const uint64_t readAt = touchTicks();
                 if (nvt_read_frame(&s->chip, s->frame)) {fail(11, NVT_ERR_BUS); break;}
+                touchCostAdd(7, readAt);
+                native_touch_cost[4] = native_touch_cost[4] + 1;
                 const uint64_t readTime = pathTrace.lock ? mach_absolute_time() : 0;
                 native_touch_loop_step = 5;
                 ++s->reads;
@@ -769,6 +901,7 @@ static void touchThread(void *, wait_result_t) {
                 s->lastType = type;
                 if (type != 2 && type != 4) break;
                 native_touch_valid = native_touch_valid + 1;
+                const uint64_t processAt = touchTicks();
                 int16_t *matrix = s->matrix;
                 nvt_frame_matrix(s->frame, matrix);
                 int mn = matrix[0], mx = matrix[0];
@@ -793,6 +926,7 @@ static void touchThread(void *, wait_result_t) {
                 native_touch_hold[13] = static_cast<uint32_t>(s->core->reference_frames);
                 native_touch_loop_step = 7;
                 native_touch_frames = native_touch_frames + 1;
+                if (n > 0 || gScriptedDown) {lastContact = mach_absolute_time(); dozeAsked = false;}
                 if (n > 0 || (n == 0 && !gScriptedDown)) {
                     native_touch_contacts = static_cast<uint32_t>(n);
                     if (n > 0) {native_touch_last_x = out[0].x; native_touch_last_y = out[0].y;}
@@ -820,8 +954,24 @@ static void touchThread(void *, wait_result_t) {
                         recordPaths(*s->core, frame);
                     }
                 }
+                touchCostAdd(8, processAt);
+                native_touch_cost[5] = native_touch_cost[5] + 1;
                 if ((++tick & 15) == 0) rows(*s);
                 if (irqArmed && gTouchIrqEvents == seen) break;   // no further pulse: the frame just read was the only one
+            }
+            {
+                // After every wake, whatever it announced. A wake after a silence is the controller coming out of doze: the three
+                // seconds count from there, so the frames before the finger's first one do not send it back.
+                const uint64_t now = mach_absolute_time();
+                if (now - lastWake >= dozeAfter) {lastContact = now; dozeAsked = false;}
+                lastWake = now;
+                if (dozeAsked) {
+                    native_touch_doze[2] = native_touch_doze[2] + 1;
+                } else if (now - lastContact >= dozeAfter && !gScriptedDown) {
+                    dozeAsked = true;
+                    native_touch_doze[0] = native_touch_doze[0] + 1; native_touch_doze[2] = 0;
+                    if (nvt_set_custom_cmd(&s->chip, 0x01, 0x02)) native_touch_doze[1] = native_touch_doze[1] + 1;
+                }
             }
             if (!irqArmed) IOSleep(pollOnly ? 2 : 10);   // fallback / diagnosis only
         }

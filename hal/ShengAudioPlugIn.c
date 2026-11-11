@@ -129,7 +129,33 @@ static ULONG AddRef(void *self) {(void)self; return atomic_fetch_add(&gRefs, 1) 
 static ULONG Release(void *self) {(void)self; UInt32 r = atomic_load(&gRefs); if (r) r = atomic_fetch_sub(&gRefs, 1) - 1; return r;}
 
 // Connects at once, so the service sees the audio server load the plug-in; a failure here is retried at the first StartIO.
+// The I/O thread runs this image's code and data every cycle. Under memory pressure a page of them that was paged out costs the
+// cycle a page-in (the audio server counts it as an overload with "PageFaultsOnIOThread"), so the image's segments stay resident.
+// A refused mlock (a sandbox or a limit) changes nothing.
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+#include <sys/mman.h>
+static void keepImageResident(void) {
+    Dl_info info;
+    if (!dladdr((const void *)&keepImageResident, &info) || !info.dli_fbase) return;
+    const struct mach_header_64 *header = info.dli_fbase;
+    if (header->magic != MH_MAGIC_64) return;
+    intptr_t slide = 0;
+    const struct load_command *command = (const struct load_command *)(header + 1);
+    const struct load_command *first = command;
+    for (uint32_t i = 0; i < header->ncmds; ++i, command = (const struct load_command *)((const uint8_t *)command + command->cmdsize)) {
+        const struct segment_command_64 *segment = (const struct segment_command_64 *)command;
+        if (command->cmd == LC_SEGMENT_64 && !strcmp(segment->segname, "__TEXT")) slide = (intptr_t)header - (intptr_t)segment->vmaddr;
+    }
+    command = first;
+    for (uint32_t i = 0; i < header->ncmds; ++i, command = (const struct load_command *)((const uint8_t *)command + command->cmdsize)) {
+        const struct segment_command_64 *segment = (const struct segment_command_64 *)command;
+        if (command->cmd != LC_SEGMENT_64 || !segment->vmsize || !strcmp(segment->segname, "__LINKEDIT")) continue;
+        (void)mlock((const void *)(uintptr_t)(segment->vmaddr + (uint64_t)slide), (size_t)segment->vmsize);
+    }
+}
 static OSStatus Initialize(AudioServerPlugInDriverRef d, AudioServerPlugInHostRef host) {
+    keepImageResident();
     (void)d;
     gHost = host;
     pthread_mutex_lock(&gLock);

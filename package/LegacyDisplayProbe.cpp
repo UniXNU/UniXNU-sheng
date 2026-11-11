@@ -241,11 +241,22 @@ void native_legacy_vsync_observed(unsigned event,unsigned hz) {
         ring[n&65535]=(mach_absolute_time()<<3)|(event&7);
     }
 }
+// What the compositor presents and where each frame goes (NativeLegacyDisplay.cpp native_legacy_formats).
+extern "C" volatile uint32_t native_legacy_formats[10] __attribute__((weak_import));
+// The scanout report: the prepare counters, the refresh tick (sent stays 0 while no client asks for vsync messages: the macOS render server
+// paces itself with its own display timer at the published refresh interval), then the formats: swaps accepted as BGRA/compressed BGRA/half
+// float, refused for their format with the last such format, and the frames' paths: fetched by the display pipes, copied by the GPU client
+// (8-bit/half float), converted by the CPU (8-bit/half float).
 extern "C" unsigned native_legacy_prepare_report(char *out,unsigned cap) {
-    return snprintf(out,cap,"prepare calls=%u failures=%u retried=%u max_attempts=%u waited_ms=%llu vsync hz=%u sent=%llu arms=%llu idle=%llu late=%llu start=%llu refresh=%llu",
+    unsigned at=(unsigned)snprintf(out,cap,"prepare calls=%u failures=%u retried=%u max_attempts=%u waited_ms=%llu vsync hz=%u sent=%llu arms=%llu idle=%llu late=%llu start=%llu refresh=%llu",
         native_legacy_prepare_calls,native_legacy_prepare_failures,native_legacy_prepare_retried,native_legacy_prepare_max_attempts,
         (unsigned long long)(native_legacy_prepare_wait_us/1000),vsyncHz,(unsigned long long)vsyncEvents[1],(unsigned long long)vsyncEvents[0],
         (unsigned long long)vsyncEvents[2],(unsigned long long)vsyncEvents[3],(unsigned long long)vsyncEvents[4],(unsigned long long)vsyncEvents[5]);
+    if(&native_legacy_formats && at<cap) {
+        const volatile uint32_t *f=native_legacy_formats;
+        at+=(unsigned)snprintf(out+at,cap-at," fmt %u/%u/%u no %u:%08x direct %u gpu %u/%u cpu %u/%u",f[0],f[1],f[2],f[3],f[4],f[5],f[6],f[7],f[8],f[9]);
+    }
+    return at;
 }
 void native_legacy_swap_validation_observed(bool accepted,unsigned reason,const void *request,const void *surface) {
     if(accepted)native_legacy_swap_stage(0);
@@ -512,6 +523,10 @@ extern void native_hid_input_probe(void);
 extern void native_keystore_probe(void);
 extern void native_touch_probe(void);
 extern void sheng_cpufreq_probe(void);
+extern void sheng_thermal_probe(void) __attribute__((weak_import));       // ThermalProbe.cpp, thermal=1
+extern void sheng_thermal_level_probe(void) __attribute__((weak_import)); // ThermalLevel.cpp, thermal-level=1
+extern void sheng_board_clock_probe(void) __attribute__((weak_import));   // BoardClock.cpp, board-clock=<bits>
+extern void sheng_gpu_pool_probe(void) __attribute__((weak_import));      // GpuMemoryPool.cpp, before the GPU driver allocates
 extern void sheng_gpu_power_probe(void);
 extern void sheng_wifi_probe(void);
 extern void sheng_bluetooth_probe(void) __attribute__((weak_import));
@@ -604,6 +619,10 @@ void native_legacy_display_late_probe(void) {
     if (sheng_software_aes_probe) sheng_software_aes_probe();
     native_keystore_probe();
     sheng_cpufreq_probe();
+    if (sheng_thermal_probe) sheng_thermal_probe();
+    if (sheng_thermal_level_probe) sheng_thermal_level_probe();
+    if (sheng_board_clock_probe) sheng_board_clock_probe();
+    if (sheng_gpu_pool_probe) sheng_gpu_pool_probe();
     sheng_gpu_power_probe();
     native_touch_probe();
     sheng_wifi_probe();

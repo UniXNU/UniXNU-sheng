@@ -4,6 +4,7 @@ zzyf-sheng-amp.patch
 zzyd-sheng-audio-addon-mount.patch
 source-storage-runtime.patch
 zzzz-sheng-ipados27-bringup.patch
+vmwait-dyld-pager-source-release.patch
 zzzzzz-sheng-latency-trace.patch
 zzzzzzzz-sheng-exit-latency.patch
 zzzzzzzzz-sheng-unnest-trace.patch
@@ -16,3 +17,4 @@ sheng-bluetooth-exit-diagnostic.patch
 zzzzzzzzzz-sheng-sigp-reinit-assert.patch
 sheng-appsync-runtime.patch
 sheng-appsync-user-trust.patch
+zzzzzzzzzzz-sheng-edge-matrix.patch

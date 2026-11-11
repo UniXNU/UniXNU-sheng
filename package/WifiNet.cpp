@@ -42,7 +42,8 @@ extern "C" {
 // module's frames; the family's IONetworkInterface, IONetworkStack and IO80211 classes exist there, so none is defined here, and no
 // ifnet of its own is made. The interface's ifnet exists once the network configuration has named it.
 #define SHENG_WIFI_ETHERNET 1
-extern "C" bool sheng_ethernet_wifi_attach(int (*output)(mbuf_t));
+extern "C" bool sheng_ethernet_wifi_attach(int (*output)(mbuf_t), int (*request)(unsigned long, void *),
+                                           int (*kernelRequest)(unsigned long, void *, void *, uint32_t));
 extern "C" void sheng_ethernet_wifi_link(bool up);
 extern "C" ifnet_t sheng_ethernet_ifnet(void);
 #else
@@ -67,8 +68,10 @@ struct apple80211req {
   int32_t req_type;
   int32_t req_val;
   uint32_t req_len;
-  user_addr_t req_data __attribute__((aligned(8)));
+  uint32_t req_kernel;   // the layout's padding: nonzero when req_data is a kernel buffer (a user client's request); an ioctl clears it
+  user_addr_t req_data;
 };
+static_assert(sizeof(apple80211req) == 40 && __builtin_offsetof(apple80211req, req_data) == 32, "request layout");
 
 // request types
 enum {
@@ -133,9 +136,15 @@ bool gKeyed;   // the last join used a passphrase
 uint32_t gRxFrames, gRxErrors; int gRxLastError;
 uint32_t gRxNoBuffer, gRxChains, gRxLongest;   // frames dropped for want of a buffer, frames that took a chain, the longest frame
 mbuf_t gRxHead, gRxTail;
-mbuf_t gRxSpare;
+mbuf_t gRxSpare;         // spare packets of the batch being received (WiFi thread only)
+mbuf_t gRxSpareParked;   // the same list between two batches: the next batch takes it back, the traffic thread frees it once receive is quiet
 uint32_t gRxBulkAllocations, gRxAllocRetries;
 uint32_t gRxPendingPackets, gRxPendingBytes, gRxBatches, gRxLargestBatch;
+uint32_t gRxBatchSizes[7];   // batches of 1, 2-3, 4-7, 8-15, 16-31, 32-63 and 64 frames
+uint32_t gTxRefused;         // frames the module's transmit queue did not take
+// log-wifi=1: the time each stage of a received frame takes on the WiFi thread (mach time units) and the order of TCP segments.
+bool gRxProfile;
+struct { uint64_t alloc, copy, input; } gRxTime;
 struct { unsigned count, kicks, cleared, longest; bool kicked; } gStall;   // input thread stalls (check_input)   // frames handed to the stack, refused ones and the last refusal
 int gAssocResult = kAssocPending;
 bool gAssocModern;
@@ -294,25 +303,91 @@ void note_frame(const uint8_t *e, size_t n, bool out) {
   }
   log(6, "wifi-net: dhcp %s type %u options%s", dir, msg, opts);
 }
-void release_rx_spares() {
-  while (gRxSpare) {
-    mbuf_t packet = gRxSpare; gRxSpare = mbuf_nextpkt(packet);
+// Receive measurements (log-wifi=1; nothing is read or counted without it).
+inline uint64_t rx_now() { return gRxProfile ? mach_absolute_time() : 0; }
+// Whether TCP segments reach the stack in sequence order, and how old a gap in the sequence is when its first byte arrives. A frame the
+// radio delivered late (a retry inside the block acknowledgement window) follows within milliseconds; a segment lost before the radio,
+// or dropped on this board, comes back with the sender's retransmission a round trip later. Flows are told apart by a hash of the
+// source address and the ports; the eight most recent are followed, and of each only its oldest open gap.
+struct TcpFlow { uint32_t key, next, gap, stamp; uint64_t opened; };
+struct { uint32_t inOrder, ahead, late, clock, closed[5]; TcpFlow flow[8]; } gTcp;
+void note_order(const uint8_t *e, size_t n) {
+  if (n < 14 + 20 + 20) return;
+  const unsigned type = e[12] << 8 | e[13]; const uint8_t *ip = e + 14, *tcp; uint32_t key; unsigned payload;
+  if (type == 0x0800) {
+    const unsigned ihl = (ip[0] & 15) * 4, total = ip[2] << 8 | ip[3];
+    if (ip[0] >> 4 != 4 || ihl < 20 || ip[9] != 6 || (ip[6] & 0x3f) || ip[7] || n < 14 + ihl + 20) return;   // TCP, not a fragment
+    tcp = ip + ihl; const unsigned header = ihl + (tcp[12] >> 4) * 4;
+    if (total < header) return;
+    payload = total - header; memcpy(&key, ip + 12, 4);
+  } else if (type == 0x86dd) {
+    const unsigned length = ip[4] << 8 | ip[5];
+    if (ip[0] >> 4 != 6 || ip[6] != 6 || n < 14 + 40 + 20) return;   // TCP right after the fixed header
+    tcp = ip + 40; const unsigned header = (tcp[12] >> 4) * 4;
+    if (length < header) return;
+    payload = length - header; memcpy(&key, ip + 20, 4);
+  } else return;
+  if (!payload) return;
+  uint32_t ports; memcpy(&ports, tcp, 4); key = (key ^ ports) * 2654435761u; if (!key) key = 1;
+  const uint32_t seq = static_cast<uint32_t>(tcp[4]) << 24 | tcp[5] << 16 | tcp[6] << 8 | tcp[7], end = seq + payload;
+  TcpFlow *flow = nullptr, *oldest = &gTcp.flow[0];
+  for (TcpFlow &f : gTcp.flow) {
+    if (f.key == key) { flow = &f; break; }
+    if (static_cast<int32_t>(f.stamp - oldest->stamp) < 0) oldest = &f;
+  }
+  const uint32_t stamp = ++gTcp.clock;
+  if (!flow) { *oldest = TcpFlow{key, end, 0, stamp, 0}; return; }
+  flow->stamp = stamp;
+  const int32_t ahead = static_cast<int32_t>(seq - flow->next);
+  if (ahead == 0) { gTcp.inOrder++; flow->next = end; return; }
+  if (ahead > 0) {   // sequence space was skipped: a gap opens
+    gTcp.ahead++;
+    if (!flow->opened) { flow->opened = mach_absolute_time(); flow->gap = flow->next; }
+    flow->next = end; return;
+  }
+  gTcp.late++;       // below the highest byte seen: a late or repeated segment
+  if (flow->opened && static_cast<int32_t>(seq - flow->gap) <= 0 && static_cast<int32_t>(end - flow->gap) > 0) {
+    uint64_t ns = 0; absolutetime_to_nanoseconds(mach_absolute_time() - flow->opened, &ns);
+    gTcp.closed[ns < 2000000 ? 0 : ns < 10000000 ? 1 : ns < 50000000 ? 2 : ns < 150000000 ? 3 : 4]++;
+    flow->opened = 0;
+  }
+  if (static_cast<int32_t>(end - flow->next) > 0) flow->next = end;
+}
+void free_rx_list(mbuf_t list) {
+  while (list) {
+    mbuf_t packet = list; list = mbuf_nextpkt(packet);
     mbuf_setnextpkt(packet, nullptr); mbuf_freem(packet);
   }
 }
+// The traffic thread, once a second: spare packets that no batch took back during that second go back to the system.
+void age_rx_spares() {
+  static uint32_t seen;
+  const uint32_t batches = gRxBatches;
+  if (batches == seen) free_rx_list(__atomic_exchange_n(&gRxSpareParked, static_cast<mbuf_t>(nullptr), __ATOMIC_ACQ_REL));
+  seen = batches;
+}
 void flush_rx() {
-  // A NAPI batch owns at most 16 spare 2 KiB packets; none survives its flush.
-  release_rx_spares();
-  if (!gRxHead) return;
-  mbuf_t packets = gRxHead; const uint32_t count = gRxPendingPackets, bytes = gRxPendingBytes;
-  gRxHead = gRxTail = nullptr; gRxPendingPackets = gRxPendingBytes = 0;
-  struct ifnet_stat_increment_param inc{}; inc.packets_in = count; inc.bytes_in = bytes;
-  const errno_t error = ifnet_input(gIf, packets, &inc);
-  gRxBatches++; if (count > gRxLargestBatch) gRxLargestBatch = count;
-  if (error) { gRxErrors += count; gRxLastError = error; } else gRxFrames += count;
+  if (gRxHead) {
+    mbuf_t packets = gRxHead; const uint32_t count = gRxPendingPackets, bytes = gRxPendingBytes;
+    gRxHead = gRxTail = nullptr; gRxPendingPackets = gRxPendingBytes = 0;
+    struct ifnet_stat_increment_param inc{}; inc.packets_in = count; inc.bytes_in = bytes;
+    const uint64_t began = rx_now();
+    const errno_t error = ifnet_input(gIf, packets, &inc);
+    gRxTime.input += rx_now() - began;
+    gRxBatches++; if (count > gRxLargestBatch) gRxLargestBatch = count;
+    gRxBatchSizes[count >= 64 ? 6 : count >= 32 ? 5 : count >= 16 ? 4 : count >= 8 ? 3 : count >= 4 ? 2 : count >= 2 ? 1 : 0]++;
+    if (error) { gRxErrors += count; gRxLastError = error; } else gRxFrames += count;
+  }
+  // The spare packets of a refill (at most 15) wait for the next batch instead of being freed and allocated again around every
+  // batch of a few frames. They are parked where the traffic thread finds them: it frees them when a second passes without a batch.
+  if (gRxSpare) {
+    free_rx_list(__atomic_exchange_n(&gRxSpareParked, gRxSpare, __ATOMIC_ACQ_REL));
+    gRxSpare = nullptr;
+  }
 }
 mbuf_t allocate_rx(size_t length) {
   if (length <= 2048) {
+    if (!gRxSpare) gRxSpare = __atomic_exchange_n(&gRxSpareParked, static_cast<mbuf_t>(nullptr), __ATOMIC_ACQ_REL);
     if (!gRxSpare) {
       unsigned chunks = 1;
       if (!mbuf_allocpacket_list(16, MBUF_DONTWAIT, 2048, &chunks, &gRxSpare)) gRxBulkAllocations++;
@@ -346,17 +421,18 @@ void on_rx_packet(void *context, size_t length, nw_packet_reader reader) {
   if (!gIf) gIf = sheng_ethernet_ifnet();
 #endif
   if (!gIf || length < 14) return;
-  note_packet(context, length, reader, false);
   // Two bytes ahead of the Ethernet header put the IP header on a 4-byte boundary. The packet may come back as a chain (a frame larger
   // than one cluster, or no large cluster free): each buffer gets only what fits in it. Setting the whole length on the first one (as
   // before) let the stack read past that buffer's end (i469: a data abort in m_copydata reading across a page).
   enum : size_t { Align = 2 };
+  const uint64_t began = rx_now();
   mbuf_t m = allocate_rx(length + Align);
   if (!m && gRxHead) {
     // Hand already received packets to the input thread before retrying once.
     flush_rx(); gRxAllocRetries++; m = allocate_rx(length + Align);
   }
   if (!m) { gRxNoBuffer++; return; }
+  const uint64_t allocated = rx_now();
   if (length > gRxLongest) gRxLongest = static_cast<uint32_t>(length);
   if (mbuf_next(m)) gRxChains++;
   size_t done = 0; bool first = true;
@@ -368,6 +444,12 @@ void on_rx_packet(void *context, size_t length, nw_packet_reader reader) {
     mbuf_setlen(n, take); done += take; first = false;
   }
   if (done != length) { gRxNoBuffer++; mbuf_freem(m); return; }
+  gRxTime.alloc += allocated - began; gRxTime.copy += rx_now() - allocated;
+  // What the frame is, read from the copy and not a second time from the module's buffer: that one is device memory, which this
+  // board maps uncached for the CPU. The first buffer holds the whole frame unless it took a chain.
+  const uint8_t *frame = static_cast<const uint8_t *>(mbuf_data(m)); const size_t held = mbuf_len(m);
+  note_frame(frame, held, false);
+  if (gRxProfile) note_order(frame, held);
   mbuf_pkthdr_setlen(m, length); mbuf_pkthdr_setrcvif(m, gIf);
   mbuf_pkthdr_setheader(m, mbuf_data(m)); mbuf_adj(m, 14);   // the stack wants the Ethernet header apart from the payload
   mbuf_setnextpkt(m, nullptr);
@@ -385,8 +467,11 @@ void mbuf_release(void *context) { mbuf_freem(static_cast<mbuf_t>(context)); }
 errno_t if_output(ifnet_t, mbuf_t m) {
   size_t length = mbuf_pkthdr_len(m);
   if (length >= 14 && length <= 2000) {
-    note_packet(m, length, mbuf_read, true);
-    if (nw_wifi_tx_packet(m, length, mbuf_read, mbuf_release)) log(6, "wifi-net: a frame was dropped (queue full)");
+    // The frame's kind, read in place when its first buffer holds all of it (an acknowledgement does).
+    if (mbuf_len(m) >= length) note_frame(static_cast<const uint8_t *>(mbuf_data(m)), length, true);
+    else note_packet(m, length, mbuf_read, true);
+    // A refused frame is counted (the traffic line shows the count); the first ones are also written out.
+    if (nw_wifi_tx_packet(m, length, mbuf_read, mbuf_release)) { if (gTxRefused++ < 8) log(6, "wifi-net: a frame was dropped (queue full)"); }
     else {ifnet_stat_increment_out(gIf, 1, static_cast<uint32_t>(length), 0); sheng_wifi_wake(); return 0;}
   }
   mbuf_freem(m);
@@ -410,12 +495,14 @@ void fill_result(scan_result &r, const nw_bss_info &b) {
 }
 int copy_out(const apple80211req &rq, const void *src, size_t size) {
   if (rq.req_len == 0 || !rq.req_data) return EINVAL;
-  return copyout(src, rq.req_data, rq.req_len < size ? rq.req_len : size);
+  const size_t n = rq.req_len < size ? rq.req_len : size;
+  if (rq.req_kernel) { memcpy(reinterpret_cast<void *>(rq.req_data), src, n); return 0; }
+  return copyout(src, rq.req_data, n);
 }
 // A get that gives no buffer takes a single value in req_val; one with a buffer gets {version, value}.
 int answer_value(apple80211req &rq, uint32_t value) {
   if (rq.req_len == 0 || !rq.req_data) { rq.req_val = static_cast<int32_t>(value); return 0; }
-  const uint32_t w[2] = { 1, value }; return copyout(w, rq.req_data, rq.req_len < sizeof w ? rq.req_len : sizeof w);
+  const uint32_t w[2] = { 1, value }; return copy_out(rq, w, sizeof w);
 }
 // The raw bytes, their length in req_len.
 int answer_bytes(apple80211req &rq, const void *src, uint32_t size) {
@@ -425,7 +512,9 @@ int answer_bytes(apple80211req &rq, const void *src, uint32_t size) {
 int copy_in(const apple80211req &rq, void *dst, size_t size) {
   if (!rq.req_data) return EINVAL;
   memset(dst, 0, size);
-  return copyin(rq.req_data, dst, rq.req_len < size ? rq.req_len : size);
+  const size_t n = rq.req_len < size ? rq.req_len : size;
+  if (rq.req_kernel) { memcpy(dst, reinterpret_cast<const void *>(rq.req_data), n); return 0; }
+  return copyin(rq.req_data, dst, n);
 }
 int copy_association(const apple80211req &rq, assoc_parameters &out) {
   // Select only an observed wire layout, never infer it from credential contents.
@@ -579,10 +668,13 @@ int apple80211(bool set, apple80211req &rq) {
   }
 }
 
-errno_t if_ioctl(ifnet_t, unsigned long cmd, void *data) {
+// if_ioctl's interface argument for a request whose data is a kernel buffer (wifi_kernel_request).
+static const ifnet_t kKernelRequest = reinterpret_cast<ifnet_t>(static_cast<uintptr_t>(1));
+errno_t if_ioctl(ifnet_t ifp, unsigned long cmd, void *data) {
   switch (cmd) {
   case SIOCGA80211: case SIOCSA80211: {
     apple80211req *rq = static_cast<apple80211req *>(data);
+    if (ifp != kKernelRequest) rq->req_kernel = 0;   // the caller of an ioctl owns those bytes
     const uint32_t len = rq->req_len; const int32_t val = rq->req_val;
     int e = apple80211(cmd == SIOCSA80211, *rq);
     // every request with its answer, for the first few hundred; then a type's first one only
@@ -710,8 +802,24 @@ void log_traffic() {
   log(6, "wifi-net: in arp %u ip4 %u dhcp %u ip6 %u other %u", gKindsIn.arp, gKindsIn.ip4, gKindsIn.dhcp, gKindsIn.ip6, gKindsIn.other);
   log(6, "wifi-net: out arp %u ip4 %u dhcp %u ip6 %u other %u", gKindsOut.arp, gKindsOut.ip4, gKindsOut.dhcp, gKindsOut.ip6, gKindsOut.other);
   log(6, "wifi-net: input stalls %u, kicks %u, cleared after a kick %u, longest %u s", gStall.count, gStall.kicks, gStall.cleared, gStall.longest);
-  log(6, "wifi-net: rx no buffer %u, chained %u, longest frame %u", gRxNoBuffer, gRxChains, gRxLongest);
+  log(6, "wifi-net: rx no buffer %u, chained %u, longest frame %u; tx refused %u", gRxNoBuffer, gRxChains, gRxLongest, gTxRefused);
   log(6, "wifi-net: rx batches %u largest %u", gRxBatches, gRxLargestBatch);
+  log(6, "wifi-net: batch 1:%u 2:%u 4:%u 8:%u 16:%u 32:%u 64:%u", gRxBatchSizes[0], gRxBatchSizes[1], gRxBatchSizes[2], gRxBatchSizes[3],
+      gRxBatchSizes[4], gRxBatchSizes[5], gRxBatchSizes[6]);
+  if (gRxProfile) {
+    // Of the WiFi thread's time (WifiProbe's "worker ... active-permille"): what this side of a received frame takes.
+    uint64_t alloc = 0, copy = 0, input = 0;
+    absolutetime_to_nanoseconds(gRxTime.alloc, &alloc); absolutetime_to_nanoseconds(gRxTime.copy, &copy); absolutetime_to_nanoseconds(gRxTime.input, &input);
+    log(6, "wifi-net: rx time ms: buffers %llu copy %llu input %llu", static_cast<unsigned long long>(alloc / 1000000),
+        static_cast<unsigned long long>(copy / 1000000), static_cast<unsigned long long>(input / 1000000));
+    log(6, "wifi-net: tcp segments in order %u, ahead of a gap %u, late %u", gTcp.inOrder, gTcp.ahead, gTcp.late);
+    log(6, "wifi-net: tcp gaps closed after <2ms %u <10ms %u <50ms %u <150ms %u more %u", gTcp.closed[0], gTcp.closed[1], gTcp.closed[2],
+        gTcp.closed[3], gTcp.closed[4]);
+    // Where the interface's input thread stands at this moment (its frames are those of its last switch away from a processor).
+    char where[240];
+    if (!boot_kthread_report("dlil_input_en0", where, sizeof where))
+      for (size_t at = 0, n = strlen(where); at < n; at += 80) log(6, "wifi-net: input at %u: %.80s", static_cast<unsigned>(at / 80), where + at);
+  }
   nw_buffer_stats buffers{}; nw_wifi_buffer_stats_get(&buffers);
   log(6, "wifi-net: buffers live %llu peak %llu dma-alloc %llu failed %llu",
       static_cast<unsigned long long>(buffers.live_dma), static_cast<unsigned long long>(buffers.peak_dma),
@@ -776,6 +884,7 @@ void trafficLog(void *, wait_result_t) {
   uint32_t diagnostics = 0; PE_parse_boot_argn("log-wifi", &diagnostics, sizeof diagnostics);
   for (unsigned second = 1;; ++second) {
     IOSleep(1000); nw_wifi_status st; nw_wifi_status_get(&st);
+    age_rx_spares();
 #if SHENG_WIFI_ETHERNET
     if (!gIf) { gIf = sheng_ethernet_ifnet(); if (!gIf) continue; }
 #endif
@@ -822,6 +931,25 @@ void autoJoin(void *, wait_result_t) {
 
 }  // namespace
 
+// Rows for the board log (none before the network side started): what the receive path handed to the stack, the sizes of its
+// batches and, with log-wifi=1, where its time on the WiFi thread went and in which order TCP segments arrived (note_order).
+extern "C" unsigned sheng_wifi_rx_rows(char rows[][120], unsigned max) {
+  unsigned n = 0;
+  if (!gGrp) return 0;
+  if (n < max) snprintf(rows[n++], 120, "frames %u refused %u/%d nobuf %u batches %u refills %u retries %u chained %u tx-refused %u", gRxFrames, gRxErrors,
+                        gRxLastError, gRxNoBuffer, gRxBatches, gRxBulkAllocations, gRxAllocRetries, gRxChains, gTxRefused);
+  if (n < max) snprintf(rows[n++], 120, "batch 1:%u 2:%u 4:%u 8:%u 16:%u 32:%u 64:%u", gRxBatchSizes[0], gRxBatchSizes[1], gRxBatchSizes[2],
+                        gRxBatchSizes[3], gRxBatchSizes[4], gRxBatchSizes[5], gRxBatchSizes[6]);
+  if (!gRxProfile) return n;
+  uint64_t alloc = 0, copy = 0, input = 0;
+  absolutetime_to_nanoseconds(gRxTime.alloc, &alloc); absolutetime_to_nanoseconds(gRxTime.copy, &copy); absolutetime_to_nanoseconds(gRxTime.input, &input);
+  if (n < max) snprintf(rows[n++], 120, "time ms buffers %llu copy %llu input %llu | tcp in-order %u ahead %u late %u", static_cast<unsigned long long>(alloc / 1000000),
+                        static_cast<unsigned long long>(copy / 1000000), static_cast<unsigned long long>(input / 1000000), gTcp.inOrder, gTcp.ahead, gTcp.late);
+  if (n < max) snprintf(rows[n++], 120, "tcp gaps closed after <2ms %u <10ms %u <50ms %u <150ms %u more %u", gTcp.closed[0], gTcp.closed[1], gTcp.closed[2],
+                        gTcp.closed[3], gTcp.closed[4]);
+  return n;
+}
+
 // Called once the module has a station interface and a hardware address.
 extern "C" void sheng_wifi_net_start(const uint8_t mac[6]) {
   if (gIf) return;
@@ -830,11 +958,25 @@ extern "C" void sheng_wifi_net_start(const uint8_t mac[6]) {
 #endif
   memcpy(gMac, mac, 6);
   gGrp = lck_grp_alloc_init("wifi-net", LCK_GRP_ATTR_NULL); gLock = lck_mtx_alloc_init(gGrp, LCK_ATTR_NULL);
+  { uint32_t diagnostics = 0; PE_parse_boot_argn("log-wifi", &diagnostics, sizeof diagnostics); gRxProfile = diagnostics != 0; }
 #if SHENG_WIFI_ETHERNET
-  (void)if_ioctl; (void)if_event_stub;
+  (void)if_event_stub;
   // ShengEthernet starts with the late probes, long before the module's firmware is up; it is waited for a little all the same.
+  // Its interface hands the wireless framework's Apple80211 requests to the same handler as the module's own interface elsewhere.
+  int (*const request)(unsigned long, void *) = [](unsigned long cmd, void *data) -> int { return if_ioctl(nullptr, cmd, data); };
+  // The same request from the interface's user client: the 40-byte request and its data in a kernel buffer of `capacity` bytes.
+  int (*const kernelRequest)(unsigned long, void *, void *, uint32_t) = [](unsigned long cmd, void *req, void *buffer, uint32_t capacity) -> int {
+    if (cmd != SIOCGA80211 && cmd != SIOCSA80211) return EOPNOTSUPP;
+    apple80211req rq; memcpy(&rq, req, sizeof rq);
+    rq.req_kernel = 1; rq.req_data = reinterpret_cast<user_addr_t>(buffer);
+    if (rq.req_len > capacity) rq.req_len = capacity;
+    if (!rq.req_len) rq.req_data = 0;
+    const int e = if_ioctl(kKernelRequest, cmd, &rq);
+    static_cast<apple80211req *>(req)->req_val = rq.req_val; static_cast<apple80211req *>(req)->req_len = rq.req_len;
+    return e;
+  };
   bool attached = false;
-  for (unsigned waited = 0; !(attached = sheng_ethernet_wifi_attach(ethernet_output)) && waited < 30000; waited += 100) IOSleep(100);
+  for (unsigned waited = 0; !(attached = sheng_ethernet_wifi_attach(ethernet_output, request, kernelRequest)) && waited < 30000; waited += 100) IOSleep(100);
   if (!attached) { log(3, "wifi-net: no Ethernet controller (ethernet=1) to carry the module's frames"); return; }
   gIf = sheng_ethernet_ifnet();
   nw_wifi_set_events(&gEvents);

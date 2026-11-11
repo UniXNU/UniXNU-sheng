@@ -216,11 +216,46 @@ CI_ENABLE_METAL_GPU = "0"
 # compositor's frames to the render server's GPU copy when the display cannot scan them out directly (dpu-scanout=2).
 # macOS: storage, display, HID, USB, CPU, GPU, audio (with the battery on the ADSP), and en0 (ShengEthernet), which carries the Wi-Fi module. Bluetooth is not enabled yet; AppSync
 # and the launchd watchdog policy (lite) are iPadOS only.
-"kernel_args" = ["-v", "serial=3", "debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "offline-key-events=1", "aks=1", "aks-sls=3", "offline-hid-input=1", "offline-hid-home=1", "touch=4", "touch-hid=1", "buttons=1", "keyboard=1", "log=1", "smp=1", "armcpu-spi-ipi=1", "armcpu-self-ipi=1", "data-persist=2", "backlight=1", "cpufreq=4", "dpu-scanout=2", "no-lc=1", "vsync=120", "vsync-fixed=1", "disable-watchdogd=1", "usb=1", "adsp=2", "audio=12", "wifi=5", "vc-text=1", "exec-log=1", "apfs-boot-shim=1", "ethernet=1", "gpu-power=9", "gpu-metal=1", "fb-gpu=1", "fb-bgra=1", "gpu-dcvs=1", "gpu-addon=1", "timebase-hz=24000000", "ca-triple-buffer=1", "ca-free-wakeup=1"]
+# The macOS-only switches the kernel reads (timebase-user, cs-lazy, keyboard-lone, armcpu-edge, boot-payload-release, thermal,
+# thermal-level, board-clock) are built-in arguments of the package (BootWatchdogPolicy.c), so that this line stays under the
+# 1000-byte limit with the run arguments; name=0 here turns one off. No -v and no serial=3 here: this kernel has no reader of -v (the boot text is vc-text=1) and no serial device, and serial=3 only
+# starts a thread that polls every 16 ms. armcpu-edge=1 builds the scheduler's two-cluster matrix, so an idle P
+# core takes waiting E work. boot-payload-release=1 returns the GPU addon blob and the packed seed to the VM once they are
+# installed. timebase-user=1 lets userspace read the scaled timebase itself instead of trapping for every read.
+# cs-lazy=1 authenticates a 16 KiB signed block when one of its pages is first used instead of reading every image whole when
+# its signature is added (about 30 s of every boot for the dyld shared cache).
+# keyboard-lone=1 takes a single touchpad contact as the finger although the controller gives it no confidence (it does
+# so for the first seconds of use on macOS). thermal=1 logs the SoC temperatures beside the firmware's frequency limit, and thermal-level=1 gives
+# macOS its thermal pressure level from them (the service thermalmonitord reads). board-clock=7 runs the calendar from the
+# PMIC counter plus the offset stored in the PMIC, and stores it when the system sets the time.
+"kernel_args" = ["debug=0x14e", "kt_fixed_zones=120", "-no_slto_panic", "use_contiguous_hint=0", "native-source-storage=1", "native-ufs-root=1", "offline-mobile-graphics-load=1", "offline-mobile-graphics-client=1", "offline-legacy-register=1", "offline-legacy-gop=1", "offline-legacy-unit-scale=2", "offline-legacy-pm=1", "offline-legacy-validate=1", "offline-legacy-transfer=1", "offline-legacy-cpu-present=1", "offline-legacy-phase=4", "offline-key-events=1", "aks=1", "aks-sls=3", "offline-hid-input=1", "offline-hid-home=1", "touch=4", "touch-hid=1", "buttons=1", "keyboard=1", "log=1", "smp=1", "armcpu-spi-ipi=1", "armcpu-self-ipi=1", "data-persist=2", "backlight=1", "cpufreq=4", "dpu-scanout=2", "no-lc=1", "vsync=120", "vsync-fixed=1", "disable-watchdogd=1", "usb=1", "adsp=2", "audio=12", "wifi=5", "vc-text=1", "exec-log=1", "apfs-boot-shim=1", "ethernet=1", "bluetooth=1", "fb-half=2", "gpu-power=9", "gpu-metal=1", "fb-gpu=1", "fb-bgra=1", "gpu-dcvs=1", "gpu-addon=1", "timebase-hz=24000000", "ca-triple-buffer=1", "ca-free-wakeup=1"]
+
+# WindowServer presents 8-bit BGRA, which the display pipes scan out directly, instead of half float converted by the GPU each frame:
+# QuartzCore's IOMFBDisplay::framebuffer_pixel_format (26C5035r, dyld_shared_cache_arm64e.03 file offset 0x5de1134) keeps 'RGhA' on
+# `tbnz w8, #0` while CADeviceIsVirtualized is set (vmm-present). The branch becomes a NOP as a fixup of signed text, applied when
+# the page passes code signing validation; a write into the mapped page (the plugin's former ca-fb-8bit) made the page invalid and
+# code signing killed WindowServer.
+"text_fixups" = ["dyld_shared_cache_arm64e.03,5de1134,08060037,1f2003d5"]
 
 ["os_overrides"."macos-27.3-26C5035r"."payload"."adt"]
 # T6050, the chip of Mac17,11.
 "chip_id" = "6050"
+# The window starts at DRAM bank 1 (0x880000000) and spans the inaccessible range 0x8BB300000..0x8C0000000 up to the end of the
+# bank. DarwinBoot lists that range and the memory the firmware keeps in a table of this many ranges, and this kernel leaves them
+# out (window-memory-excluded-ranges.patch). 6 GiB is the most the 4 KiB bootstrap tables map. Other profiles keep the single run:
+# their kernels do not read the table.
+"owned_memory_size" = "0x180000000"
+"owned_memory_excluded_ranges" = 64
+# DarwinBoot records where the payload RAM disk and the entry's initrd buffer lie in the firmware's memory map
+# (sysctl kern.boot_payload_memory).
+"loader_inputs" = true
+# DarwinBoot lists the free memory outside the window (the low DRAM bank, about 867 MiB by the firmware's map): the kernel
+# adopts it as ordinary VM memory, page by page after a probe load (window-outside-memory-adoption.patch);
+# memory-outside=0 on the command line leaves it alone. The GPU pool over the same memory is off (gpu-pool=0): the kernel
+# owns that memory. The audio driver's DSP buffer sits in it at a fixed 32-bit address (package/AudioProbe.cpp kLowBuffer,
+# 64 KiB), so it is kept out.
+"owned_memory_outside_ranges" = 8
+"owned_memory_outside_reserved" = ["0xd0000000:0x10000"]
 
 ["os_overrides"."macos-27.3-26C5035r"."payload"."runtime"]
 "target" = "macos27"
@@ -239,10 +274,12 @@ CI_ENABLE_METAL_GPU = "0"
 "audio_target" = "arm64e-apple-macos27.0"
 # The WiFi supplicant runs from /private/var/ngpu/bin; its job is a plist of /Library/LaunchDaemons (no launchd cache merge).
 "wifi_target" = "macos27"
+# Bluetooth: the patched daemon and BlueTool in the addon's sbin (shown over /usr/sbin), the capability library in its lib.
+"bluetooth_target" = "macos27"
 "wifi_bin_prefix" = "bin"
 
 ["os_overrides"."macos-27.3-26C5035r"]
-"remove" = ["payload.install", "payload.skip_setup_tool", "payload.runtime.wallpapers", "payload.runtime.audio_system_plugins", "payload.runtime.wifi_launchd_cache", "payload.runtime.bluetooth_tool", "payload.runtime.bluetooth_target", "payload.runtime.appsync", "payload.runtime.launchd_job_environment"]
+"remove" = ["payload.install", "payload.skip_setup_tool", "payload.runtime.wallpapers", "payload.runtime.audio_system_plugins", "payload.runtime.wifi_launchd_cache", "payload.runtime.appsync", "payload.runtime.launchd_job_environment"]
 
 ["os_overrides"."macos-27.3-26C5035r"."components"]
 # SoftwareAES: NativeAES.cpp is compiled against the 26C5035r IOAESAccelerator fixture (build-gop-legacy-display-27.py), not with

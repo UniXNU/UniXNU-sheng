@@ -76,6 +76,9 @@ def main():
                         help='Actual observed DRAM size, e.g. 0x230000000')
     parser.add_argument('--owned-memory-size', type=lambda value: int(value, 0), default=None,
                         help='Explicit DarwinBoot contiguous window request, 256 MiB..8 GiB in 2 MiB steps')
+    parser.add_argument('--owned-memory-excluded-ranges', type=int, default=None,
+                        help='Size, in ranges, of the /chosen/darwinboot-memory-excluded table DarwinBoot fills with the parts of the '
+                             'window the kernel must not use; the window may then span gaps between DRAM banks. Only for a kernel that reads it')
     parser.add_argument('--root-match-volume-uuid', default=None,
                         help='/chosen/root-matching: select the root by the UUID of an IOMedia (the standard source mechanism)')
     parser.add_argument('--unique-chip-id', type=lambda value: int(value, 16), default=None,
@@ -107,6 +110,8 @@ def main():
             not 0x10000000 <= args.owned_memory_size <= 0x200000000
             or args.owned_memory_size % 0x200000):
         parser.error('Owned memory must be 256 MiB to 8 GiB, aligned to 2 MiB')
+    if args.owned_memory_excluded_ranges is not None and not 1 <= args.owned_memory_excluded_ranges <= 4096:
+        parser.error('--owned-memory-excluded-ranges: a table size of 1 to 4096 ranges')
 
     try:
         cpu_regs = [int(value, 0) for value in args.cpu_regs.split(',')]
@@ -150,6 +155,8 @@ def main():
                           if (args.data_ramdisk or args.packed_data_ramdisk) and not args.persistent_data else []),
                         *( [('darwinboot-memory-size', struct.pack('<Q', args.owned_memory_size))]
                            if args.owned_memory_size else [] ),
+                        *( [('darwinboot-memory-excluded', bytes(16 * args.owned_memory_excluded_ranges))]
+                           if args.owned_memory_excluded_ranges else [] ),
                         ('dram-base', struct.pack('<Q', DRAM_BASE)),
                         ('dram-size', struct.pack('<Q', args.dram_size)),
                         # Image4 hash algorithm. The target iPad's DT specifies sha2-384 in /chosen; this

@@ -407,9 +407,14 @@ def ether_fixture(kc):
     for name, address in sorted(kc.by_entry[entry].items()):
         if name.startswith(prefixes) and '_os_log' not in name and 'kalloc_type_view' not in name and '.cold' not in name:
             bindings.setdefault(name, hex(address))
+    # The controller's interface is a subclass of IOEthernetInterface (ShengWifiInterface): that class's vtable, checked the same way.
+    interface_start, interface_slots = kc.vtable(entry, 'IOEthernetInterface')
+    bindings.update(kc.bindings(entry, 'IOEthernetInterface'))
     return {'kernelcache_sha256': kc.sha256, 'collection_slide': hex(NATIVE_LINK_ADDRESS - kc.cache.base),
             'vtable': hex(start), 'instance_size': hex(kc.instance_size(entry, cls)),
             'slots': [[hex(t), hex(d)] for t, d in slots], 'base_slots': kc.service_slots(), 'pure_target': hex(kc.pure()),
+            'interface_vtable': hex(interface_start), 'interface_instance_size': hex(kc.instance_size(entry, 'IOEthernetInterface')),
+            'interface_slots': [[hex(t), hex(d)] for t, d in interface_slots],
             'bindings': bindings}
 
 

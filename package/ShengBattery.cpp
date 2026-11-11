@@ -69,6 +69,10 @@ class ShengBattery : public IOPMPowerSource {
     ShengAdspChannel *channel = nullptr;
     IOTimerEventSource *ucsiTimer = nullptr;
     uint8_t ucsiOut[kMessage];
+    // Diagnosis (boot argument ucsi-delay, seconds): the first UCSI command (PPM_RESET) waits this long after the channel came up, so the
+    // charger rows before it show what the port was doing without the reset.
+    uint32_t ucsiDelayMs = 0;
+    bool ucsiPending = false;
 
     void ucsiSend(uint32_t n) {
         if (n) sheng_adsp_send(channel, ucsiOut, n);
@@ -76,6 +80,11 @@ class ShengBattery : public IOPMPowerSource {
     }
     static void ucsiTick(OSObject *owner, IOTimerEventSource *) {
         ShengBattery *self = OSDynamicCast(ShengBattery, owner);
+        if (self && self->wasUp && self->ucsiPending) {
+            self->ucsiPending = false;
+            if (qcom_ucsi_start) self->ucsiSend(qcom_ucsi_start(self->ucsiOut));
+            return;
+        }
         if (self && self->wasUp && qcom_ucsi_tick) self->ucsiSend(qcom_ucsi_tick(self->ucsiOut));
     }
 
@@ -211,7 +220,8 @@ class ShengBattery : public IOPMPowerSource {
                 native_battery_stats[0] = self->published ? 4 : 3;
                 uint8_t enable[SHENG_BATTMGR_ENABLE_BYTES];
                 sheng_adsp_send(self->channel, enable, sheng_battmgr_enable_request(enable));
-                if (qcom_ucsi_start) self->ucsiSend(qcom_ucsi_start(self->ucsiOut));
+                if (qcom_ucsi_start && self->ucsiDelayMs) {self->ucsiPending = true; self->ucsiTimer->setTimeoutMS(self->ucsiDelayMs);}
+                else if (qcom_ucsi_start) self->ucsiSend(qcom_ucsi_start(self->ucsiOut));
                 sheng_battmgr_refresh(&self->bm, 1);
                 self->pump();
                 self->refresh->setTimeoutMS(kRefreshMs);
@@ -262,6 +272,8 @@ public:
         uint32_t ma = 0;
         if (PE_parse_boot_argn("usb-sdp-ma", &ma, sizeof ma)) bm.sdp_limit_ua = ma > 3000 ? 3000000u : ma * 1000u;
         sdpLimit = bm.sdp_limit_ua;
+        uint32_t delay = 0;
+        if (PE_parse_boot_argn("ucsi-delay", &delay, sizeof delay)) ucsiDelayMs = delay > 600 ? 600000u : delay * 1000u;
         loop = IOWorkLoop::workLoop();
         ringLock = IOSimpleLockAlloc();
         inbox = IOInterruptEventSource::interruptEventSource(this, &ShengBattery::inboxAction);

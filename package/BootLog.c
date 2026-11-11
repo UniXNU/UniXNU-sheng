@@ -10,8 +10,9 @@
 // A round writes only what changed: the blocks of a slot its text uses (the rest of the slot keeps a NUL-terminated older text that
 // the reader ignores) and the message buffer blocks that new kernel messages reached. Version 5 keeps the message area as a ring of
 // the message stream (msg_mode 1): msg_head bytes were appended in all, the newest min(msg_head, area) of them end at msg_head modulo
-// the area. msg_mode 0 is the linear form (oldest first, msg_bytes long) that the panic flush and diag=1 write.
+// the area. msg_mode 0 is the linear form (oldest first, msg_bytes long) that the panic flush writes.
 // The header is written last in each round, so a reader never trusts a slot or an export the header does not count yet.
+#include <kern/startup.h>
 #include "BootLatencyFiles.h"
 #include <kern/thread.h>
 #include <kern/clock.h>
@@ -72,6 +73,24 @@ extern volatile uint64_t native_data_persist_syncs __attribute__((weak_import));
 extern volatile uint64_t native_data_persist_errors __attribute__((weak_import));
 extern volatile uint64_t native_data_persist_first_lba __attribute__((weak_import));
 extern volatile int native_gpu_addon_files __attribute__((weak_import));
+extern volatile int native_gpu_addon_released __attribute__((weak_import));
+extern volatile uint64_t native_adreno_maint_kind[8][3] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_maint_walk[8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_sync_skips[2] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_sync_audit[6] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_maint_all __attribute__((weak_import));
+extern volatile uint64_t native_adreno_submit_us[8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_pool_state[12] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_pool_fallbacks[8] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_pool_zero[4] __attribute__((weak_import));
+extern volatile uint32_t native_gpu_pool_board[4] __attribute__((weak_import));
+extern volatile uint32_t native_gpu_pool_reserved_kib __attribute__((weak_import));
+extern volatile char native_gpu_row_log[40][52] __attribute__((weak_import));
+extern volatile uint32_t native_gpu_row_count __attribute__((weak_import)), native_gpu_power_stage __attribute__((weak_import));
+extern volatile uint32_t native_adreno_kernel_alloc_fail[6] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_switch_timeout[2][30] __attribute__((weak_import)), native_adreno_switch_timeouts __attribute__((weak_import));
+extern uint32_t ml_outside_memory_pages __attribute__((weak_import)), ml_outside_memory_refused __attribute__((weak_import));
+extern volatile uint64_t native_adreno_pool_scrubbing[16][2] __attribute__((weak_import));
 extern volatile int native_gpu_addon_written __attribute__((weak_import));
 extern volatile int native_gpu_addon_same __attribute__((weak_import));
 extern volatile int native_gpu_addon_failed __attribute__((weak_import));
@@ -107,6 +126,7 @@ extern volatile uint64_t native_ufs_store_rd_ops __attribute__((weak_import)), n
     native_ufs_store_max_ticks __attribute__((weak_import));
 // Command slots (ShengUfs RootCommands.h) and the root windows' reads: their count, transport time and integrity check time (CNTPCT ticks).
 extern void native_ufs_slot_stats(uint32_t *, uint32_t *, uint64_t *) __attribute__((weak_import));
+extern void native_ufs_stats_text(char *, size_t) __attribute__((weak_import));
 extern volatile uint64_t native_ufs_block_reads __attribute__((weak_import)), native_ufs_read_ticks __attribute__((weak_import)),
     native_ufs_verify_ticks __attribute__((weak_import));
 extern volatile int native_staged_apps_stage __attribute__((weak_import));
@@ -115,6 +135,8 @@ extern volatile int32_t native_keyboard_stats[17] __attribute__((weak_import));
 extern volatile int32_t native_keyboard_accel[4] __attribute__((weak_import));
 extern volatile int32_t native_keyboard_hid_stats[6] __attribute__((weak_import));
 extern volatile int32_t native_keyboard_touch_range[4] __attribute__((weak_import));
+#include "Wn8030.h"
+extern struct wn8030_census native_keyboard_census __attribute__((weak_import));
 extern volatile int32_t native_backlight_stats[16] __attribute__((weak_import));
 extern volatile int native_staged_apps_dirs __attribute__((weak_import));
 extern volatile int native_staged_apps_files __attribute__((weak_import));
@@ -149,6 +171,7 @@ extern uint8_t native_bluetooth_boot_tail[256] __attribute__((weak_import));
 extern volatile uint32_t native_bluetooth_boot_tail_length __attribute__((weak_import));
 extern volatile uint32_t native_bluetooth_boot_state[12] __attribute__((weak_import));
 extern volatile uint32_t native_bluetooth_processes[4] __attribute__((weak_import));
+extern volatile uint64_t native_bluetooth_ibs[8] __attribute__((weak_import));
 extern char *volatile native_bluetooth_boot_text __attribute__((weak_import));
 extern volatile uint32_t native_bluetooth_boot_text_length __attribute__((weak_import));
 extern volatile uint32_t qbt_transport_activity[4] __attribute__((weak_import));
@@ -179,11 +202,20 @@ extern volatile uint32_t native_dpu_more[40] __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_smmu[24] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_surfaces[14] __attribute__((weak_import));
 extern volatile uint32_t native_legacy_swapstat[16] __attribute__((weak_import));
+extern volatile uint64_t native_legacy_center_half[2] __attribute__((weak_import));
+extern volatile uint32_t native_charger_pmic[2 + 5 * 7] __attribute__((weak_import));
+extern void sheng_charger_pmic_sample(void) __attribute__((weak_import));
+extern void sheng_thermal_sample(void) __attribute__((weak_import));
+extern unsigned sheng_thermal_row(unsigned index, char *row, unsigned size) __attribute__((weak_import));
+extern unsigned sheng_board_clock_row(char *row, unsigned size) __attribute__((weak_import));
+extern unsigned sheng_thermal_level_row(char *row, unsigned size) __attribute__((weak_import));
+extern volatile uint32_t native_pmic_rtc[3] __attribute__((weak_import));
+extern volatile uint32_t native_pmic_rtc_offset[3] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_tl_count __attribute__((weak_import));
 extern volatile uint32_t native_adreno_stall_log_count __attribute__((weak_import));
 extern volatile uint32_t native_gpu_dcvs_log_count __attribute__((weak_import));
 extern volatile uint32_t native_gop_wait_reasons[4] __attribute__((weak_import));
-extern volatile uint32_t native_legacy_direct[13] __attribute__((weak_import));
+extern volatile uint32_t native_legacy_direct[14] __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_state __attribute__((weak_import));
 extern volatile uint32_t native_ufs_dpu_check[8] __attribute__((weak_import));
 extern uint32_t native_ufs_dpu_live(unsigned reg) __attribute__((weak_import));
@@ -205,6 +237,10 @@ extern volatile uint64_t native_audio_pa __attribute__((weak_import));
 extern char native_adsp_text[96] __attribute__((weak_import));
 extern char native_iokit_busy_text[4][192] __attribute__((weak_import));
 extern volatile int sheng_software_aes_state __attribute__((weak_import));
+extern volatile uint32_t native_aes_completed __attribute__((weak_import));
+extern volatile uint64_t native_aes_bytes __attribute__((weak_import)), native_aes_ticks __attribute__((weak_import));
+extern volatile uint32_t native_adreno_prio_log[32][6] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_prio_count __attribute__((weak_import));
 extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_qrtr_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_battery_raw[10] __attribute__((weak_import));
@@ -226,6 +262,14 @@ extern char native_adreno_fault_owner[20] __attribute__((weak_import));
 extern uint32_t native_gpu_restart[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_pool_stats_uncached[2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_bo_memory[8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_bo_owners[24][4] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_bo_sizes[6][2] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_fence_wake[8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_stall_ring[10] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_import_memory[4] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_import_owners[24][4] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_view_owners[24][4] __attribute__((weak_import));
+extern unsigned sheng_wifi_rx_rows(char [][120], unsigned) __attribute__((weak_import));
 extern volatile uint32_t native_adreno_freed_outside __attribute__((weak_import));
 extern volatile uint32_t native_adreno_bo_contig[2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import));
@@ -271,6 +315,28 @@ extern volatile uint32_t native_adreno_io_coherent __attribute__((weak_import));
 extern char native_cpufreq_row[120] __attribute__((weak_import));
 extern uint32_t native_gpu_perf_vote[2] __attribute__((weak_import));
 extern volatile uint32_t native_gpu_dcvs[15] __attribute__((weak_import));
+extern unsigned armcpu_stats_row(unsigned index, char *row, unsigned size) __attribute__((weak_import));
+extern volatile uint32_t sheng_edge_cross_type_steals[2] __attribute__((weak_import)), sheng_edge_idle_beside_excess[2] __attribute__((weak_import));
+extern uint64_t cs_native4k_read_ticks __attribute__((weak_import)), cs_native4k_hash_ticks __attribute__((weak_import)),
+  cs_native4k_bytes __attribute__((weak_import));
+extern unsigned long cs_native4k_ready_blobs __attribute__((weak_import));
+extern uint64_t cs_native4k_digest_wall[2] __attribute__((weak_import)), cs_native4k_digest_cpu[2] __attribute__((weak_import)),
+  cs_native4k_digest_bytes[2] __attribute__((weak_import)), cs_native4k_chunk_ticks __attribute__((weak_import)),
+  cs_native4k_record_ticks __attribute__((weak_import));
+extern unsigned long cs_native4k_chunks_made __attribute__((weak_import));
+extern volatile uint32_t sheng_edge_idle_beside_queued[2][8] __attribute__((weak_import));
+extern volatile uint32_t native_touch_cost[9] __attribute__((weak_import));
+extern volatile uint32_t native_touch_irq_stats[4] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_job_time[8] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_long_jobs[8][8] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_slow_jobs[16][8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_stall_kick[26] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_pool_views[5] __attribute__((weak_import));
+extern volatile uint32_t native_gpu_dcvs_reasons[9] __attribute__((weak_import));
+extern volatile uint32_t native_gpu_dcvs_windows[8] __attribute__((weak_import));
+extern volatile uint32_t native_cpufreq_ramp[9] __attribute__((weak_import));
+extern volatile uint32_t native_touch_doze[4] __attribute__((weak_import));
+extern volatile uint32_t native_touch_spi_wait[8] __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_gov[9] __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_boosts __attribute__((weak_import));
 extern volatile uint32_t native_cpufreq_frame[2] __attribute__((weak_import));
@@ -475,10 +541,25 @@ static void prof_sort(uint64_t *v, size_t n) {
 }
 
 static uint32_t log_gpu_on, log_display_on;
+// diag=1 (the writer sets these once): the slot's head line names it and the diagnostic export's time.
+static uint32_t log_diag_on, log_diag_export_at;
+// Where the writer's round is: the step (set before every call that leaves this file, so a round that never ends names the call it is
+// in), the round's start in log ticks (0 between rounds) and the step's start. The round watch (round_watch) and the panic flush read
+// them; the [log round] row gives each round's time.
+static const char *volatile log_where = "start";
+static volatile uint64_t log_round_began, log_where_began;
+static volatile uint32_t log_round_number;
+// The longest step of the round in progress (ticks, name), kept for the [log round] row.
+static uint64_t log_step_max;
+static const char *log_step_max_where = "";
+#define LOG_AT(step) do {const uint64_t t_ = log_ticks(); \
+    if (t_ - log_where_began > log_step_max) {log_step_max = t_ - log_where_began; log_step_max_where = log_where;} \
+    log_where = (step); log_where_began = t_;} while (0)
 static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   size_t at = 0;
-  char head[96];
-  snprintf(head, sizeof head, "#slot %u t=%us tag=%s", slot, now, &boot_progress_tag ? boot_progress_tag() : "");
+  char head[128];
+  const int n = snprintf(head, sizeof head, "#slot %u t=%us tag=%s", slot, now, &boot_progress_tag ? boot_progress_tag() : "");
+  if (log_diag_on && n > 0 && (size_t)n < sizeof head) snprintf(head + n, sizeof head - (size_t)n, " diag=1 export-at=%us", log_diag_export_at);
   at = put(out, at, cap, head, sizeof head);
   if (&boot_progress_page_text) {
     at = put(out, at, cap, "[page]", 8);
@@ -501,7 +582,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       }
     }
     if (&sheng_software_aes_state && sheng_software_aes_state) {
-      char row[48]; snprintf(row, sizeof row, "[software aes] state=%d", sheng_software_aes_state); at = put(out, at, cap, row, sizeof row);
+      // With the requests the provider completed, their bytes and their time: whether bulk data goes through it and at what rate.
+      char row[120]; int n = snprintf(row, sizeof row, "[software aes] state=%d", sheng_software_aes_state);
+      if (&native_aes_completed && &native_aes_bytes && &native_aes_ticks && n > 0 && (size_t)n < sizeof row) {
+        uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
+        snprintf(row + n, sizeof row - (size_t)n, " calls=%u bytes=%llu us=%llu", native_aes_completed, (unsigned long long)native_aes_bytes,
+                 (unsigned long long)(native_aes_ticks * 1000000ULL / f));
+      }
+      at = put(out, at, cap, row, sizeof row);
     }
   }
   // The Data store's counters (NativeRamBlock), a row of their own: the ext slots they once shared are taken by other kits.
@@ -543,6 +631,13 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
 #undef BL_US
       at = put(out, at, cap, io, sizeof io);
     }
+  }
+  // UFS command paths, completion waits and root window requests (ShengUfs README, Statistics).
+  LOG_AT("ufs stats");
+  if (&native_ufs_stats_text) {
+    char row[400]; row[0] = 0;
+    native_ufs_stats_text(row, sizeof row);
+    if (row[0]) at = put(out, at, cap, row, sizeof row);
   }
   // The payload's GPU addon (kern_exec.c native_gpu_addon_install): files in it (-1 none), written, already equal, failed, last error; then
   // the stage/status of the boot-time addon mounts (stage 5 = mounted and both entries visible): plugin, launchd job, wallpaper, audio, wallpaper floating layer
@@ -613,6 +708,27 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                native_keyboard_touch_range[2], native_keyboard_touch_range[3]);
     at = put(out, at, cap, row, sizeof row);
   }
+  // The cover touchpad's reports by what they carried (Wn8030.c native_keyboard_census): all, nothing touching, confident contacts
+  // only, confident contacts beside palms, palms only (one/two/three of them), reports with a touching contact past their own
+  // contact count, reports whose contact count is above the three contacts a report holds (the frame goes on in the next
+  // report); palms seen again in the next report and the counts they moved in all (a hand at rest moves a count or two a
+  // report, a finger several); the palms' X and Y range; then the reports with palms only that were kept (the 1st, 4th, 16th,
+  // 64th, 256th and 1024th), as the controller sent them: ID, buttons, three contacts of six bytes (bit 0 touching, bit 1 in
+  // range, bit 2 confidence; contact id; X; Y), contact count.
+  if (&native_keyboard_census && native_keyboard_census.reports) {
+    const struct wn8030_census *c = &native_keyboard_census;
+    char row[200];
+    snprintf(row, sizeof row, "KP reports=%u idle=%u fingers=%u mixed=%u palms=%u/%u/%u beyond=%u more=%u pairs=%u travel=%u x%d-%d y%d-%d kept=%u",
+             c->reports, c->idle, c->fingers, c->mixed, c->palms[0], c->palms[1], c->palms[2], c->beyond, c->more, c->palm_pairs, c->palm_travel,
+             c->palm_x[0], c->palm_x[1], c->palm_y[0], c->palm_y[1], c->samples);
+    at = put(out, at, cap, row, sizeof row);
+    for (uint32_t k = 0; k < c->samples && k < WN8030_PALM_SAMPLES; ++k) {
+      int n = snprintf(row, sizeof row, "KP #%u ", k);
+      for (uint32_t i = 0; i < WN8030_TOUCHPAD_REPORT && n > 0 && (size_t)n + 3 < sizeof row; ++i)
+        n += snprintf(row + n, sizeof row - (size_t)n, "%02x", c->sample[k][i]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
   // Panel brightness (AppleARMBacklight.cpp): stage (3 published, negative the failed step), requests, last level, the levels read back from
   // both drivers at start, transfer errors, last failed M_IRQ status, both engines' protocol and clock configuration, last error.
   if (&native_backlight_stats) {
@@ -638,6 +754,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     for (unsigned i = 0; i < 2; ++i) {char row[120]; snprintf(row, sizeof row, "W%u %.111s", i, boot_progress_ext_wide[i]); at = put(out, at, cap, row, sizeof row);}
   // Every traced process's stacks (the banner shows only what fits the panel): role 0..3 are the boot-ui-focus slots, main thread in full
   // (symbolicate with unslid = address - cache slide), then its thread groups.
+  LOG_AT("ui trace roles");
   if (&boot_ui_trace_role_rows) {
     static char rows[64][120];
     at = put(out, at, cap, "[stacks]", 10);
@@ -647,14 +764,16 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
   }
   // Threads stuck in an uninterruptible kernel wait for 20 s or more, in any process (BootUiTraceProbe.c boot_stuck_scan).
+  LOG_AT("stuck scan");
   if (&boot_stuck_scan && &boot_stuck_rows) {
-    static char rows[16][120];
+    static char rows[40][120];
     boot_stuck_scan(now);
-    unsigned n = boot_stuck_rows(rows, 16);
+    unsigned n = boot_stuck_rows(rows, 40);
     at = put(out, at, cap, "[stuck]", 8);
     for (unsigned i = 0; i < n; ++i) at = put(out, at, cap, rows[i], 120);
   }
   // The busiest kernel threads of the last interval (BootUiTraceProbe.c boot_kcpu_scan).
+  LOG_AT("kernel cpu scan");
   if (&boot_kcpu_scan && &boot_kcpu_rows) {
     static char rows[6][120];
     boot_kcpu_scan(now);
@@ -662,6 +781,15 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if (n) at = put(out, at, cap, "[kernel cpu]", 13);
     for (unsigned i = 0; i < n; ++i) at = put(out, at, cap, rows[i], 120);
   }
+  // The Wi-Fi receive path's counters (WifiNet.cpp), while frames arrive.
+  LOG_AT("wifi rx");
+  if (&sheng_wifi_rx_rows) {
+    static char rows[4][120];
+    unsigned n = sheng_wifi_rx_rows(rows, 4);
+    if (n) at = put(out, at, cap, "[wifi rx]", 10);
+    for (unsigned i = 0; i < n; ++i) at = put(out, at, cap, rows[i], 120);
+  }
+  LOG_AT("display state");
   if (log_display_on && &native_legacy_state_words) {
     static char words[240];
     if (native_legacy_state_words(words, sizeof words)) {at = put(out, at, cap, "[display state]", 16); at = put(out, at, cap, words, sizeof words);}
@@ -685,6 +813,60 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              sheng_idle_disallowed[7]);
     at = put(out, at, cap, row, sizeof row);
   }
+  // What ends each core's idle periods, what an IPI costs and how late timer interrupts are (ArmCpu.cpp): one summary row, and with
+  // diag=1 a row per core and a timer row per core.
+  LOG_AT("armcpu rows");
+  if (&armcpu_stats_row) {
+    char row[400];
+    for (unsigned i = 0; i < 17 && armcpu_stats_row(i, row, sizeof row); ++i) at = put(out, at, cap, row, sizeof row);
+  }
+  // Threads a cluster type took from the other type's run queues, and the times a core went idle while the other type had more
+  // runnable threads than cores (the second counts with the Edge matrix unbuilt too).
+  if (&sheng_edge_cross_type_steals && &sheng_edge_idle_beside_excess) {
+    char row[120];
+    snprintf(row, sizeof row, "[edge] steals E took %u P took %u | idle beside excess E %u P %u", sheng_edge_cross_type_steals[0],
+             sheng_edge_cross_type_steals[1], sheng_edge_idle_beside_excess[0], sheng_edge_idle_beside_excess[1]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // What was queued on the other cluster when a core went idle beside an excess: per bucket (fp fg in df ut bg), none, own type.
+  if (&sheng_edge_idle_beside_queued) {
+    char row[320];
+    const volatile uint32_t *e = sheng_edge_idle_beside_queued[0], *p = sheng_edge_idle_beside_queued[1];
+    snprintf(row, sizeof row, "[edge queued] E idle, P kept fp/fg/in/df/ut/bg %u/%u/%u/%u/%u/%u none %u own %u | P idle, E kept fp/fg/in/df/ut/bg %u/%u/%u/%u/%u/%u none %u own %u",
+             e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // Code signatures with 16 KiB hash pages prepared for the 4 KiB kernel: files, bytes read, time reading and hashing. Printed in
+  // every slot, so a phase (launchd's shared cache, an app launch) reads as a difference.
+  if (&cs_native4k_bytes && &cs_native4k_read_ticks && &cs_native4k_hash_ticks && &cs_native4k_ready_blobs) {
+    // The counters are in the kernel's time units, which a scaled timebase makes differ from the counter's frequency.
+    uint64_t read_ns = 0, hash_ns = 0;
+    absolutetime_to_nanoseconds(cs_native4k_read_ticks, &read_ns);
+    absolutetime_to_nanoseconds(cs_native4k_hash_ticks, &hash_ns);
+    char row[120];
+    snprintf(row, sizeof row, "[cs 4k] files=%lu MiB=%llu read=%llums hash=%llums", cs_native4k_ready_blobs,
+             (unsigned long long)(cs_native4k_bytes >> 20), (unsigned long long)(read_ns / 1000000), (unsigned long long)(hash_ns / 1000000));
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // The digests alone (cssha-digest-time.patch): MiB hashed, wall ms and the threads' own CPU ms, on efficiency cores and
+  // on the others; then the chunks of lazy answers made, the ms making them and the ms recording answers.
+  if (&cs_native4k_digest_wall && &cs_native4k_digest_cpu && &cs_native4k_digest_bytes && &cs_native4k_chunk_ticks &&
+      &cs_native4k_record_ticks && &cs_native4k_chunks_made) {
+    uint64_t wall_ns[2], cpu_ns[2], chunk_ns = 0, record_ns = 0;
+    for (int i = 0; i < 2; i++) {
+      absolutetime_to_nanoseconds(cs_native4k_digest_wall[i], &wall_ns[i]);
+      absolutetime_to_nanoseconds(cs_native4k_digest_cpu[i], &cpu_ns[i]);
+    }
+    absolutetime_to_nanoseconds(cs_native4k_chunk_ticks, &chunk_ns);
+    absolutetime_to_nanoseconds(cs_native4k_record_ticks, &record_ns);
+    char row[160];
+    snprintf(row, sizeof row, "[cs sha] E %lluM/%llums/%llucpu P %lluM/%llums/%llucpu chunks %lu %llums record %llums",
+             (unsigned long long)(cs_native4k_digest_bytes[0] >> 20), (unsigned long long)(wall_ns[0] / 1000000),
+             (unsigned long long)(cpu_ns[0] / 1000000), (unsigned long long)(cs_native4k_digest_bytes[1] >> 20),
+             (unsigned long long)(wall_ns[1] / 1000000), (unsigned long long)(cpu_ns[1] / 1000000), cs_native4k_chunks_made,
+             (unsigned long long)(chunk_ns / 1000000), (unsigned long long)(record_ns / 1000000));
+    at = put(out, at, cap, row, sizeof row);
+  }
   if (log_display_on && &native_legacy_swap_rejected_count && native_legacy_swap_rejected_count) {
     char row[220];
     snprintf(row, sizeof row, "REJ acc=%u rej=%u r=%u st=%x/%x/%x op=%x/%x/%x wh=%ux%u s=%llx/%llx/%llx/%llx cls=%.24s",
@@ -703,6 +885,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              (unsigned long long)native_legacy_rej_surface[6]);
     at = put(out, at, cap, row, sizeof row);
   }
+  LOG_AT("swap timeline");
   if (log_display_on && &native_legacy_swap_timeline) {
     static char timeline[4096];
     if (native_legacy_swap_timeline(timeline, sizeof timeline)) {
@@ -722,6 +905,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       if (native_adreno_metal_rows[r][0]) at = put(out, at, cap, (const char *)native_adreno_metal_rows[r], 96);
   }
   // The framebuffer user clients' notification slots (is the render server's vsync registered?).
+  LOG_AT("display clients");
   if (log_gpu_on && &native_legacy_clients_dump) {
     static char dump[4096];
     unsigned n = native_legacy_clients_dump(dump, sizeof dump);
@@ -737,6 +921,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
   }
   // The display object's properties now (refresh intervals, timing, scale): the lines the original driver published.
+  LOG_AT("display properties");
   if (log_display_on && &native_legacy_properties_now) {
     static char props[7168];
     unsigned n = native_legacy_properties_now(props, sizeof props);
@@ -774,6 +959,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
   }
   // The traced processes' threads with the highest context-switch rate (they are idle in every stack sample but woken hundreds of times a second).
+  LOG_AT("ui trace hot");
   if (&boot_ui_trace_hot_rows) {
     static char hot[96][120];
     unsigned n = boot_ui_trace_hot_rows(hot, 96);
@@ -812,6 +998,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
   }
   // The fence page, word by word as DRAM holds it and as the CPU's cacheable alias reads it (the CP writes the timestamps with a GPU-side write).
+  LOG_AT("fence page");
   if (log_gpu_on && (&native_adreno_fence_phys && native_adreno_fence_phys && &native_adreno_dram_read32 && native_adreno_dram_read32 && &native_adreno_cached_read32 &&
       native_adreno_cached_read32)) {
     char row[130];
@@ -869,6 +1056,42 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_adreno_bo_contig ? native_adreno_bo_contig[0] : 0, &native_adreno_bo_contig ? native_adreno_bo_contig[1] : 0,
              &native_adreno_freed_outside ? native_adreno_freed_outside : 0);
     at = put(out, at, cap, row, sizeof row);
+    // Who holds the GPU's system BOs (NativeAdrenoMemory.cpp): the largest holders as pid:live MiB/BOs(peak MiB), and the live BOs by size.
+    if (&native_adreno_bo_owners && &native_adreno_bo_sizes) {
+      char owners[400]; int n = snprintf(owners, sizeof owners, "[bo owners]");
+      for (unsigned k = 0; k < 24 && n < (int)sizeof owners - 40; ++k) {
+        if (!native_adreno_bo_owners[k][2]) continue;
+        n += snprintf(owners + n, sizeof owners - (size_t)n, " %u:%u/%u(%u)", native_adreno_bo_owners[k][0], native_adreno_bo_owners[k][1] >> 10,
+                      native_adreno_bo_owners[k][2], native_adreno_bo_owners[k][3] >> 10);
+      }
+      at = put(out, at, cap, owners, sizeof owners);
+      char sizes[200];
+      snprintf(sizes, sizeof sizes, "[bo sizes] count/MiB: <=64K %u/%u | <=1M %u/%u | <=4M %u/%u | <=16M %u/%u | <=64M %u/%u | larger %u/%u",
+               native_adreno_bo_sizes[0][0], native_adreno_bo_sizes[0][1] >> 10, native_adreno_bo_sizes[1][0], native_adreno_bo_sizes[1][1] >> 10,
+               native_adreno_bo_sizes[2][0], native_adreno_bo_sizes[2][1] >> 10, native_adreno_bo_sizes[3][0], native_adreno_bo_sizes[3][1] >> 10,
+               native_adreno_bo_sizes[4][0], native_adreno_bo_sizes[4][1] >> 10, native_adreno_bo_sizes[5][0], native_adreno_bo_sizes[5][1] >> 10);
+      at = put(out, at, cap, sizes, sizeof sizes);
+    }
+    // Imported memory by importing process, and the BO views each process maps: pid:live KiB/count(peak KiB).
+    if (&native_adreno_import_memory && &native_adreno_import_owners) {
+      char owners[400]; int n = snprintf(owners, sizeof owners, "[import memory] alive %u KiB %u peak %u made %u |", native_adreno_import_memory[0],
+                                         native_adreno_import_memory[1], native_adreno_import_memory[2], native_adreno_import_memory[3]);
+      for (unsigned k = 0; k < 24 && n < (int)sizeof owners - 44; ++k) {
+        if (!native_adreno_import_owners[k][2]) continue;
+        n += snprintf(owners + n, sizeof owners - (size_t)n, " %u:%u/%u(%u)", native_adreno_import_owners[k][0], native_adreno_import_owners[k][1],
+                      native_adreno_import_owners[k][2], native_adreno_import_owners[k][3]);
+      }
+      at = put(out, at, cap, owners, sizeof owners);
+    }
+    if (&native_adreno_view_owners) {
+      char owners[400]; int n = snprintf(owners, sizeof owners, "[bo view owners]");
+      for (unsigned k = 0; k < 24 && n < (int)sizeof owners - 44; ++k) {
+        if (!native_adreno_view_owners[k][2]) continue;
+        n += snprintf(owners + n, sizeof owners - (size_t)n, " %u:%u/%u(%u)", native_adreno_view_owners[k][0], native_adreno_view_owners[k][1],
+                      native_adreno_view_owners[k][2], native_adreno_view_owners[k][3]);
+      }
+      at = put(out, at, cap, owners, sizeof owners);
+    }
   }
   // GPU clients: name opens/refused/closes, live slot (- none), highest GPU address its mappings reached (MiB), last refusal.
   if (log_gpu_on && (&native_adreno_client_log)) {
@@ -1041,6 +1264,38 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_adreno_walk_coherent[1], native_adreno_walk_coherent[2]);
     at = put(out, at, cap, row, sizeof row);
   }
+  // CPU cache maintenance at submissions by kind of mapping (maintained/KiB/left alone): the driver's synchronized buffers, system
+  // write-combined and cached BOs, other kernel memory, imports read, written and uncached. Then the passes: submissions, mappings
+  // visited of those held, completions and their visits, reclassifications, re-assertion visits; synchronized buffers left out at
+  // map/unmap; their audit (audits, lines, dirty, stale, the audit that ended the trust, last failure); gpu-maint-all.
+  if (log_gpu_on && (&native_adreno_maint_kind && &native_adreno_maint_walk && &native_adreno_sync_skips && &native_adreno_sync_audit)) {
+    char row[420];
+    const volatile uint64_t (*k)[3] = native_adreno_maint_kind;
+    const volatile uint64_t *w = native_adreno_maint_walk;
+    int n = snprintf(row, sizeof row, "[maint kind]");
+    static const char *const names[7] = {"drv", "syswc", "sys", "kern", "impr", "impw", "impu"};
+    for (unsigned i = 0; i < 7 && n > 0 && n < 330; ++i)
+      n += snprintf(row + n, sizeof row - (size_t)n, " %s %llu/%llu/%llu", names[i], (unsigned long long)k[i][0], (unsigned long long)k[i][1],
+                    (unsigned long long)k[i][2]);
+    at = put(out, at, cap, row, sizeof row);
+    snprintf(row, sizeof row, "[maint walk] submits=%llu visited=%llu held=%llu completes=%llu visited=%llu reclass=%llu reassert=%llu | "
+             "sync skip map=%u unmap=%u audit=%u lines=%u dirty=%u stale=%u ended=%u fail=%x all=%u",
+             (unsigned long long)w[0], (unsigned long long)w[1], (unsigned long long)w[2], (unsigned long long)w[3], (unsigned long long)w[4],
+             (unsigned long long)w[5], (unsigned long long)w[6], native_adreno_sync_skips[0], native_adreno_sync_skips[1],
+             native_adreno_sync_audit[0], native_adreno_sync_audit[1], native_adreno_sync_audit[2], native_adreno_sync_audit[3],
+             native_adreno_sync_audit[4], native_adreno_sync_audit[5], &native_adreno_maint_all ? native_adreno_maint_all : 0);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // A submission's time under the driver's lock (us, summed): timed submissions, validation and holds, re-assertion and audits, the
+  // maintenance pass, the submission log, table switch + ring + job record, total.
+  if (log_gpu_on && (&native_adreno_submit_us)) {
+    char row[200];
+    const volatile uint64_t *u = native_adreno_submit_us;
+    snprintf(row, sizeof row, "[submit us] n=%llu check=%llu audit=%llu maint=%llu log=%llu ring=%llu total=%llu", (unsigned long long)u[0],
+             (unsigned long long)u[1], (unsigned long long)u[2], (unsigned long long)u[3], (unsigned long long)u[4], (unsigned long long)u[5],
+             (unsigned long long)u[6]);
+    at = put(out, at, cap, row, sizeof row);
+  }
   // Edge contacts (drivers/ShengHidInput edge::): wrapper installed, contacts begun, of them from an edge, events skipped.
   if (&native_touch_edge_stats) {
     char row[128];
@@ -1056,6 +1311,16 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     char row[80];
     snprintf(row, sizeof row, "[touch multi] reports=%u max=%u lifts=%u", native_touch_hid_multi[0], native_touch_hid_multi[1],
              native_touch_hid_multi[2]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // The touch thread's work: line interrupts, thread wakes, peeks (of them without a new frame, with an invalid header), full reads,
+  // frames processed, and the milliseconds in peeks, full reads and processing.
+  if (&native_touch_cost && &native_touch_irq_stats) {
+    const volatile uint32_t *c = native_touch_cost;
+    char row[220];
+    snprintf(row, sizeof row, "[touch cost] irq armed=%u n=%u spurious=%u | wakes=%u peeks=%u stale=%u bad=%u reads=%u frames=%u | ms peek=%u read=%u process=%u",
+             native_touch_irq_stats[0], native_touch_irq_stats[1], native_touch_irq_stats[2], c[0], c[1], c[2], c[3], c[4], c[5],
+             c[6] / 1000, c[7] / 1000, c[8] / 1000);
     at = put(out, at, cap, row, sizeof row);
   }
   // IBs per GPU submission: submissions, IBs, the most in one, and those with more than 16 (a frame used to be split at 16).
@@ -1091,6 +1356,58 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              (unsigned long long)p[6][0], (unsigned long long)p[6][1], (unsigned long long)p[7][0], (unsigned long long)p[7][1],
              native_adreno_pool_stats_uncached[1], native_adreno_pool_stats_uncached[0]);
     at = put(out, at, cap, row, sizeof row);
+    // The GPU's memory pool outside the kernel's window (Adreno740 NativeAdrenoPool, package/GpuMemoryPool.cpp): its ranges and free
+    // memory, the buffer objects alive from it, pages retired because a client had mapped them, and why requests fell back.
+    if (&native_adreno_pool_state && &native_adreno_pool_fallbacks && &native_adreno_pool_zero) {
+      const volatile uint32_t *s = native_adreno_pool_state, *f = native_adreno_pool_fallbacks;
+      char pool[360];
+      snprintf(pool, sizeof pool, "[gpu pool] arg %u ranges %u (refused %u) total %u KiB free %u (lowest %u) | alive %u grants %u KiB | served %u freed %u retired %u (%u KiB) | board %u/%u %u KiB %x stock-reserved %u KiB",
+               s[10], s[0], s[11], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9],
+               &native_gpu_pool_board ? native_gpu_pool_board[0] : 0, &native_gpu_pool_board ? native_gpu_pool_board[1] : 0,
+               &native_gpu_pool_board ? native_gpu_pool_board[2] : 0, &native_gpu_pool_board ? native_gpu_pool_board[3] : 0,
+               &native_gpu_pool_reserved_kib ? native_gpu_pool_reserved_kib : 0);
+      at = put(out, at, cap, pool, sizeof pool);
+      uint64_t zero_ns = 0, pass_ns = 0;
+      absolutetime_to_nanoseconds(native_adreno_pool_zero[0], &zero_ns);
+      absolutetime_to_nanoseconds(native_adreno_pool_zero[2], &pass_ns);
+      snprintf(pool, sizeof pool, "[gpu pool fallback] no range %u | too large %u | exhausted %u | fragmented %u | limit %u | no metadata %u | kind %u | scrub %u || zero %llums %llu KiB, cache pass %llums %llu KiB",
+               f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], (unsigned long long)(zero_ns / 1000000),
+               (unsigned long long)native_adreno_pool_zero[1], (unsigned long long)(pass_ns / 1000000), (unsigned long long)native_adreno_pool_zero[3]);
+      at = put(out, at, cap, pool, sizeof pool);
+      if (&native_adreno_pool_views) {
+        snprintf(pool, sizeof pool, "[gpu pool views] hook %u | tracked %u untracked %u | closes %u returned %u",
+                 native_adreno_pool_views[4], native_adreno_pool_views[0], native_adreno_pool_views[1],
+                 native_adreno_pool_views[2], native_adreno_pool_views[3]);
+        at = put(out, at, cap, pool, sizeof pool);
+      }
+    }
+    // What a submission still cleans by kind of mapping, what the walks visit, and where a submission's time goes.
+    if (&native_adreno_maint_kind) {
+      static const char *const kind[7] = {"driver", "wc", "cached", "kernel", "import ro", "import rw", "import nc"};
+      char kinds[420];
+      int n = snprintf(kinds, sizeof kinds, "[maint kinds] cleaned/KiB/left alone at submissions:");
+      for (unsigned k = 0; k < 7 && n > 0 && n < 380; ++k)
+        n += snprintf(kinds + n, sizeof kinds - (size_t)n, " %s %llu/%llu/%llu", kind[k], (unsigned long long)native_adreno_maint_kind[k][0],
+                      (unsigned long long)native_adreno_maint_kind[k][1], (unsigned long long)native_adreno_maint_kind[k][2]);
+      at = put(out, at, cap, kinds, sizeof kinds);
+    }
+    if (&native_adreno_maint_walk && &native_adreno_sync_audit && &native_adreno_sync_skips) {
+      const volatile uint64_t *w = native_adreno_maint_walk; const volatile uint32_t *a = native_adreno_sync_audit;
+      char walk[340];
+      snprintf(walk, sizeof walk, "[maint walk] submissions=%llu visited=%llu held=%llu | completions=%llu visited=%llu | reclassified=%llu reassert visited=%llu | sync skipped map=%u unmap=%u | sync audit n=%u lines=%u dirty=%u stale=%u distrusted=%u fail=%x | all=%u",
+               (unsigned long long)w[0], (unsigned long long)w[1], (unsigned long long)w[2], (unsigned long long)w[3], (unsigned long long)w[4],
+               (unsigned long long)w[5], (unsigned long long)w[6], native_adreno_sync_skips[0], native_adreno_sync_skips[1], a[0], a[1], a[2], a[3],
+               a[4], a[5], &native_adreno_maint_all ? native_adreno_maint_all : 0);
+      at = put(out, at, cap, walk, sizeof walk);
+    }
+    if (&native_adreno_submit_us && native_adreno_submit_us[0]) {
+      const volatile uint64_t *u = native_adreno_submit_us;
+      char us[240];
+      snprintf(us, sizeof us, "[submit us] n=%llu validate=%llu audit=%llu publish=%llu log=%llu ring=%llu total=%llu", (unsigned long long)u[0],
+               (unsigned long long)u[1], (unsigned long long)u[2], (unsigned long long)u[3], (unsigned long long)u[4], (unsigned long long)u[5],
+               (unsigned long long)u[6]);
+      at = put(out, at, cap, us, sizeof us);
+    }
   }
   // CPU clusters and L3 as voted (CpuFreqProbe, refreshed every round) and the GPU's initial HFI perf/bandwidth vote.
   if (&native_cpufreq_row && native_cpufreq_row[0]) {
@@ -1111,12 +1428,59 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                  th[0], th[1], th[2], th[3], th[4], th[5], th[6], th[7], th[8]);
         at = put(out, at, cap, row, sizeof row);
       }
+      if (&native_cpufreq_ramp) {
+        const volatile uint32_t *r = native_cpufreq_ramp;
+        snprintf(row, sizeof row, "[cpu ramp] 10s windows 90%% busy/below top vote, run %% of vote: d0 %u/%u %u%% | d1 %u/%u %u%% | d2 %u/%u %u%%",
+                 r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+    }
+    // SoC temperatures next to the frequency the hardware runs (ThermalProbe.cpp, thermal=1): [thermal], [thermal lmh],
+    // [thermal limit] and one [thermal raw] per controller.
+    LOG_AT("thermal");
+    if (&sheng_thermal_sample && &sheng_thermal_row) {
+      char thermal[400];
+      sheng_thermal_sample();
+      for (unsigned i = 0; i < 8 && sheng_thermal_row(i, thermal, sizeof thermal); ++i) at = put(out, at, cap, thermal, sizeof thermal);
+    }
+    // The thermal pressure level handed to macOS and who read it (ThermalLevel.cpp, thermal-level=1).
+    if (&sheng_thermal_level_row) {
+      char level[400];
+      if (sheng_thermal_level_row(level, sizeof level)) at = put(out, at, cap, level, sizeof level);
+    }
+    // The board's wall clock (BoardClock.cpp, board-clock=<bits>): counter, stored offset, what the system set.
+    LOG_AT("board clock");
+    if (&sheng_board_clock_row) {
+      char clock[400];
+      if (sheng_board_clock_row(clock, sizeof clock)) at = put(out, at, cap, clock, sizeof clock);
     }
     if (&native_gpu_dcvs && native_gpu_dcvs[0]) {
       snprintf(row, sizeof row, "[gpu dcvs] level=%u changes=%u failed=%u busy=%u%% at 220:%u 295:%u 348:%u 401:%u 475:%u 550:%u 615:%u 680:%u boosts touch=%u wake=%u",
                native_gpu_dcvs[1], native_gpu_dcvs[2], native_gpu_dcvs[3], native_gpu_dcvs[4], native_gpu_dcvs[5], native_gpu_dcvs[6],
                native_gpu_dcvs[7], native_gpu_dcvs[8], native_gpu_dcvs[9], native_gpu_dcvs[10], native_gpu_dcvs[11], native_gpu_dcvs[12],
                native_gpu_dcvs[13], native_gpu_dcvs[14]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    // Which rule moved the GPU level since boot, and the windows of the last 10 s (GpuPowerProbe.cpp).
+    if (&native_gpu_dcvs_reasons && &native_gpu_dcvs_windows && native_gpu_dcvs_windows[7]) {
+      const volatile uint32_t *r = native_gpu_dcvs_reasons, *w = native_gpu_dcvs_windows;
+      char why[300];
+      snprintf(why, sizeof why, "[gpu dcvs why] span=%u sat=%u need=%u step=%u rest=%u touch=%u wake=%u floor=%u failed=%u | 10s win=%u work=%u faint=%u ring=%u max=%uus@%u rests=%u",
+               w[7], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], w[0], w[1], w[2], w[3], w[4], w[5], w[6]);
+      at = put(out, at, cap, why, sizeof why);
+    }
+    if (&native_touch_doze && (native_touch_doze[0] || native_touch_doze[3])) {
+      snprintf(row, sizeof row, "[touch doze] requests=%u refused=%u wakes after the last=%u last frame type=%u", native_touch_doze[0],
+               native_touch_doze[1], native_touch_doze[2], native_touch_doze[3]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    // The touch thread's wait during a frame read (TouchProbe.cpp SpiWait): mode (1 sleeping until the serial engine's interrupt,
+    // 2 not attached, 3 back to polling), the attach status, engine interrupts, transfers slept through, sleeps ended by the
+    // interrupt and by the deadline, then the time polled after the last wake of a transfer: mean and longest.
+    if (&native_touch_spi_wait && native_touch_spi_wait[0]) {
+      const volatile uint32_t *w = native_touch_spi_wait;
+      snprintf(row, sizeof row, "[touch spi] wait=%u attach=%x irqs=%u slept=%u by irq=%u by deadline=%u polled after wake mean=%uus max=%uus",
+               w[0], w[1], w[2], w[3], w[4], w[5], w[3] ? w[6] / w[3] : 0, w[7]);
       at = put(out, at, cap, row, sizeof row);
     }
   }
@@ -1137,6 +1501,13 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if(&qbt_transport_activity) {
       snprintf(row,sizeof row,"[bluetooth stack] power=%u state=%u connect=%u channel=%u",
           qbt_transport_activity[0],qbt_transport_activity[1],qbt_transport_activity[2],qbt_transport_activity[3]);
+      at=put(out,at,cap,row,sizeof row);
+    }
+    if(&native_bluetooth_ibs) {
+      const volatile uint64_t *w=native_bluetooth_ibs;
+      snprintf(row,sizeof row,"[bluetooth ibs] wake_ind=%llu wake_ack=%llu sleep_ind=%llu reverts=%llu refused=%llu unarmed=%llu cancel_timeouts=%llu wakes=%llu",
+          (unsigned long long)w[0],(unsigned long long)w[1],(unsigned long long)w[2],(unsigned long long)w[3],(unsigned long long)w[4],
+          (unsigned long long)w[5],(unsigned long long)w[6],(unsigned long long)w[7]);
       at=put(out,at,cap,row,sizeof row);
     }
     if(&native_bluetooth_processes) {
@@ -1329,6 +1700,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     snprintf(row, sizeof row, "[dpu] st=%d hw=%x us=%u i1 en=%x cfg=%x cnt=%x f=%u..%u ln=%u vp=%u s=%x i2 en=%x cfg=%x cnt=%x f=%u..%u ln=%u vp=%u s=%x",
              (int)d[0], d[1], d[18], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15], d[16], d[17]);
     at = put(out, at, cap, row, sizeof row);
+    // The panel's frame period timed on interface 1's line counter, and the hsync control of interfaces 1 and 2.
+    if (d[19] && &native_dpu_more) {
+      snprintf(row, sizeof row, "[dpu frame] period=%uus hsync=%x/%x", d[19], native_dpu_more[37], native_dpu_more[38]);
+      at = put(out, at, cap, row, sizeof row);
+    }
     for (int half = 0; half < 2; ++half) {
       int n = snprintf(row, sizeof row, "[dpu pipes%d]", half);
       for (int i = half * 5; i < half * 5 + 5 && n < (int)sizeof row; ++i)
@@ -1369,9 +1745,25 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                      native_ufs_dpu_live ? native_ufs_dpu_live(0) : 0xdead, native_ufs_dpu_live ? native_ufs_dpu_live(1) : 0xdead);
     if (&native_legacy_direct) {
       const volatile uint32_t *d = native_legacy_direct;
-      n += snprintf(row + n, sizeof row - (size_t)n, " | flips %u mapped %u mapfail %u latch>50ms %u max %uus mean %uus released %u copied %u to boot %u | held for the GPU %u total %uus longest %uus waits>=250ms %u",
-                    d[0], d[1], d[2], d[3], d[4], d[0] ? d[5] / d[0] : 0, d[6], d[7], d[8], d[9], d[10], d[11], d[12]);
+      n += snprintf(row + n, sizeof row - (size_t)n, " | flips %u mapped %u mapfail %u latch>50ms %u max %uus mean %uus released %u copied %u to boot %u | held for the GPU %u total %uus longest %uus waits>=250ms %u waits>=8ms %u",
+                    d[0], d[1], d[2], d[3], d[4], d[0] ? d[5] / d[0] : 0, d[6], d[7], d[8], d[9], d[10], d[11], d[12], d[13]);
     }
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // The centre pixel of the last sampled half-float frame, in thousandths (1000 = 1.0): a known grey shown there tells whether the compositor
+  // writes linear or encoded values (sRGB 128 is 216 linear and 502 encoded).
+  if (&native_legacy_center_half && native_legacy_center_half[1]) {
+    char row[120];
+    const uint64_t packed = native_legacy_center_half[0];
+    unsigned milli[4];
+    for (unsigned i = 0; i < 4; ++i) {
+      const unsigned h = (unsigned)(packed >> (16 * i)) & 0xffff, e = (h >> 10) & 31, m = h & 1023;
+      const uint64_t scaled = (uint64_t)(e ? 1024 + m : m) * 1000;
+      const unsigned shift = e ? 25 - e : 24;   /* value = (1024 + m) * 2^(e - 25) */
+      milli[i] = (h & 0x8000) || e == 31 ? 0 : e > 25 ? (unsigned)(scaled << (e - 25)) : (unsigned)(scaled >> shift);
+    }
+    snprintf(row, sizeof row, "[fb centre] half r=%u g=%u b=%u a=%u (x1000) samples=%llu", milli[0], milli[1], milli[2], milli[3],
+             (unsigned long long)native_legacy_center_half[1]);
     at = put(out, at, cap, row, sizeof row);
   }
   // The swap lifecycle's counters (NativeLegacyDisplay.cpp native_legacy_swapstat) and how many entries the kernel rings hold; the rings are in the
@@ -1492,6 +1884,29 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                native_battery_raw[5], native_battery_raw[6], native_battery_raw[7], native_battery_raw[8]);
       at = put(out, at, cap, row, sizeof row);
     }
+    // the charger PMIC's own registers (WifiProbe.cpp sheng_charger_pmic_sample): per page type/subtype, registers 06-09, 0a-0d, 40-43, 44-47
+    LOG_AT("charger pmic");
+    if (&sheng_charger_pmic_sample && &native_charger_pmic) {
+      sheng_charger_pmic_sample();
+      if (native_charger_pmic[0]) {
+        if (&native_pmic_rtc && native_pmic_rtc[0]) {
+          snprintf(row, sizeof row, "[pmic rtc] control=%02x seconds=%u", native_pmic_rtc[1], native_pmic_rtc[2]);
+          at = put(out, at, cap, row, sizeof row);
+        }
+        // counter + offset near the real date: the cell holds a valid offset; owner 0: this side may write the cell.
+        if (&native_pmic_rtc_offset && native_pmic_rtc_offset[0]) {
+          snprintf(row, sizeof row, "[pmic rtc offset] seconds=%u owner=%u", native_pmic_rtc_offset[1], native_pmic_rtc_offset[2]);
+          at = put(out, at, cap, row, sizeof row);
+        }
+        for (unsigned k = 0; k < 7; ++k) {
+          const volatile uint32_t *w = native_charger_pmic + 2 + 5 * k;
+          if (!w[0]) continue;
+          snprintf(row, sizeof row, "[pmic chg] s%x p%02x t%02x/%02x st %08x %08x cfg %08x %08x", w[0] >> 24, (w[0] >> 16) & 0xff, (w[0] >> 8) & 0xff,
+                   w[0] & 0xff, w[1], w[2], w[3], w[4]);
+          at = put(out, at, cap, row, sizeof row);
+        }
+      }
+    }
     // the charger (ShengBattery.cpp native_charger_stats): USB online, type, adapter type, the board's adapter type, input limit and port
     // maximum (mA), USB mV and mA, battery status, charge type, thermal level, charge current (mA), adapter watts, authentication and
     // suspend bits, limit sets|tries<<8|port<<16, last limit result
@@ -1533,6 +1948,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       at = put(out, at, cap, row, sizeof row);
     }
     // Every distinct property access of the audio server, in order: selector, object, scope letter, g/s (get/set), upper case if it failed.
+    LOG_AT("audio");
     if (&sheng_audio_diag && sheng_audio_diag()) {
       const ShengAudioTrace *tr = (const ShengAudioTrace *)((const uint8_t *)sheng_audio_diag() - SHENG_AUDIO_DIAG_OFFSET + SHENG_AUDIO_TRACE_OFFSET);
       const unsigned total = tr->count < SHENG_AUDIO_TRACE_SLOTS ? tr->count : SHENG_AUDIO_TRACE_SLOTS;
@@ -1696,11 +2112,21 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                (unsigned long long)native_adreno_wait_outer[4]);
       at = put(out, at, cap, row, sizeof row);
     }
+    // The waiters' wake path: GPU interrupts handed to the driver, completion passes, and how the waits ended.
+    if (&native_adreno_fence_wake && native_adreno_fence_wake[0]) {
+      const volatile uint64_t *w = native_adreno_fence_wake;
+      char wake[300];
+      snprintf(wake, sizeof wake, "[fence wake] irq=%llu fence irq=%llu passes=%llu woken=%llu slept=%llu deadline=%llu periodic woken=%llu switches=%llu",
+               (unsigned long long)w[0], (unsigned long long)w[1], (unsigned long long)w[2], (unsigned long long)w[3], (unsigned long long)w[4],
+               (unsigned long long)w[5], (unsigned long long)w[6], (unsigned long long)w[7]);
+      at = put(out, at, cap, wake, sizeof wake);
+    }
   }
   // The CP's registers once a fence stopped advancing: RBBM status 0-3, interrupt, CP fault, status 1, protect, ring rptr/wptr,
   // IB1 base/rem, IB2 base/rem, BV rptr, BV IB1 base/rem, BV IB2 rem, BV IB2 base.
   // The CP switch between the two rings (NativeAdrenoPreempt): counters, the ring the CP runs, a switch in flight, the control register as read now
   // (STOP, bit 0, still set: the hardware never finished it) and checkCpSwitch's steps (createVm, probeBuffer, submit, waitAll, readTtbr0, fence).
+  LOG_AT("gpu preempt");
   if (log_gpu_on && (&native_adreno_preempt_stats)) {
     uint32_t v[26] = {0};
     char row[380];
@@ -1710,6 +2136,17 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_gpu_preempt ? native_gpu_preempt[1] : 0, &native_gpu_preempt ? native_gpu_preempt[2] : 0,
              &native_adreno_switch_count ? native_adreno_switch_count : 0);
     at = put(out, at, cap, row, sizeof row);
+    // The newest six GPU priority requests: pid, foreground/background priority (MTLGPUPriority numbering), the task's GPU role then,
+    // and how many times that connection had asked before.
+    if (&native_adreno_prio_count && native_adreno_prio_count) {
+      char prio[200]; const uint32_t n = native_adreno_prio_count;
+      int w = snprintf(prio, sizeof prio, "[gpu prio] n=%u", n);
+      for (uint32_t k = 0; k < 6 && k < n && w > 0 && (size_t)w < sizeof prio; ++k) {
+        volatile uint32_t *r = native_adreno_prio_log[(n - 1 - k) & 31];
+        w += snprintf(prio + w, sizeof prio - (size_t)w, " %u:%u/%u r%u t%u", r[0], r[1], r[2], r[3], r[5]);
+      }
+      at = put(out, at, cap, prio, sizeof prio);
+    }
   }
   // Fenced WPTR writes (NativeAdrenoRing.cpp writeWptr): writes, writes dropped at least once, repeated writes, writes still dropped.
   if (log_gpu_on && (&native_adreno_wptr_fence && native_adreno_wptr_fence[0])) {
@@ -1758,6 +2195,40 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                native_adreno_stall_mem[57], native_adreno_stall_mem[58]);
       at = put(out, at, cap, row, sizeof row);
     }
+    // The ring the snapshot's fence belongs to and what the CP was running.
+    if (&native_adreno_stall_ring && native_adreno_stall_ring[0]) {
+      const volatile uint32_t *r = native_adreno_stall_ring;
+      snprintf(row, sizeof row, "[gpu stall] ring fence=%u waited=%u on ring %u | cp runs %u flight %u | unfinished %u/%u | job %x | waited job %uus pending %uus",
+               r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // GPU job durations: counts over 8/16/33/100 ms, the 8 longest jobs since boot and the newest jobs over 8 ms (src 1: CP timestamps).
+  if (log_gpu_on && &native_adreno_job_time && native_adreno_job_time[0]) {
+    char row[260]; const volatile uint32_t *t = native_adreno_job_time;
+    snprintf(row, sizeof row, "[gpu jobs] timed=%u stamped=%u >8ms=%u >16ms=%u >33ms=%u >100ms=%u longest=%uus slow=%u",
+             t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7]);
+    at = put(out, at, cap, row, sizeof row);
+    for (unsigned i = 0; i < 12; ++i) {
+      const volatile uint64_t *j;
+      if (i < 8) { if (!&native_adreno_long_jobs) continue; j = native_adreno_long_jobs[i]; }
+      else { if (!&native_adreno_slow_jobs || i - 8 >= t[7]) continue; j = native_adreno_slow_jobs[(t[7] - 1 - (i - 8)) & 15]; }
+      if (!j[1]) continue;
+      snprintf(row, sizeof row, "[gpu %s] fence=%u pid=%u q=%llx ring=%u pri=%d ibs=%u KiB=%llu us=%llu src=%u lvl=%u role=%u at=%llums lat=%lluus",
+               i < 8 ? "long" : "slow", (uint32_t)j[0], (uint32_t)j[3], (unsigned long long)j[4], (unsigned)(j[0] >> 40 & 15),
+               (int)(j[0] >> 44 & 0xff) - 1, (unsigned)(j[0] >> 32 & 0xff), (unsigned long long)(j[2] >> 10), (unsigned long long)j[1],
+               (unsigned)(j[0] >> 52 & 15), (unsigned)(j[3] >> 40 & 0xffff), (unsigned)(j[3] >> 32 & 0xff),
+               (unsigned long long)(j[5] / 1000), (unsigned long long)j[6]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // The first stall stage: the CP's IB position at the first timed-out wait, at the stage and 500 us later, and when the job retired.
+  if (log_gpu_on && &native_adreno_stall_kick && native_adreno_stall_kick[25]) {
+    char row[360]; const volatile uint32_t *k = native_adreno_stall_kick;
+    snprintf(row, sizeof row, "[gpu kick] n=%u fence=%u pending=%uus moved=%x retired after=%uus | pid=%u ibs=%u ring=%u pri=%d KiB=%u | first ib1 %x:%x rem %u ib2 rem %u | at ib1 %x:%x rem %u ib2 rem %u | +500us ib1 %x:%x rem %u ib2 rem %u",
+             k[25], k[0], k[1], k[20], k[21], k[22], k[23] & 0xffff, (k[23] >> 16) & 0xff, (int)(k[23] >> 24) - 1, k[24] >> 10,
+             k[3], k[2], k[6], k[7], k[9], k[8], k[12], k[13], k[15], k[14], k[18], k[19]);
+    at = put(out, at, cap, row, sizeof row);
   }
   if (log_display_on && &native_gop_wait_stats && native_gop_wait_stats[0]) {
     char row[160];
@@ -1803,6 +2274,47 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if (boot_log_reset_watchdog[0]) at = put(out, at, cap, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
     if (boot_log_reset_result[0]) at = put(out, at, cap, boot_log_reset_result, sizeof boot_log_reset_result);
   }
+  // Ring switches the CP never finished (the first two): the CP's stall words as in [gpu stall], then the ring's progress words.
+  if (log_gpu_on && &native_adreno_switch_timeout && &native_adreno_switch_timeouts && native_adreno_switch_timeouts) {
+    for (unsigned e = 0; e < 2 && e < native_adreno_switch_timeouts; ++e) {
+      char row[360];
+      int n = snprintf(row, sizeof row, "[gpu switch timeout] %u of %u:", e + 1, native_adreno_switch_timeouts);
+      for (unsigned k = 0; k < 30 && n > 0 && (size_t)n < sizeof row; ++k)
+        n += snprintf(row + n, sizeof row - (size_t)n, "%s%x", k == 24 ? " | " : " ", native_adreno_switch_timeout[e][k]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // The GPU bring-up's rows in the order they were set (the shown rows are shared and overwritten), and its stage.
+  if (log_gpu_on && &native_gpu_row_log && &native_gpu_row_count && &native_gpu_power_stage) {
+    char row[200];
+    const volatile uint32_t *kf = &native_adreno_kernel_alloc_fail ? native_adreno_kernel_alloc_fail : NULL;
+    snprintf(row, sizeof row, "[gpu bring-up] stage %x rows %u | first failed kernel allocation: at %u status %x bytes %u bits %u contiguous %u (%u in all)",
+             native_gpu_power_stage, native_gpu_row_count, kf ? kf[0] : 0, kf ? kf[1] : 0, kf ? kf[2] : 0, kf ? kf[3] : 0, kf ? kf[4] : 0, kf ? kf[5] : 0);
+    at = put(out, at, cap, row, sizeof row);
+    for (unsigned i = 0; i < 40 && i < native_gpu_row_count; ++i) {
+      snprintf(row, sizeof row, "GB%02u %s", i, (const char *)native_gpu_row_log[i]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // DRAM outside the kernel's window that became VM memory: pages adopted, and pages left alone after a refused load.
+  if (&ml_outside_memory_pages && &ml_outside_memory_refused) {
+    char row[100];
+    snprintf(row, sizeof row, "[memory outside] adopted %u pages (%u MiB), left %u pages", ml_outside_memory_pages,
+             ml_outside_memory_pages >> 8, ml_outside_memory_refused);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // The command line the kernel parses: its length, whether autoreset is in it, and its last 80 characters.
+  {
+    extern char *PE_boot_args(void);
+    const char *args = PE_boot_args();
+    const size_t len = args ? strnlen(args, 2048) : 0;
+    uint32_t armed = 0;
+    const int found = PE_parse_boot_argn("autoreset", &armed, sizeof armed);
+    char row[160];
+    snprintf(row, sizeof row, "[cmdline] len=%lu autoreset=%d/%u tail=%s", (unsigned long)len, found, armed,
+             len > 80 ? args + len - 80 : (args ? args : ""));
+    at = put(out, at, cap, row, sizeof row);
+  }
   if (boot_diag_status) {
     char row[120];
     snprintf(row, sizeof row, "[diag] status=%d files=%u skipped=%u errors=%u bytes=%u first=%u alloc=%u", boot_diag_status, &boot_diag_files ? boot_diag_files : 0,
@@ -1817,6 +2329,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     at = put(out, at, cap, row, sizeof row);
   }
   // Which processes were started and ended (BootProgress.c census) and the throw site of the last uncaught exception (kits BootFaultProbe.c).
+  LOG_AT("spawn rows");
   if (&boot_progress_spawn_rows) {
     char *const spawn = compose_spawn;
     const size_t n = spawn ? boot_progress_spawn_rows(spawn, 16384) : 0;
@@ -1832,6 +2345,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
   }
   // The sampling profile (BootProgress.c): which processes the interrupts landed in and where, at most 6 KiB of the slot.
+  LOG_AT("profile rows");
   if (&boot_progress_profile_rows) {
     static char profile[6144];
     const size_t n = boot_progress_profile_rows(profile, sizeof profile);
@@ -1919,19 +2433,19 @@ static int msg_stream_write(void) {
 
 // Log groups (boot arguments log-gpu, log-display, log-wifi, log-audio, log-input, log-power, log-sys; each =1 turns its rows on, all are off
 // without them). A slot's text is a list of sections: a line that starts with "[tag]" opens one and the lines after it (until the next
-// "[") belong to it. The slot's own head line and the panic text are always kept; diag has its own switch and writes other files.
+// "[") belong to it. The slot's own head line and the panic text are always kept, and with diag=1 the [diag] row too.
 enum {LogGpu, LogDisplay, LogWifi, LogAudio, LogInput, LogPower, LogSys, LogGroups};
 static const char *const log_group_arg[LogGroups] = {"log-gpu", "log-display", "log-wifi", "log-audio", "log-input", "log-power", "log-sys"};
 static uint32_t log_group_on;
 // Tag prefixes by group, the first match wins ("gpu dcvs" before "gpu"); a tag in no list is a system row.
 static const struct {const char *prefix; uint8_t group;} log_tags[] = {
   {"gpu dcvs", LogPower}, {"gpu", LogGpu}, {"ring", LogGpu}, {"ib]", LogGpu}, {"fence", LogGpu}, {"metal", LogGpu}, {"mfb", LogGpu},
-  {"bo ", LogGpu}, {"vm ", LogGpu}, {"import", LogGpu}, {"walk", LogGpu}, {"coherence", LogGpu},
+  {"bo ", LogGpu}, {"maint", LogGpu}, {"submit us", LogGpu}, {"vm ", LogGpu}, {"import", LogGpu}, {"walk", LogGpu}, {"coherence", LogGpu},
   {"display", LogDisplay}, {"direct scanout", LogDisplay}, {"scanout", LogDisplay}, {"dpu", LogDisplay}, {"swap", LogDisplay},
   {"wifi", LogWifi}, {"qrtr", LogWifi},
   {"audio", LogAudio}, {"mic", LogAudio}, {"amps", LogAudio}, {"adsp", LogAudio},
   {"touch", LogInput}, {"hid", LogInput},
-  {"battery", LogPower}, {"charger", LogPower}, {"clocks", LogPower}, {"cpu", LogPower},
+  {"thermal", LogPower}, {"board clock", LogPower}, {"battery", LogPower}, {"charger", LogPower}, {"clocks", LogPower}, {"cpu", LogPower},
 };
 static unsigned log_tag_group(const char *tag) {
   for (unsigned i = 0; i < sizeof log_tags / sizeof log_tags[0]; ++i)
@@ -1952,13 +2466,66 @@ static size_t log_groups_filter(char *text, size_t length) {
     size_t end = in; while (end < length && text[end] != '\n') ++end;
     const size_t line = end - in + (end < length ? 1 : 0);
     if (text[in] == '[') {
-      keep = !strncmp(text + in, "[panic]", 7) || (log_group_on >> log_tag_group(text + in + 1)) & 1;
+      keep = !strncmp(text + in, "[panic]", 7) || (log_diag_on && !strncmp(text + in, "[diag]", 6)) ||
+             (log_group_on >> log_tag_group(text + in + 1)) & 1;
     } else if (text[in] == '#') keep = 1;
     if (keep) {if (out != in) memmove(text + out, text + in, line); out += line;}
     in += line;
   }
   if (out < length) memset(text + out, 0, length - out);
   return out;
+}
+
+// diag=1: the kernel messages a latency analysis needs (bl_latency_message) are copied into the slot of the round that saw them,
+// under "[diag msgs]". The message area keeps only the newest 128 KiB of the stream (a run fills it: run61 to run68), while the
+// slot ring holds slot_count rounds, longer than a run, so these lines survive a full message area. Taken from the stream ring
+// between the last complete line already scanned and the newest newline; a line still being written waits for the next round.
+static uint64_t diag_msg_scan;   // stream offset of the first byte not scanned yet
+static size_t diag_msg_lines(char *out, size_t at, size_t cap) {
+  if (!boot_log_msg_ring) return at;
+  const uint64_t ring = (uint64_t)LogMsgBlocks * LogBlock, head = msg_stream.head;
+  if (head - diag_msg_scan > ring) diag_msg_scan = head - ring;   // older bytes were overwritten in the ring
+  char line[512];
+  size_t n = 0;
+  int opened = 0;
+  for (uint64_t i = diag_msg_scan; i < head; ++i) {
+    const char c = (char)boot_log_msg_ring[i % ring];
+    if (c != '\n') {if (n < sizeof line) line[n++] = c; continue;}
+    diag_msg_scan = i + 1;
+    if (n && bl_latency_message(line, n)) {
+      if (!opened) {at = put(out, at, cap, "[diag msgs]", 12); opened = 1;}
+      at = put(out, at, cap, line, n);
+    }
+    n = 0;
+  }
+  return at;
+}
+
+// The round watch: a thread that looks at the writer every 5 s. A round running for more than 10 s is reported to the kernel message
+// buffer with its step (once per step, then every 30 s while it stays there), so a writer that never comes back still says where it
+// is: in the message stream the next round or the panic flush writes, and in the panic flush's own [boot_log] line.
+static volatile uint32_t round_watch_reports;
+static void round_watch(void *arg, wait_result_t result) {
+  (void)arg; (void)result;
+  thread_set_thread_name(current_thread(), "boot_log_watch");
+  uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
+  const char *reported = NULL;
+  uint64_t reported_at = 0;
+  while (!boot_log_panicked && boot_log_state == 2) {
+    IOSleep(5000);
+    const uint64_t began = log_round_began, now = log_ticks();
+    if (!began || now - began < 10 * f) {reported = NULL; continue;}
+    const char *where = log_where;
+    if (where == reported && now - reported_at < 30 * f) continue;
+    reported = where; reported_at = now;
+    round_watch_reports = round_watch_reports + 1;
+    printf("boot_log: round %u running %llus, in step '%s' for %llus\n", log_round_number, (unsigned long long)((now - began) / f), where,
+           (unsigned long long)((now - log_where_began) / f));
+  }
+}
+static void round_watch_start(void) {
+  thread_t thread;
+  if (kernel_thread_start_priority(round_watch, NULL, BASEPRI_KERNEL, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
 
 static void writer(void *arg, wait_result_t result) {
@@ -2009,33 +2576,55 @@ static void writer(void *arg, wait_result_t result) {
   if (diag == 1 && &boot_diag_scan && &boot_diag_stream && !PE_parse_boot_argn("diag-export", &diag_at, sizeof diag_at))
     diag_at = autoreset > 25 ? autoreset - 25 : gpu_trace == 1 ? 180 : 0;
   if (diag != 1) diag_at = 0;
+  log_diag_on = diag == 1; log_diag_export_at = diag_at;
   uint32_t errors = 0;
+  // Round times for the [log round] row: the last round's, the longest so far with its slowest step, and the rounds over 4 s.
+  uint64_t round_last = 0, round_max = 0, step_worst = 0;
+  const char *step_worst_where = "";
+  uint32_t rounds_slow = 0;
   boot_log_live = &h;
   boot_log_state = 2;
+  round_watch_start();
   for (;;) {
-    const unsigned now = (unsigned)((log_ticks() - start) / f);
+    const uint64_t began = log_ticks();
+    const unsigned now = (unsigned)((began - start) / f);
+    log_step_max = 0; log_step_max_where = "";
+    log_where_began = began; log_where = "cache loader capture";
+    log_round_number = h.rounds + 1; log_round_began = began;
     if (&boot_cache_loader_log_capture) boot_cache_loader_log_capture(now);
     int ok = 1;
     if (boot_log_panicked) return;   // the panic flush owns the window from now on
-    // Text slot, then the message buffer, then the header that makes both visible.
+    // Text slot, then the message buffer, then the header that makes both visible. The new kernel messages are taken into the stream
+    // ring first, so the slot's diag rows see them; the ring reaches the medium after the slot.
+    LOG_AT("message stream");
+    if (boot_log_msg_ring) msg_stream_round(&h.msg_resyncs);
+    LOG_AT("compose");
     memset(boot_log_buffer, 0, LogSlotBlocks * LogBlock);
-    size_t text;
-    if(diag==1)text=(size_t)snprintf((char *)boot_log_buffer,LogSlotBlocks*LogBlock,
-      "#slot %u t=%us tag=%s latency-issues=7 export-at=%us\n",h.slots_written,now,
-      &boot_progress_tag?boot_progress_tag():"",diag_at);
-    else text = log_groups_filter((char *)boot_log_buffer, compose((char *)boot_log_buffer, LogSlotBlocks * LogBlock, h.slots_written, now));
+    // diag=1 writes the normal rows too (the same groups, the same UFS writes per round as without it) plus its own: the head line's
+    // diag fields, the [diag] export row and the [diag msgs] lines. Its other material goes to the export region once (diag_thread).
+    size_t text = log_groups_filter((char *)boot_log_buffer, compose((char *)boot_log_buffer, LogSlotBlocks * LogBlock, h.slots_written, now));
+    LOG_AT("round rows");
+    {
+      char row[200];
+      snprintf(row, sizeof row, "[log round] last=%llums max=%llums slowest_step=%s/%llums slow_rounds=%u watch_reports=%u",
+               (unsigned long long)(round_last * 1000 / f), (unsigned long long)(round_max * 1000 / f), step_worst_where,
+               (unsigned long long)(step_worst * 1000 / f), rounds_slow, round_watch_reports);
+      text = put((char *)boot_log_buffer, text, LogSlotBlocks * LogBlock, row, sizeof row);
+    }
+    if (diag == 1) text = diag_msg_lines((char *)boot_log_buffer, text, LogSlotBlocks * LogBlock);
+    LOG_AT("ufs slot write");
     // The used blocks and the one holding the terminating NUL; the slot's later blocks keep an older text behind that NUL.
     uint32_t slot_used = (uint32_t)(text / LogBlock + 1);
     if (slot_used > LogSlotBlocks) slot_used = LogSlotBlocks;
     ok &= native_ufs_log_write(LogSlotFirst + (uint64_t)(h.slots_written % slot_count) * LogSlotBlocks, slot_used, boot_log_buffer);
-    if (diag == 1 || !boot_log_msg_ring) {
-      // diag=1 keeps only the latency lines, so its message area stays linear and is written whole.
+    if (!boot_log_msg_ring) {
+      // Without the stream ring the message area is linear and written whole.
       h.msg_bytes = copy_msgbuf(boot_log_buffer);
-      if(diag==1)h.msg_bytes=bl_latency_messages((char *)boot_log_buffer,h.msg_bytes);
+      LOG_AT("ufs message write");
       ok &= native_ufs_log_write(LogMsgFirst, LogMsgBlocks, boot_log_buffer);
       h.msg_mode = 0;
     } else {
-      msg_stream_round(&h.msg_resyncs);
+      LOG_AT("ufs message write");
       ok &= msg_stream_write();
       // The header names only what is on the medium.
       const uint64_t cap = (uint64_t)LogMsgBlocks * LogBlock, head = msg_stream.written;
@@ -2045,11 +2634,14 @@ static void writer(void *arg, wait_result_t result) {
     if (ok) ++h.slots_written;
     else ++h.write_errors;
     // The newest complete export is already on the medium; the header names it.
+    LOG_AT("export lock");
     IOLockLock(export_lock);
     h.export_generation = export_ready; h.export_bytes = export_ready_bytes; h.export_first = export_ready_first;
     h.diag_first = diag_first; h.diag_bytes = diag_bytes;
     IOLockUnlock(export_lock);
+    LOG_AT("diag tick");
     if (diag == 1 && &boot_diag_shot_tick) boot_diag_shot_tick(now);
+    LOG_AT("diag start");
     if (((diag_at && now >= diag_at) || (&boot_cache_input_ready && boot_cache_input_ready())) && !boot_diag_status) {
       thread_t diag;
       boot_diag_status = 1;
@@ -2058,12 +2650,16 @@ static void writer(void *arg, wait_result_t result) {
     }
     h.uptime_s = now; h.rounds = ++boot_log_rounds; h.state = boot_log_state;
     // Every 30 rounds the GPT is read back; any change stops the writer for good.
+    LOG_AT("gpt check");
     if (&native_ufs_store_gpt_check && !(h.rounds % 30)) h.gpt_last = native_ufs_store_gpt_check();
     if (boot_log_panicked) return;
     memset(boot_log_buffer, 0, LogBlock);
     memcpy(boot_log_buffer, &h, sizeof h);
+    LOG_AT("ufs header write");
     ok &= native_ufs_log_write(0, 1, boot_log_buffer);
+    LOG_AT("ufs sync");
     ok &= native_ufs_log_sync();
+    LOG_AT("autoreset");
     if (!ok) {boot_log_errors = ++errors;} else errors = 0;
     if (errors >= LogMaxErrors) {boot_log_state = 3; return;}
     if (h.gpt_last != h.gpt_open) {boot_log_state = 4; return;}
@@ -2091,6 +2687,14 @@ static void writer(void *arg, wait_result_t result) {
         strlcat(boot_log_reset_result, tail, sizeof boot_log_reset_result);
       }
     }
+    LOG_AT("sleep");
+    {
+      const uint64_t took = log_ticks() - began;
+      round_last = took;
+      if (took > round_max) {round_max = took; step_worst = log_step_max; step_worst_where = log_step_max_where;}
+      if (took > 4 * f) ++rounds_slow;
+    }
+    log_round_began = 0;
     IOSleep(LogPeriodMs);
   }
 }
@@ -2106,6 +2710,30 @@ void boot_log_panic_flush(void) {
   boot_log_panicked = 1;
   uint32_t n = copy_msgbuf(boot_log_panic_buffer);
   const uint32_t cap = LogMsgBlocks * LogBlock;
+  // The writer's state at the panic, always, and a marker when the panic screen left no text (run68 ended in this flush with none):
+  // the round in progress (0 = between rounds), how long it had run and the step it was in.
+  {
+    uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
+    const uint64_t t = log_ticks(), began = log_round_began;
+    char line[260];
+    // The GPU pool runs being zero-filled at the panic, by CPU.
+    char fills[160] = "";
+    if (&native_adreno_pool_scrubbing)
+      for (unsigned c = 0, k = 0; c < 16; ++c)
+        if (native_adreno_pool_scrubbing[c][0] && k < sizeof fills - 40)
+          k += (unsigned)snprintf(fills + k, sizeof fills - k, " cpu%u %llx+%llx", c, (unsigned long long)native_adreno_pool_scrubbing[c][0],
+                                  (unsigned long long)native_adreno_pool_scrubbing[c][1]);
+    const int len = snprintf(line, sizeof line, "\n[boot_log] at panic: round %u %s %llums, step '%s' for %llums, watch reports %u, gpu pool fill%s%s\n",
+                             began ? log_round_number : 0, began ? "running" : "idle", began ? (unsigned long long)((t - began) * 1000 / f) : 0ull,
+                             log_where, (unsigned long long)((t - log_where_began) * 1000 / f), round_watch_reports, fills[0] ? fills : " none",
+                             &boot_progress_panic_text && boot_progress_panic_text[0] ? "" : "\n[panic] (the panic screen left no text)");
+    if (len > 0) {
+      const uint32_t l = (uint32_t)len < sizeof line ? (uint32_t)len : (uint32_t)sizeof line - 1;
+      if (n > cap - l - 2100) {const uint32_t drop = n - (cap - l - 2100); memmove(boot_log_panic_buffer, boot_log_panic_buffer + drop, n - drop); n -= drop;}
+      memcpy(boot_log_panic_buffer + n, line, l);
+      n += l;
+    }
+  }
   if (&boot_progress_panic_text && boot_progress_panic_text[0]) {
     uint32_t len = (uint32_t)strnlen(boot_progress_panic_text, 2048);
     if (n > cap - len - 10) {   // a full buffer gives up its oldest lines to the panic text
@@ -2127,6 +2755,22 @@ void boot_log_panic_flush(void) {
   native_ufs_log_sync();
 }
 
+// autoreset: mark the bootloader cell (any restart is fastboot) and arm the hypervisor's watchdog, once. It runs as the first thing
+// after the scheduler starts (EARLY_BOOT), before the kernel adopts memory or starts IOKit, so a panic from there on brings the tablet
+// back to fastboot; the first tick calls it again in case the startup hook did not run.
+static void boot_reset_arm(void) {
+  static int armed;
+  uint32_t autoreset = 0;
+  if (armed) return;
+  armed = 1;
+  if (PE_parse_boot_argn("autoreset", &autoreset, sizeof autoreset) && autoreset && &boot_reset_probe &&
+      boot_reset_probe(boot_log_reset_probe_text, sizeof boot_log_reset_probe_text) == 0) {
+    if (&boot_reset_mark_bootloader) boot_reset_mark_bootloader(boot_log_reset_mark, sizeof boot_log_reset_mark);
+    if (&boot_reset_watchdog) boot_reset_watchdog(autoreset + 60, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
+  }
+}
+STARTUP(EARLY_BOOT, STARTUP_RANK_FIRST, boot_reset_arm);
+
 // Called by the board page's monitor once a second; starts the writer the first time when log=1.
 void boot_log_tick(unsigned now) {
   (void)now;
@@ -2136,12 +2780,7 @@ void boot_log_tick(unsigned now) {
   // after the start, before UFS and this log exist (int-229: a duplicate class at PE_lockdown_iokit). So the first tick, independent of
   // log, marks the cell (any restart is fastboot) and arms the hypervisor's watchdog, which bites a minute after the pings stop:
   // after the autoreset deadline, or when a panic parks the cores.
-  uint32_t autoreset = 0;
-  if (PE_parse_boot_argn("autoreset", &autoreset, sizeof autoreset) && autoreset && &boot_reset_probe &&
-      boot_reset_probe(boot_log_reset_probe_text, sizeof boot_log_reset_probe_text) == 0) {
-    if (&boot_reset_mark_bootloader) boot_reset_mark_bootloader(boot_log_reset_mark, sizeof boot_log_reset_mark);
-    if (&boot_reset_watchdog) boot_reset_watchdog(autoreset + 60, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
-  }
+  boot_reset_arm();
   uint32_t mode = 0;
   if (!PE_parse_boot_argn("log", &mode, sizeof mode) || mode != 1) return;
   log_groups_read();
@@ -2158,8 +2797,7 @@ void boot_log_tick(unsigned now) {
   export_lock = IOLockAlloc();
 #if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
   uint32_t diag = 0;
-  // The process stack worker: with diag=1, or on its own with boot-ui-trace=1 (the worker checks that switch). diag=1 keeps only
-  // the latency lines of the message buffer and no slot sections, so stacks next to the full log need boot-ui-trace=1 alone.
+  // The process stack worker: with diag=1, or on its own with boot-ui-trace=1 (the worker checks that switch).
   uint32_t trace = 0;
   if ((PE_parse_boot_argn("diag", &diag, sizeof diag) && diag == 1) ||
       (PE_parse_boot_argn("boot-ui-trace", &trace, sizeof trace) && trace == 1)) boot_process_start();

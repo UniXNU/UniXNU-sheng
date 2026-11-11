@@ -132,16 +132,135 @@ void wn8030_release_reports(uint8_t keyboard[WN8030_KEYBOARD_REPORT], uint8_t co
     zero(touchpad, WN8030_TOUCHPAD_REPORT); touchpad[0] = WN8030_TOUCHPAD_ID;
 }
 
+struct wn8030_census native_keyboard_census = {.palm_x = {-1, -1}, .palm_y = {-1, -1}};
+
+void wn8030_touchpad_census(struct wn8030_census *census, const uint8_t in[WN8030_TOUCHPAD_REPORT])
+{
+    uint32_t confident = 0, palms = 0, mask = 0, beyond = 0;
+    for (uint32_t f = 0; f < WN8030_TOUCHPAD_FINGERS; ++f) {
+        const uint8_t *p = in + 2 + 6 * f;
+        if (!(p[0] & 1u)) continue;
+        if (f >= in[WN8030_TOUCHPAD_REPORT - 1]) beyond = 1;
+        if (p[0] & 4u) ++confident;
+        else {++palms; mask |= 1u << f;}
+    }
+    ++census->reports;
+    census->beyond += beyond;
+    if (in[WN8030_TOUCHPAD_REPORT - 1] > WN8030_TOUCHPAD_FINGERS) ++census->more;
+    if (!palms) {
+        if (confident) ++census->fingers;
+        else ++census->idle;
+        census->last_palms = 0;
+        return;
+    }
+    for (uint32_t f = 0; f < WN8030_TOUCHPAD_FINGERS; ++f) {
+        if (!(mask & 1u << f)) continue;
+        const uint8_t *p = in + 2 + 6 * f;
+        const uint16_t x = (uint16_t)(p[2] | p[3] << 8), y = (uint16_t)(p[4] | p[5] << 8);
+        if (census->palm_x[0] < 0 || x < census->palm_x[0]) census->palm_x[0] = x;
+        if (x > census->palm_x[1]) census->palm_x[1] = x;
+        if (census->palm_y[0] < 0 || y < census->palm_y[0]) census->palm_y[0] = y;
+        if (y > census->palm_y[1]) census->palm_y[1] = y;
+        if (!confident && (census->last_palms & 1u << f) && census->last_id[f] == p[1]) {
+            ++census->palm_pairs;
+            census->palm_travel += (uint32_t)(x > census->last_x[f] ? x - census->last_x[f] : census->last_x[f] - x) +
+                                   (uint32_t)(y > census->last_y[f] ? y - census->last_y[f] : census->last_y[f] - y);
+        }
+        census->last_id[f] = p[1]; census->last_x[f] = x; census->last_y[f] = y;
+    }
+    if (confident) {
+        ++census->mixed;
+        census->last_palms = 0;
+        return;
+    }
+    census->last_palms = (uint8_t)mask;
+    ++census->palms[palms - 1];
+    uint32_t nth = 0;
+    for (uint32_t k = 0; k < WN8030_TOUCHPAD_FINGERS; ++k) nth += census->palms[k];
+    if (census->samples < WN8030_PALM_SAMPLES && nth == 1u << (2 * census->samples)) {
+        uint8_t *kept = census->sample[census->samples++];
+        for (uint32_t i = 0; i < WN8030_TOUCHPAD_REPORT; ++i) kept[i] = in[i];
+    }
+}
+
+/* 1: a report's only touching contact is kept although the controller gives it no confidence. On macOS the controller marks
+ * every contact that way for 3 to 28 s at first use and the pointer did not move; the cause is not known, so this stands in for
+ * it: a single contact is taken as the finger, and two or more without confidence are still lifted as resting hands. */
+int wn8030_keep_lone_contact = 0;
+
 unsigned wn8030_touchpad_report(const uint8_t in[WN8030_TOUCHPAD_REPORT], uint8_t out[WN8030_TOUCHPAD_REPORT])
 {
-    unsigned lifted = 0;
+    unsigned lifted = 0, touching = 0;
+    for (uint32_t f = 0; f < WN8030_TOUCHPAD_FINGERS; ++f) if (in[2 + 6 * f] & 1u) ++touching;
+    wn8030_touchpad_census(&native_keyboard_census, in);
     for (uint32_t i = 0; i < WN8030_TOUCHPAD_REPORT; ++i) out[i] = in[i];
     for (uint32_t f = 0; f < WN8030_TOUCHPAD_FINGERS; ++f) {
         uint8_t *p = out + 2 + 6 * f;
         uint32_t y = (uint32_t)p[4] | (uint32_t)p[5] << 8;
         if (y > WN8030_TOUCHPAD_Y_MAX) y = WN8030_TOUCHPAD_Y_MAX;
         put_le16(p + 4, WN8030_TOUCHPAD_Y_MAX - y);
-        if ((p[0] & 1u) && !(p[0] & 4u)) {p[0] = (uint8_t)(p[0] & ~3u); ++lifted;}
+        if ((p[0] & 1u) && !(p[0] & 4u) && !(wn8030_keep_lone_contact && touching == 1)) {p[0] = (uint8_t)(p[0] & ~3u); ++lifted;}
     }
     return lifted;
 }
+
+/* 3048 counts span 9.35 cm (828 per inch); half of that is a common pointer resolution, and 48 counts (1.5 mm) make one scroll step. */
+#define WN8030_POINTER_DIVIDE 2
+#define WN8030_SCROLL_COUNTS 48
+static int32_t pointer_take(int32_t *pending, int32_t unit, int32_t limit)
+{
+    int32_t steps = *pending / unit;
+    if (steps > limit) steps = limit;
+    if (steps < -limit) steps = -limit;
+    *pending -= steps * unit;
+    return steps;
+}
+unsigned wn8030_pointer_report(struct wn8030_pointer *state, const uint8_t touchpad[WN8030_TOUCHPAD_REPORT],
+                               uint8_t out[WN8030_POINTER_REPORT])
+{
+    uint32_t fingers = 0;
+    uint8_t ids[WN8030_TOUCHPAD_FINGERS] = {0, 0, 0};
+    int32_t x = 0, y = 0;
+    for (uint32_t f = 0; f < WN8030_TOUCHPAD_FINGERS; ++f) {
+        const uint8_t *p = touchpad + 2 + 6 * f;
+        if (!(p[0] & 1u)) continue;
+        /* The ids in ascending order, whatever slots the controller keeps them in. */
+        uint32_t at = fingers;
+        for (; at && ids[at - 1] > p[1]; --at) ids[at] = ids[at - 1];
+        ids[at] = p[1];
+        x += (int32_t)((uint32_t)p[2] | (uint32_t)p[3] << 8);
+        y += (int32_t)((uint32_t)p[4] | (uint32_t)p[5] << 8);
+        ++fingers;
+    }
+    if (fingers) {x /= (int32_t)fingers; y /= (int32_t)fingers;}
+    int same = fingers == state->fingers;
+    for (uint32_t f = 0; same && f < fingers; ++f) same = ids[f] == state->ids[f];
+    /* Fingers that came, went or changed places start from where they are: no jump. */
+    if (fingers && same) {
+        /* In the report as it arrives here Y grows away from the user (seen on the tablet: with Y taken as growing downwards the
+         * pointer went down when the finger went up), so the pointer's Y is its negative and moving up scrolls up. */
+        const int32_t dx = x - state->x, dy = state->y - y;
+        if (fingers == 1) {state->move_x += dx; state->move_y += dy;}
+        else {state->scroll_x += dx; state->scroll_y -= dy;}
+    }
+    if (fingers != state->fingers) state->move_x = state->move_y = state->scroll_x = state->scroll_y = 0;
+    state->fingers = (uint8_t)fingers; state->x = x; state->y = y;
+    for (uint32_t f = 0; f < WN8030_TOUCHPAD_FINGERS; ++f) state->ids[f] = ids[f];
+    /* The click is the button it began as for as long as it is held: fingers that lift or land during the press do not turn a
+     * right click into a left one or a drag into a right click. */
+    uint8_t buttons = 0;
+    if (touchpad[1] & 1u) {
+        if (!state->click) state->click = fingers >= 2 ? 2u : 1u;
+        buttons |= state->click;
+    } else state->click = 0;
+    if (touchpad[1] & 2u) buttons |= 2u;
+    const int32_t mx = pointer_take(&state->move_x, WN8030_POINTER_DIVIDE, 32767), my = pointer_take(&state->move_y, WN8030_POINTER_DIVIDE, 32767);
+    const int32_t sy = pointer_take(&state->scroll_y, WN8030_SCROLL_COUNTS, 127), sx = pointer_take(&state->scroll_x, WN8030_SCROLL_COUNTS, 127);
+    if (!mx && !my && !sx && !sy && buttons == state->buttons) return 0;
+    state->buttons = buttons;
+    out[0] = WN8030_POINTER_ID; out[1] = buttons;
+    put_le16(out + 2, (uint16_t)(int16_t)mx); put_le16(out + 4, (uint16_t)(int16_t)my);
+    out[6] = (uint8_t)(int8_t)sy; out[7] = (uint8_t)(int8_t)sx;
+    return WN8030_POINTER_REPORT;
+}
+

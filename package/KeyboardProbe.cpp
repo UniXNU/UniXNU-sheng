@@ -594,6 +594,8 @@ extern "C" void sheng_keyboard_probe(void) {
     if (!kb->busLock) {IOFreeType(kb, Keyboard); fail(8, -12); return;}
     unsigned khz = 1000, backlight = 0;
     PE_parse_boot_argn("keyboard-khz", &khz, sizeof khz);
+    uint32_t lone = 0;
+    if (PE_parse_boot_argn("keyboard-lone", &lone, sizeof lone)) wn8030_keep_lone_contact = lone == 1;
     PE_parse_boot_argn("keyboard-backlight", &backlight, sizeof backlight);
     kb->khz = khz == 100 || khz == 400 ? khz : 1000;
     kb->backlight = static_cast<uint8_t>(backlight > WN8030_BACKLIGHT_MAX ? WN8030_BACKLIGHT_MAX : backlight);
