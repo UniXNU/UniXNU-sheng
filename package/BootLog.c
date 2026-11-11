@@ -88,6 +88,7 @@ extern volatile uint32_t native_gpu_pool_reserved_kib __attribute__((weak_import
 extern volatile char native_gpu_row_log[40][52] __attribute__((weak_import));
 extern volatile uint32_t native_gpu_row_count __attribute__((weak_import)), native_gpu_power_stage __attribute__((weak_import));
 extern volatile uint32_t native_adreno_kernel_alloc_fail[6] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_switch_timeout[2][30] __attribute__((weak_import)), native_adreno_switch_timeouts __attribute__((weak_import));
 extern uint32_t ml_outside_memory_pages __attribute__((weak_import)), ml_outside_memory_refused __attribute__((weak_import));
 extern volatile uint64_t native_adreno_pool_scrubbing[16][2] __attribute__((weak_import));
 extern volatile int native_gpu_addon_written __attribute__((weak_import));
@@ -2272,6 +2273,16 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if (boot_log_reset_mark[0]) at = put(out, at, cap, boot_log_reset_mark, sizeof boot_log_reset_mark);
     if (boot_log_reset_watchdog[0]) at = put(out, at, cap, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
     if (boot_log_reset_result[0]) at = put(out, at, cap, boot_log_reset_result, sizeof boot_log_reset_result);
+  }
+  // Ring switches the CP never finished (the first two): the CP's stall words as in [gpu stall], then the ring's progress words.
+  if (log_gpu_on && &native_adreno_switch_timeout && &native_adreno_switch_timeouts && native_adreno_switch_timeouts) {
+    for (unsigned e = 0; e < 2 && e < native_adreno_switch_timeouts; ++e) {
+      char row[360];
+      int n = snprintf(row, sizeof row, "[gpu switch timeout] %u of %u:", e + 1, native_adreno_switch_timeouts);
+      for (unsigned k = 0; k < 30 && n > 0 && (size_t)n < sizeof row; ++k)
+        n += snprintf(row + n, sizeof row - (size_t)n, "%s%x", k == 24 ? " | " : " ", native_adreno_switch_timeout[e][k]);
+      at = put(out, at, cap, row, sizeof row);
+    }
   }
   // The GPU bring-up's rows in the order they were set (the shown rows are shared and overwritten), and its stage.
   if (log_gpu_on && &native_gpu_row_log && &native_gpu_row_count && &native_gpu_power_stage) {
