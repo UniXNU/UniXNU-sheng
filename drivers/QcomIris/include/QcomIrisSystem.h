@@ -12,6 +12,9 @@ extern "C" {
 /* Each writes one message into buffer and returns its size (0 when it does not fit). */
 uint32_t qcom_iris_system_init(uint8_t *buffer, uint32_t capacity, uint32_t *header_id, uint32_t *packet_id);
 uint32_t qcom_iris_system_image_version(uint8_t *buffer, uint32_t capacity, uint32_t *header_id, uint32_t *packet_id);
+/* The firmware's debug messages: the debug configuration (0: the default) and the message kinds it writes to the debug queue
+ * (1 errors, 2 fatal, 8 high). The firmware writes none until it is told a level. */
+uint32_t qcom_iris_system_debug(uint8_t *buffer, uint32_t capacity, uint32_t *header_id, uint32_t *packet_id, uint32_t level);
 uint32_t qcom_iris_system_interframe_powercollapse(uint8_t *buffer, uint32_t capacity, uint32_t *header_id, uint32_t *packet_id);
 uint32_t qcom_iris_system_pc_prep(uint8_t *buffer, uint32_t capacity, uint32_t *header_id, uint32_t *packet_id);
 

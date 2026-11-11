@@ -68,6 +68,7 @@ struct qcom_iris_core {
     char version[128];
     uint32_t last_error;              /* the type of the last system error */
     unsigned recoveries;
+    uint32_t debug_level;   /* the firmware debug message kinds asked for at init (qcom_iris_system_debug); 0: none */
     uint8_t message[QCOM_IRIS_CORE_PKT_SIZE];
     uint8_t command[512];
 };

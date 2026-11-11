@@ -29,6 +29,18 @@ uint32_t qcom_iris_system_init(uint8_t *buffer, uint32_t capacity, uint32_t *hea
     return qcom_iris_hfi_size(&w);
 }
 
+uint32_t qcom_iris_system_debug(uint8_t *buffer, uint32_t capacity, uint32_t *header_id, uint32_t *packet_id, uint32_t level)
+{
+    enum {DebugConfig = 0x0300000a, DebugLogLevel = 0x0300000b};   /* HFI_PROP_DEBUG_CONFIG, HFI_PROP_DEBUG_LOG_LEVEL */
+    struct qcom_iris_hfi_writer w;
+    qcom_iris_hfi_begin(&w, buffer, capacity, 0, (*header_id)++);
+    uint32_t v = 0;
+    qcom_iris_hfi_add(&w, DebugConfig, HFI_HOST_FLAGS_NONE, HFI_PAYLOAD_U32_ENUM, HFI_PORT_NONE, (*packet_id)++, &v, 4);
+    v = level;
+    qcom_iris_hfi_add(&w, DebugLogLevel, HFI_HOST_FLAGS_NONE, HFI_PAYLOAD_U32_ENUM, HFI_PORT_NONE, (*packet_id)++, &v, 4);
+    return qcom_iris_hfi_size(&w);
+}
+
 uint32_t qcom_iris_system_image_version(uint8_t *buffer, uint32_t capacity, uint32_t *header_id, uint32_t *packet_id)
 {
     struct qcom_iris_hfi_writer w;
