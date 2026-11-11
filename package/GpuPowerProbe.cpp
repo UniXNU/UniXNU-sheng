@@ -1938,7 +1938,10 @@ void gpuDcvsThread(void *, wait_result_t) {
         lastBusy = busy; lastT = t;
         if (!ns) continue;
         winBusy += busyNs; winNs += ns; atLevel[cur] += ns;
-        const bool active = busyNs > 0 || gpuRd(A740_CP_RB_RPTR) != gpuRd(A740_CP_RB_WPTR);
+        // Work in this window: 1 % of it busy or more, or jobs in the ring. A window with a trace of busy time and no job (every
+        // idle window has one: 298 of 298 in a 10 s idle stretch, 1 us each) is rest, or the GPU never rests, the wake boost never
+        // fires and the first job after a pause runs its first 16 ms at the floor.
+        const bool active = busyNs * 100 >= ns || gpuRd(A740_CP_RB_RPTR) != gpuRd(A740_CP_RB_WPTR);
         ++seen;
         if (busyNs) {
             ++seenBusy;
