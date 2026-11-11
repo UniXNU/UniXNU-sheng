@@ -132,6 +132,7 @@ lck_grp_t *gGrp;
 lck_mtx_t *gLock;
 bool gPower = true;
 bool gLinkSuppressed;   // hide the old station snapshot while an explicit disconnect drains
+bool gKeepJoin;         // wifi-aj=2: the unattended test join owns the association; the wireless daemon's disconnects are not carried out
 bool gKeyed;   // the last join used a passphrase
 uint32_t gRxFrames, gRxErrors; int gRxLastError;
 uint32_t gRxNoBuffer, gRxChains, gRxLongest;   // frames dropped for want of a buffer, frames that took a chain, the longest frame
@@ -200,6 +201,9 @@ void post_association_result() {
   } else post_event(kEvAssocDone, nullptr, 0);
 }
 void disconnect_user() {
+  // The unattended test join (wifi-aj=2) keeps its network: the wireless daemon, which did not make this association, asks to
+  // leave it within seconds (run108: joined three times, "link lost: reason 3" four times, no address).
+  if (gKeepJoin) { log(6, "wifi-net: a disconnect request is not carried out (wifi-aj=2)"); return; }
   const bool pending = __atomic_exchange_n(&gJoinPending, false, __ATOMIC_ACQ_REL);
   gUserJoin = true; gLinkSuppressed = true; gAssocResult = kAssocFailed;
   nw_wifi_disconnect();
@@ -913,11 +917,15 @@ void autoJoin(void *, wait_result_t) {
     while (i < length && file[i] != '\n') ++i; ++i; o = 0;
     while (i < length && file[i] != '\n' && o < 64) psk[o++] = static_cast<char>(file[i++]); }
   const bool hasPsk = psk[0] != 0; const size_t sl = strlen(ssid), pl = strlen(psk);
+  uint32_t mode = 0; PE_parse_boot_argn("wifi-aj", &mode, sizeof mode);
+  const bool keep = mode == 2;
+  gKeepJoin = keep;
   log(6, "wifi-net: auto join of a network with a %zu byte name and a %zu byte key", sl, pl);
   for (unsigned round = 0; round < 40; ++round) {
     IOSleep(3000);
     log_busy();
-    if (gUserJoin) { log(6, "wifi-net: auto join stops: the wireless daemon took over"); break; }
+    // wifi-aj=2 keeps joining beside the wireless daemon: an unattended run needs the network before that daemon can join one.
+    if (gUserJoin && !keep) { log(6, "wifi-net: auto join stops: the wireless daemon took over"); break; }
     nw_wifi_status st; nw_wifi_status_get(&st);
     if (st.state == NW_STA_UP) continue;   // the traffic thread logs the address and the packets
     if (st.state >= NW_STA_AUTH) continue;
