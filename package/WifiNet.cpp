@@ -79,7 +79,11 @@ enum {
   kCardCaps = 12, kState = 13, kPhyMode = 14, kOpMode = 15, kRssi = 16, kNoise = 17, kPower = 19, kAssociate = 20, kAssociateResult = 21,
   kDisassociate = 22, kSupportedChannels = 27, kLocale = 28, kDeauth = 29, kDriverVersion = 43, kHardwareVersion = 44, kCountryCode = 51,
   kRadioInfo = 54, kScanReqMultiple = 86, kScanCacheClear = 90, kCurrentNetwork = 103, kChannelsInfo = 207, kHwSupportedChannels = 254,
+  kAbortScan = 382,
 };
+// The scan request's type field (offset 0x34): 3 asks for the results already held; the framework reads them at once, without waiting
+// for the scan-done event.
+enum { kScanTypeCached = 3 };
 // events
 enum { kEvPowerChanged = 1, kEvSsidChanged = 2, kEvBssidChanged = 3, kEvLinkChanged = 4, kEvAssocDone = 9, kEvScanDone = 10 };
 // results of an association, as the framework numbers them
@@ -578,6 +582,10 @@ int apple80211(bool set, apple80211req &rq) {
       }
       uint8_t buf[0x80]; if (copy_in(rq, buf, sizeof buf)) return EFAULT;
       uint32_t ssidLength; memcpy(&ssidLength, buf + 16, 4); const uint8_t *ssid = buf + 20;
+      uint32_t scanType = 0; if (type == kScanReq) memcpy(&scanType, buf + 0x34, 4);
+      { static unsigned said; if (said++ < 16) log(6, "wifi-net: scan request: scan type %u, ssid length %u, %d networks held", scanType, ssidLength, nw_wifi_bss_count()); }
+      // The held results are asked for: the list is read from its start and no scan runs (none held yet: a scan, as for the other types).
+      if (scanType == kScanTypeCached && nw_wifi_bss_count() > 0) { gScanCursor = 0; gResultsShown = 24; return 0; }
       // joining or joined: a scan takes the radio off channel for seconds and the access point's beacons and handshake frames are missed, so
       // the daemon gets the last results instead
       if (st.state >= NW_STA_AUTH && nw_wifi_bss_count() > 0) {
@@ -625,6 +633,7 @@ int apple80211(bool set, apple80211req &rq) {
       return r ? EINVAL : 0; }
     case kDisassociate: case kDeauth: log(6, "wifi-net: leave"); disconnect_user(); return 0;
     case kScanCacheClear: case kLocale: case kCountryCode: case kPowerSave: case kAuthType: case kCipherKey: return 0;
+    case kAbortScan: return 0;   // accepted; a running scan still runs to its end (seconds) and reports it
     default: return EOPNOTSUPP;
     }
   }
@@ -635,7 +644,9 @@ int apple80211(bool set, apple80211req &rq) {
   case kAuthType: w[0] = 1; w[1] = 1; w[2] = gKeyed ? 0x10 : 0; w[3] = 0; return copy_out(rq, w, 16);   // {version, lower: open system, upper: WPA2 personal, extension}
   case kPowerSave: return answer_value(rq, 0);
   case kCardCaps: {   // a bitmap, bit n in byte n / 8: AES, AES-CCM, power management, short slot and preamble, WPA2, WME, short guard interval at 20 MHz
-    static const uint8_t has[] = { 2, 3, 6, 9, 10, 14, 17, 19 };
+    // and 46: the end of a scan is reported by the scan-done event. The framework's scan (IO80211 26C5035r, Apple80211Scan) waits for
+    // that event, up to 20 s, only with this bit; without it the results are read the moment the request returns, before the radio scanned.
+    static const uint8_t has[] = { 2, 3, 6, 9, 10, 14, 17, 19, 46 };
     for (uint8_t b : has) out.raw[b / 8] |= static_cast<uint8_t>(1u << (b % 8));
     return answer_bytes(rq, out.raw, 12); }
   case kPhyMode: w[0] = 1; w[1] = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20 | 0x40; w[2] = st.state == NW_STA_UP ? 0x8 : 0; return copy_out(rq, w, 12);
@@ -694,7 +705,8 @@ errno_t if_ioctl(ifnet_t ifp, unsigned long cmd, void *data) {
           cmd == SIOCSA80211 ? 'S' : 'G', e, current.state,
           __atomic_load_n(&gJoinPending, __ATOMIC_ACQUIRE), gAssocResult, current.signal_dbm);
     }
-    if (shown < 300 || first || joinState) { ++shown; log(6, "wifi-net: request %u: type %d %s len %u val %d -> %d (len %u val %d)", shown, type, cmd == SIOCSA80211 ? "set" : "get", len, val, e, rq->req_len, rq->req_val); }
+    // (uc: through the interface's user client, which hands the caller this result; ioctl: the caller sees -1 and errno)
+    if (shown < 300 || first || joinState) { ++shown; log(6, "wifi-net: request %u: %s type %d %s len %u val %d -> %d (len %u val %d)", shown, ifp == kKernelRequest ? "uc" : "ioctl", type, cmd == SIOCSA80211 ? "set" : "get", len, val, e, rq->req_len, rq->req_val); }
     return e;
   }
   case SIOCGIFMEDIA: {
