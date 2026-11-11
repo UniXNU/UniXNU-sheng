@@ -22,6 +22,7 @@
 #include <IOKit/IOLib.h>
 extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
 extern void boot_cache_loader_log_capture(unsigned) __attribute__((weak_import));
+extern void boot_desktop_log_capture(unsigned) __attribute__((weak_import));
 extern uint32_t boot_cache_input_ready(void) __attribute__((weak_import));
 
 #if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
@@ -90,6 +91,10 @@ extern volatile uint32_t native_gpu_row_count __attribute__((weak_import)), nati
 extern volatile uint32_t native_adreno_kernel_alloc_fail[6] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_switch_timeout[2][30] __attribute__((weak_import)), native_adreno_switch_timeouts __attribute__((weak_import));
 extern uint32_t ml_outside_memory_pages __attribute__((weak_import)), ml_outside_memory_refused __attribute__((weak_import));
+extern unsigned int vm_page_free_count __attribute__((weak_import)), vm_page_active_count __attribute__((weak_import)),
+    vm_page_inactive_count __attribute__((weak_import)), vm_page_wire_count __attribute__((weak_import)),
+    vm_page_wire_count_initial __attribute__((weak_import)), vm_page_wire_count_on_boot __attribute__((weak_import));
+extern volatile uint32_t armcpu_quiesce_calls __attribute__((weak_import)), armcpu_halt_calls __attribute__((weak_import));
 extern volatile uint64_t native_adreno_pool_scrubbing[16][2] __attribute__((weak_import));
 extern volatile int native_gpu_addon_written __attribute__((weak_import));
 extern volatile int native_gpu_addon_same __attribute__((weak_import));
@@ -109,6 +114,11 @@ extern volatile int native_gpu_addon5_status __attribute__((weak_import));
 extern volatile int native_gpu_addon3_status __attribute__((weak_import));
 extern volatile int native_cryptex_os_stage __attribute__((weak_import));
 extern volatile int native_cryptex_os_status __attribute__((weak_import));
+extern volatile int native_owner_app_cryptex_stage __attribute__((weak_import));
+extern volatile int native_owner_app_cryptex_status __attribute__((weak_import));
+extern volatile int native_owner_vm_volume_status __attribute__((weak_import));
+extern volatile uint32_t armdt_platform_power_type __attribute__((weak_import));
+extern volatile int64_t armdt_platform_power_result __attribute__((weak_import));
 extern volatile int native_gestalt_cache_status __attribute__((weak_import));
 extern volatile int native_ls_store_status __attribute__((weak_import));
 extern volatile uint64_t native_data_persist_present __attribute__((weak_import));
@@ -2297,6 +2307,31 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
   }
   // DRAM outside the kernel's window that became VM memory: pages adopted, and pages left alone after a refused load.
+  if (&native_owner_app_cryptex_stage && &native_owner_app_cryptex_status) {
+    char row[128];
+    snprintf(row, sizeof row, "[cryptex app] stage=%d status=%d vm-volume=%d", native_owner_app_cryptex_stage,
+             native_owner_app_cryptex_status, &native_owner_vm_volume_status ? native_owner_vm_volume_status : -1);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  if (&armdt_platform_power_type && &armdt_platform_power_result) {
+    char row[96];
+    snprintf(row, sizeof row, "[platform power] type=%u returned=%lld", armdt_platform_power_type,
+             (long long)armdt_platform_power_result);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  if (&vm_page_wire_count && &vm_page_free_count && &vm_page_active_count && &vm_page_inactive_count) {
+    char row[160];
+    snprintf(row, sizeof row, "[vm pages] free=%u active=%u inactive=%u wired=%u initial=%u boot=%u page-bytes=%u",
+             vm_page_free_count, vm_page_active_count, vm_page_inactive_count, vm_page_wire_count,
+             &vm_page_wire_count_initial ? vm_page_wire_count_initial : 0,
+             &vm_page_wire_count_on_boot ? vm_page_wire_count_on_boot : 0, (unsigned)PAGE_SIZE);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  if (&armcpu_quiesce_calls && &armcpu_halt_calls) {
+    char row[96];
+    snprintf(row, sizeof row, "[cpu power] quiesce=%u halt=%u", armcpu_quiesce_calls, armcpu_halt_calls);
+    at = put(out, at, cap, row, sizeof row);
+  }
   if (&ml_outside_memory_pages && &ml_outside_memory_refused) {
     char row[100];
     snprintf(row, sizeof row, "[memory outside] adopted %u pages (%u MiB), left %u pages", ml_outside_memory_pages,
@@ -2592,6 +2627,7 @@ static void writer(void *arg, wait_result_t result) {
     log_where_began = began; log_where = "cache loader capture";
     log_round_number = h.rounds + 1; log_round_began = began;
     if (&boot_cache_loader_log_capture) boot_cache_loader_log_capture(now);
+    if (&boot_desktop_log_capture) boot_desktop_log_capture(now);
     int ok = 1;
     if (boot_log_panicked) return;   // the panic flush owns the window from now on
     // Text slot, then the message buffer, then the header that makes both visible. The new kernel messages are taken into the stream

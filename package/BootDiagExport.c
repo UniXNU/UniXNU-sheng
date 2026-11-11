@@ -15,6 +15,53 @@
 #include <pexpert/pexpert.h>
 
 extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
+/* Mirror the bounded desktop report into the existing persistent log transport. */
+void boot_desktop_log_capture(unsigned now) {
+  static uint64_t consumed;
+  static unsigned next_read;
+  static char *buffer;
+  uint32_t enabled = 0;
+  enum {capacity = 8192};
+  if (!PE_parse_boot_argn("desktop-log", &enabled, sizeof enabled) || enabled != 1 || !&native_wifi_logf) return;
+  if (now > 600) {
+    if (buffer) {IOFreeData(buffer, capacity); buffer = NULL;}
+    return;
+  }
+  if (now < 10 || now < next_read) return;
+  next_read = now + 4;
+  vfs_context_t ctx = vfs_context_kernel();
+  vnode_t vp = NULLVP;
+  int error = vnode_open("/private/var/log/sheng-desktop-diagnostics.log", FREAD, 0, 0, &vp, ctx);
+  struct vnode_attr va;
+  VATTR_INIT(&va); VATTR_WANTED(&va, va_data_size);
+  if (!error) error = vnode_getattr(vp, &va, ctx);
+  if (!error && va.va_data_size < consumed) consumed = 0;
+  if (!error && va.va_data_size > consumed) {
+    if (!buffer) buffer = IOMallocData(capacity);
+    if (buffer) {
+      uint64_t offset = va.va_data_size - consumed > capacity ? va.va_data_size - capacity : consumed;
+      int length = (int)(va.va_data_size - offset), resid = length;
+      error = vn_rdwr(UIO_READ, vp, buffer, length, (off_t)offset, UIO_SYSSPACE,
+          IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
+      if (!error && resid >= 0 && resid <= length) {
+        length -= resid;
+        // Leave a partial final line for the next poll.
+        int complete = length;
+        while (complete && buffer[complete - 1] != '\n') --complete;
+        for (int at = 0; at < complete;) {
+          int n = 0;
+          while (at + n < complete && n < 76 && buffer[at + n] != '\n') ++n;
+          if (n) native_wifi_logf(6, "desktop-file: %.*s", n, buffer + at);
+          at += n;
+          if (at < complete && buffer[at] == '\n') ++at;
+        }
+        consumed = offset + (unsigned)complete;
+      }
+    }
+  }
+  if (vp) vnode_close(vp, FREAD, ctx);
+}
+
 /* Opt-in capture of the cache loader's own error log. Runs on the log writer,
  * reads one fixed file and stops after two minutes; ordinary boots do no I/O. */
 void boot_cache_loader_log_capture(unsigned now) {
