@@ -507,7 +507,11 @@ int answer_value(apple80211req &rq, uint32_t value) {
 // The raw bytes, their length in req_len.
 int answer_bytes(apple80211req &rq, const void *src, uint32_t size) {
   if (!rq.req_data) return EINVAL;
-  const uint32_t n = rq.req_len < size ? rq.req_len : size; rq.req_len = size; return copyout(src, rq.req_data, n);
+  const uint32_t n = rq.req_len < size ? rq.req_len : size;
+  // User clients pass a kernel staging buffer; only BSD ioctls use copyout.
+  const int error = n ? copy_out(rq, src, n) : 0;
+  if (!error) rq.req_len = size;
+  return error;
 }
 int copy_in(const apple80211req &rq, void *dst, size_t size) {
   if (!rq.req_data) return EINVAL;
