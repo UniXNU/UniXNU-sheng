@@ -273,6 +273,7 @@ extern unsigned sheng_wifi_rx_rows(char [][120], unsigned) __attribute__((weak_i
 extern volatile uint32_t native_adreno_freed_outside __attribute__((weak_import));
 extern volatile uint32_t native_adreno_bo_contig[2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_map_met[7] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wc_audit[6] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_submit_ibs[4] __attribute__((weak_import));
 extern volatile uint32_t native_touch_edge_stats[4] __attribute__((weak_import));
@@ -2085,6 +2086,15 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     for (unsigned k = 0; k < 5 && native_adreno_map_fail[k][1]; ++k) n += snprintf(row + n, sizeof row - n, " %x x%u", native_adreno_map_fail[k][0], native_adreno_map_fail[k][1]);
     snprintf(row + n, sizeof row - n, " | at last: spans=%u objects=%u iova_pfn=%x handle=%x", native_adreno_map_fail[5][0], native_adreno_map_fail[5][1], native_adreno_map_fail[6][0], native_adreno_map_fail[6][1]);
     at = put(out, at, cap, row, sizeof row);
+    if (&native_adreno_map_met) {
+      // What the last failed map asked (bytes; "again" where its handle was mapped already) and the mapping at or past its address.
+      const volatile uint64_t *m = native_adreno_map_met;
+      char met[220];
+      snprintf(met, sizeof met, "[map met] asked %llx+%llx%s | there: %llx+%llx handle=%llx jobs=%llu kind=%llx", (unsigned long long)m[0],
+               (unsigned long long)(m[1] & ~(1ull << 63)), m[1] >> 63 ? " again" : "", (unsigned long long)m[2], (unsigned long long)m[3],
+               (unsigned long long)m[4], (unsigned long long)m[5], (unsigned long long)m[6]);
+      at = put(out, at, cap, met, sizeof met);
+    }
   }
   if (log_gpu_on && (&native_adreno_client_stats)) {
     // per client slot: live objects/peak, refused BoAllocs, last refusal status and bytes, highest mapped end in the window (MiB),
