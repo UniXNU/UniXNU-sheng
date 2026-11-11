@@ -428,6 +428,15 @@ extern "C" {volatile uint32_t native_touch_hold[14];}
 // the host puts it back (the same host command as after the firmware download) once no finger has been down for three seconds.
 // [0] requests, [1] requests the firmware did not take, [2] wakes after the last request, [3] the type of the last frame announced.
 extern "C" {volatile uint32_t native_touch_doze[4];}
+// Where the touch thread's time goes: [0] wakes, [1] peeks, [2] peeks with no new frame, [3] invalid headers, [4] full reads,
+// [5] frames processed, then microseconds in [6] peeks, [7] full reads, [8] processing and publishing.
+extern "C" {volatile uint32_t native_touch_cost[9];}
+static inline uint64_t touchTicks() {return mach_absolute_time();}
+static inline void touchCostAdd(unsigned slot, uint64_t from) {
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time() - from, &ns);
+    native_touch_cost[slot] = native_touch_cost[slot] + (uint32_t)(ns / 1000);
+}
 static void (*gTouchSink)(void *);
 static void *gTouchSinkContext;
 extern "C" void native_touch_set_sink(void (*sink)(void *), void *context) {gTouchSinkContext = context; __atomic_store_n(&gTouchSink, sink, __ATOMIC_RELEASE);}
@@ -853,6 +862,7 @@ static void touchThread(void *, wait_result_t) {
                 else thread_block(THREAD_CONTINUE_NULL);
                 seen = gTouchIrqEvents;
             }
+            native_touch_cost[0] = native_touch_cost[0] + 1;
             for (;;) {   // every frame that is ready now
                 native_touch_loop_step = 1;
                 const uint64_t irq = __atomic_load_n(&lastTouchIrq, __ATOMIC_ACQUIRE);
@@ -861,19 +871,25 @@ static void touchThread(void *, wait_result_t) {
                 if (high) ++s->irqSeen;
                 uint8_t pk[NVT_THP_PEEK_LEN];
                 native_touch_loop_step = 2;
+                const uint64_t peekAt = touchTicks();
                 if (nvt_peek_frame_header(&s->chip, pk)) {fail(11, NVT_ERR_BUS); break;}
+                touchCostAdd(6, peekAt);
+                native_touch_cost[1] = native_touch_cost[1] + 1;
                 native_touch_loop_step = 3;
                 ++s->peeks;
                 for (unsigned q = 0; q < 24; ++q) s->thp[q] = pk[q];
                 if ((++rowTick & 255) == 0) rows(*s);
-                if (!nvt_peek_valid(pk)) {++s->bad; break;}
-                if (nvt_peek_counter(pk) == lastCounter) break;
+                if (!nvt_peek_valid(pk)) {++s->bad; native_touch_cost[3] = native_touch_cost[3] + 1; break;}
+                if (nvt_peek_counter(pk) == lastCounter) {native_touch_cost[2] = native_touch_cost[2] + 1; break;}
                 ++s->fresh;
                 const unsigned peekType = nvt_peek_type(pk);
                 native_touch_doze[3] = peekType;
                 if (peekType != 2 && peekType != 4) {lastCounter = nvt_peek_counter(pk); break;}
                 native_touch_loop_step = 4;
+                const uint64_t readAt = touchTicks();
                 if (nvt_read_frame(&s->chip, s->frame)) {fail(11, NVT_ERR_BUS); break;}
+                touchCostAdd(7, readAt);
+                native_touch_cost[4] = native_touch_cost[4] + 1;
                 const uint64_t readTime = pathTrace.lock ? mach_absolute_time() : 0;
                 native_touch_loop_step = 5;
                 ++s->reads;
@@ -885,6 +901,7 @@ static void touchThread(void *, wait_result_t) {
                 s->lastType = type;
                 if (type != 2 && type != 4) break;
                 native_touch_valid = native_touch_valid + 1;
+                const uint64_t processAt = touchTicks();
                 int16_t *matrix = s->matrix;
                 nvt_frame_matrix(s->frame, matrix);
                 int mn = matrix[0], mx = matrix[0];
@@ -937,6 +954,8 @@ static void touchThread(void *, wait_result_t) {
                         recordPaths(*s->core, frame);
                     }
                 }
+                touchCostAdd(8, processAt);
+                native_touch_cost[5] = native_touch_cost[5] + 1;
                 if ((++tick & 15) == 0) rows(*s);
                 if (irqArmed && gTouchIrqEvents == seen) break;   // no further pulse: the frame just read was the only one
             }

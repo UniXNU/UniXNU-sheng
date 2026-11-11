@@ -249,9 +249,12 @@ CI_ENABLE_METAL_GPU = "0"
 # DarwinBoot records where the payload RAM disk and the entry's initrd buffer lie in the firmware's memory map
 # (sysctl kern.boot_payload_memory).
 "loader_inputs" = true
-# DarwinBoot lists the free memory outside the window (the low DRAM bank, about 867 MiB): the GPU driver serves buffer objects
-# from it, so they take no memory of the window (package/GpuMemoryPool.cpp; gpu-pool=0 turns it off).
+# DarwinBoot lists the free memory outside the window (the low DRAM bank, about 867 MiB by the firmware's map): the kernel
+# adopts it as ordinary VM memory, page by page after a probe load (window-outside-memory-adoption.patch; memory-outside=0
+# leaves it alone). The audio driver's DSP buffer sits in that memory at a fixed 32-bit address (package/AudioProbe.cpp
+# kLowBuffer, 64 KiB), so it is kept out.
 "owned_memory_outside_ranges" = 8
+"owned_memory_outside_reserved" = ["0xd0000000:0x10000"]
 
 ["os_overrides"."macos-27.3-26C5035r"."payload"."runtime"]
 "target" = "macos27"

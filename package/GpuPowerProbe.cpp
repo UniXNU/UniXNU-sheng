@@ -189,7 +189,17 @@ int wr(void *, unsigned w, uint32_t off, uint32_t value) {
     __asm__ volatile("dsb sy" ::: "memory");
     return 0;
 }
+// Every row the probe ever set, in order (the eight shown rows are shared and overwritten): the first 40, each "<slot> <text>".
+extern "C" {volatile char native_gpu_row_log[40][52]; volatile uint32_t native_gpu_row_count;}
 void setRow(unsigned slot, const char *text) {
+    const uint32_t n = __atomic_fetch_add(&native_gpu_row_count, 1, __ATOMIC_RELAXED);
+    if (n < 40) {
+        char *line = const_cast<char *>(native_gpu_row_log[n]);
+        line[0] = static_cast<char>('0' + (slot & 7)); line[1] = ' ';
+        unsigned k = 0;
+        for (; k < 48 && text[k]; ++k) line[2 + k] = text[k];
+        line[2 + k] = 0;
+    }
     unsigned i = 0;
     for (; i < 47 && text[i]; ++i) boot_progress_ext[slot][i] = text[i];
     for (; i < 47; ++i) boot_progress_ext[slot][i] = ' ';
@@ -460,9 +470,10 @@ bool physRead64(uint64_t pa, uint64_t *out) {
 // NativeAdrenoVm::sampleWord's cached reader: one aligned word through the kernel's cacheable physical aperture, so a line a client's
 // cacheable view left dirty is seen whatever the cache mode of the BO's own mappings.
 extern "C" vm_offset_t phystokv(uint64_t pa);
-extern "C" uint64_t gPhysBase, gPhysSize;
+// Memory the kernel manages and phystokv covers: its own range, and DRAM outside it that it adopted.
+extern "C" boolean_t pmap_valid_address(uint64_t pa);
 int cachedRead32(uint64_t pa, uint32_t *value) {
-    if ((pa & 3) || pa < gPhysBase || pa - gPhysBase >= gPhysSize) return 1;
+    if ((pa & 3) || !pmap_valid_address(pa)) return 1;
     const vm_offset_t va = phystokv(pa);
     if (!va) return 1;
     *value = *reinterpret_cast<volatile uint32_t *>(va);
@@ -477,7 +488,7 @@ int cachedRead32(uint64_t pa, uint32_t *value) {
 extern "C" unsigned int pmap_cache_attributes(unsigned int pn);
 extern "C" {volatile uint64_t native_adreno_audit_ticks; volatile uint32_t native_adreno_audit_attr;}
 int lineAudit(uint64_t pa, size_t bytes, uint32_t *dirty, uint32_t *stale) {
-    if (!bytes || ((pa | bytes) & 63) || (pa & 0xfff) + bytes > 0x1000 || pa < gPhysBase || pa - gPhysBase >= gPhysSize) return 1;
+    if (!bytes || ((pa | bytes) & 63) || (pa & 0xfff) + bytes > 0x1000 || !pmap_valid_address(pa)) return 1;
     const uint64_t began = mach_absolute_time();
     const vm_offset_t page = ml_io_map_unmappable(vm_offset_t(pa & ~uint64_t(0xfff)), 0x1000, 0x7 /* VM_WIMG_IO */);
     const vm_offset_t cached = phystokv(pa);

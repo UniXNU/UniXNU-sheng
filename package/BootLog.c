@@ -12,6 +12,7 @@
 // the message stream (msg_mode 1): msg_head bytes were appended in all, the newest min(msg_head, area) of them end at msg_head modulo
 // the area. msg_mode 0 is the linear form (oldest first, msg_bytes long) that the panic flush writes.
 // The header is written last in each round, so a reader never trusts a slot or an export the header does not count yet.
+#include <kern/startup.h>
 #include "BootLatencyFiles.h"
 #include <kern/thread.h>
 #include <kern/clock.h>
@@ -83,6 +84,12 @@ extern volatile uint32_t native_adreno_pool_state[12] __attribute__((weak_import
 extern volatile uint32_t native_adreno_pool_fallbacks[8] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_pool_zero[4] __attribute__((weak_import));
 extern volatile uint32_t native_gpu_pool_board[4] __attribute__((weak_import));
+extern volatile uint32_t native_gpu_pool_reserved_kib __attribute__((weak_import));
+extern volatile char native_gpu_row_log[40][52] __attribute__((weak_import));
+extern volatile uint32_t native_gpu_row_count __attribute__((weak_import)), native_gpu_power_stage __attribute__((weak_import));
+extern volatile uint32_t native_adreno_kernel_alloc_fail[6] __attribute__((weak_import));
+extern uint32_t ml_outside_memory_pages __attribute__((weak_import)), ml_outside_memory_refused __attribute__((weak_import));
+extern volatile uint64_t native_adreno_pool_scrubbing[16][2] __attribute__((weak_import));
 extern volatile int native_gpu_addon_written __attribute__((weak_import));
 extern volatile int native_gpu_addon_same __attribute__((weak_import));
 extern volatile int native_gpu_addon_failed __attribute__((weak_import));
@@ -317,6 +324,8 @@ extern uint64_t cs_native4k_digest_wall[2] __attribute__((weak_import)), cs_nati
   cs_native4k_record_ticks __attribute__((weak_import));
 extern unsigned long cs_native4k_chunks_made __attribute__((weak_import));
 extern volatile uint32_t sheng_edge_idle_beside_queued[2][8] __attribute__((weak_import));
+extern volatile uint32_t native_touch_cost[9] __attribute__((weak_import));
+extern volatile uint32_t native_touch_irq_stats[4] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_job_time[8] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_long_jobs[8][8] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_slow_jobs[16][8] __attribute__((weak_import));
@@ -1303,6 +1312,16 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_touch_hid_multi[2]);
     at = put(out, at, cap, row, sizeof row);
   }
+  // The touch thread's work: line interrupts, thread wakes, peeks (of them without a new frame, with an invalid header), full reads,
+  // frames processed, and the milliseconds in peeks, full reads and processing.
+  if (&native_touch_cost && &native_touch_irq_stats) {
+    const volatile uint32_t *c = native_touch_cost;
+    char row[220];
+    snprintf(row, sizeof row, "[touch cost] irq armed=%u n=%u spurious=%u | wakes=%u peeks=%u stale=%u bad=%u reads=%u frames=%u | ms peek=%u read=%u process=%u",
+             native_touch_irq_stats[0], native_touch_irq_stats[1], native_touch_irq_stats[2], c[0], c[1], c[2], c[3], c[4], c[5],
+             c[6] / 1000, c[7] / 1000, c[8] / 1000);
+    at = put(out, at, cap, row, sizeof row);
+  }
   // IBs per GPU submission: submissions, IBs, the most in one, and those with more than 16 (a frame used to be split at 16).
   if (log_gpu_on && (&native_adreno_submit_ibs)) {
     char row[120];
@@ -1341,10 +1360,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if (&native_adreno_pool_state && &native_adreno_pool_fallbacks && &native_adreno_pool_zero) {
       const volatile uint32_t *s = native_adreno_pool_state, *f = native_adreno_pool_fallbacks;
       char pool[360];
-      snprintf(pool, sizeof pool, "[gpu pool] arg %u ranges %u (refused %u) total %u KiB free %u (lowest %u) | alive %u grants %u KiB | served %u freed %u retired %u (%u KiB) | board %u/%u %u KiB %x",
+      snprintf(pool, sizeof pool, "[gpu pool] arg %u ranges %u (refused %u) total %u KiB free %u (lowest %u) | alive %u grants %u KiB | served %u freed %u retired %u (%u KiB) | board %u/%u %u KiB %x stock-reserved %u KiB",
                s[10], s[0], s[11], s[1], s[2], s[3], s[4], s[5], s[6], s[7], s[8], s[9],
                &native_gpu_pool_board ? native_gpu_pool_board[0] : 0, &native_gpu_pool_board ? native_gpu_pool_board[1] : 0,
-               &native_gpu_pool_board ? native_gpu_pool_board[2] : 0, &native_gpu_pool_board ? native_gpu_pool_board[3] : 0);
+               &native_gpu_pool_board ? native_gpu_pool_board[2] : 0, &native_gpu_pool_board ? native_gpu_pool_board[3] : 0,
+               &native_gpu_pool_reserved_kib ? native_gpu_pool_reserved_kib : 0);
       at = put(out, at, cap, pool, sizeof pool);
       uint64_t zero_ns = 0, pass_ns = 0;
       absolutetime_to_nanoseconds(native_adreno_pool_zero[0], &zero_ns);
@@ -2253,6 +2273,25 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if (boot_log_reset_watchdog[0]) at = put(out, at, cap, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
     if (boot_log_reset_result[0]) at = put(out, at, cap, boot_log_reset_result, sizeof boot_log_reset_result);
   }
+  // The GPU bring-up's rows in the order they were set (the shown rows are shared and overwritten), and its stage.
+  if (log_gpu_on && &native_gpu_row_log && &native_gpu_row_count && &native_gpu_power_stage) {
+    char row[200];
+    const volatile uint32_t *kf = &native_adreno_kernel_alloc_fail ? native_adreno_kernel_alloc_fail : NULL;
+    snprintf(row, sizeof row, "[gpu bring-up] stage %x rows %u | first failed kernel allocation: at %u status %x bytes %u bits %u contiguous %u (%u in all)",
+             native_gpu_power_stage, native_gpu_row_count, kf ? kf[0] : 0, kf ? kf[1] : 0, kf ? kf[2] : 0, kf ? kf[3] : 0, kf ? kf[4] : 0, kf ? kf[5] : 0);
+    at = put(out, at, cap, row, sizeof row);
+    for (unsigned i = 0; i < 40 && i < native_gpu_row_count; ++i) {
+      snprintf(row, sizeof row, "GB%02u %s", i, (const char *)native_gpu_row_log[i]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
+  // DRAM outside the kernel's window that became VM memory: pages adopted, and pages left alone after a refused load.
+  if (&ml_outside_memory_pages && &ml_outside_memory_refused) {
+    char row[100];
+    snprintf(row, sizeof row, "[memory outside] adopted %u pages (%u MiB), left %u pages", ml_outside_memory_pages,
+             ml_outside_memory_pages >> 8, ml_outside_memory_refused);
+    at = put(out, at, cap, row, sizeof row);
+  }
   // The command line the kernel parses: its length, whether autoreset is in it, and its last 80 characters.
   {
     extern char *PE_boot_args(void);
@@ -2665,10 +2704,17 @@ void boot_log_panic_flush(void) {
   {
     uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
     const uint64_t t = log_ticks(), began = log_round_began;
-    char line[200];
-    const int len = snprintf(line, sizeof line, "\n[boot_log] at panic: round %u %s %llums, step '%s' for %llums, watch reports %u%s\n",
+    char line[260];
+    // The GPU pool runs being zero-filled at the panic, by CPU.
+    char fills[160] = "";
+    if (&native_adreno_pool_scrubbing)
+      for (unsigned c = 0, k = 0; c < 16; ++c)
+        if (native_adreno_pool_scrubbing[c][0] && k < sizeof fills - 40)
+          k += (unsigned)snprintf(fills + k, sizeof fills - k, " cpu%u %llx+%llx", c, (unsigned long long)native_adreno_pool_scrubbing[c][0],
+                                  (unsigned long long)native_adreno_pool_scrubbing[c][1]);
+    const int len = snprintf(line, sizeof line, "\n[boot_log] at panic: round %u %s %llums, step '%s' for %llums, watch reports %u, gpu pool fill%s%s\n",
                              began ? log_round_number : 0, began ? "running" : "idle", began ? (unsigned long long)((t - began) * 1000 / f) : 0ull,
-                             log_where, (unsigned long long)((t - log_where_began) * 1000 / f), round_watch_reports,
+                             log_where, (unsigned long long)((t - log_where_began) * 1000 / f), round_watch_reports, fills[0] ? fills : " none",
                              &boot_progress_panic_text && boot_progress_panic_text[0] ? "" : "\n[panic] (the panic screen left no text)");
     if (len > 0) {
       const uint32_t l = (uint32_t)len < sizeof line ? (uint32_t)len : (uint32_t)sizeof line - 1;
@@ -2698,6 +2744,22 @@ void boot_log_panic_flush(void) {
   native_ufs_log_sync();
 }
 
+// autoreset: mark the bootloader cell (any restart is fastboot) and arm the hypervisor's watchdog, once. It runs as the first thing
+// after the scheduler starts (EARLY_BOOT), before the kernel adopts memory or starts IOKit, so a panic from there on brings the tablet
+// back to fastboot; the first tick calls it again in case the startup hook did not run.
+static void boot_reset_arm(void) {
+  static int armed;
+  uint32_t autoreset = 0;
+  if (armed) return;
+  armed = 1;
+  if (PE_parse_boot_argn("autoreset", &autoreset, sizeof autoreset) && autoreset && &boot_reset_probe &&
+      boot_reset_probe(boot_log_reset_probe_text, sizeof boot_log_reset_probe_text) == 0) {
+    if (&boot_reset_mark_bootloader) boot_reset_mark_bootloader(boot_log_reset_mark, sizeof boot_log_reset_mark);
+    if (&boot_reset_watchdog) boot_reset_watchdog(autoreset + 60, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
+  }
+}
+STARTUP(EARLY_BOOT, STARTUP_RANK_FIRST, boot_reset_arm);
+
 // Called by the board page's monitor once a second; starts the writer the first time when log=1.
 void boot_log_tick(unsigned now) {
   (void)now;
@@ -2707,12 +2769,7 @@ void boot_log_tick(unsigned now) {
   // after the start, before UFS and this log exist (int-229: a duplicate class at PE_lockdown_iokit). So the first tick, independent of
   // log, marks the cell (any restart is fastboot) and arms the hypervisor's watchdog, which bites a minute after the pings stop:
   // after the autoreset deadline, or when a panic parks the cores.
-  uint32_t autoreset = 0;
-  if (PE_parse_boot_argn("autoreset", &autoreset, sizeof autoreset) && autoreset && &boot_reset_probe &&
-      boot_reset_probe(boot_log_reset_probe_text, sizeof boot_log_reset_probe_text) == 0) {
-    if (&boot_reset_mark_bootloader) boot_reset_mark_bootloader(boot_log_reset_mark, sizeof boot_log_reset_mark);
-    if (&boot_reset_watchdog) boot_reset_watchdog(autoreset + 60, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
-  }
+  boot_reset_arm();
   uint32_t mode = 0;
   if (!PE_parse_boot_argn("log", &mode, sizeof mode) || mode != 1) return;
   log_groups_read();
