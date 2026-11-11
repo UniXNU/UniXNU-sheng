@@ -23,6 +23,8 @@
 extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
 extern void boot_cache_loader_log_capture(unsigned) __attribute__((weak_import));
 extern void boot_desktop_log_capture(unsigned) __attribute__((weak_import));
+extern void boot_safari_path_capture(unsigned) __attribute__((weak_import));
+extern void boot_safari_path_status(int [4]) __attribute__((weak_import));
 extern uint32_t boot_cache_input_ready(void) __attribute__((weak_import));
 
 #if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
@@ -2313,6 +2315,16 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_owner_app_cryptex_status, &native_owner_vm_volume_status ? native_owner_vm_volume_status : -1);
     at = put(out, at, cap, row, sizeof row);
   }
+  if (&boot_safari_path_status) {
+    int status[4];
+    boot_safari_path_status(status);
+    if (status[0] >= 0) {
+      char row[128];
+      snprintf(row, sizeof row, "[safari paths] applications=%d data=%d cryptex=%d preboot=%d",
+               status[0], status[1], status[2], status[3]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
   if (&armdt_platform_power_type && &armdt_platform_power_result) {
     char row[96];
     snprintf(row, sizeof row, "[platform power] type=%u returned=%lld", armdt_platform_power_type,
@@ -2628,6 +2640,9 @@ static void writer(void *arg, wait_result_t result) {
     log_round_number = h.rounds + 1; log_round_began = began;
     if (&boot_cache_loader_log_capture) boot_cache_loader_log_capture(now);
     if (&boot_desktop_log_capture) boot_desktop_log_capture(now);
+    if (&boot_safari_path_capture && &native_owner_app_cryptex_stage && native_owner_app_cryptex_stage >= 4) {
+      boot_safari_path_capture(now);
+    }
     int ok = 1;
     if (boot_log_panicked) return;   // the panic flush owns the window from now on
     // Text slot, then the message buffer, then the header that makes both visible. The new kernel messages are taken into the stream

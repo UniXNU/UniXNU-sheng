@@ -15,6 +15,34 @@
 #include <pexpert/pexpert.h>
 
 extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
+
+static int safari_paths[] = {-1, -1, -1, -1};
+
+void boot_safari_path_capture(unsigned now) {
+  static unsigned next_read = 15;
+  if (now < next_read) return;
+  next_read = now + 30;
+  vfs_context_t ctx = vfs_context_kernel();
+  static const char *const paths[] = {
+    "/Applications/Safari.app/Contents/Info.plist",
+    "/System/Volumes/Data/Applications/Safari.app/Contents/Info.plist",
+    "/System/Cryptexes/App/System/Applications/Safari.app/Contents/Info.plist",
+    "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app/Contents/Info.plist",
+  };
+  for (unsigned i = 0; i < sizeof paths / sizeof paths[0]; ++i) {
+    vnode_t vp = NULLVP;
+    int error = vnode_lookup(paths[i], 0, &vp, ctx);
+    if (!error) vnode_put(vp);
+    __atomic_store_n(&safari_paths[i], error, __ATOMIC_RELAXED);
+  }
+}
+
+void boot_safari_path_status(int status[4]) {
+  for (unsigned i = 0; i < 4; ++i) {
+    status[i] = __atomic_load_n(&safari_paths[i], __ATOMIC_RELAXED);
+  }
+}
+
 /* Mirror the bounded desktop report into the existing persistent log transport. */
 void boot_desktop_log_capture(unsigned now) {
   static uint64_t consumed;
