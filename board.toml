@@ -250,8 +250,10 @@ CI_ENABLE_METAL_GPU = "0"
 # (sysctl kern.boot_payload_memory).
 "loader_inputs" = true
 # DarwinBoot lists the free memory outside the window (the low DRAM bank, about 867 MiB by the firmware's map): the kernel
-# adopts it as ordinary VM memory, page by page after a probe load (window-outside-memory-adoption.patch; memory-outside=0
-# leaves it alone). The audio driver's DSP buffer sits in that memory at a fixed 32-bit address (package/AudioProbe.cpp
+# can adopt it as ordinary VM memory, page by page after a probe load (window-outside-memory-adoption.patch). The built-in
+# arguments keep it off (memory-outside=0): with it on, contiguous kernel allocations failed in some boots and the GPU did
+# not start; memory-outside=1 on the command line turns it on. The GPU pool over the same memory is off too (gpu-pool=0):
+# it overlapped the audio driver's buffer. The audio driver's DSP buffer sits in that memory at a fixed 32-bit address (package/AudioProbe.cpp
 # kLowBuffer, 64 KiB), so it is kept out.
 "owned_memory_outside_ranges" = 8
 "owned_memory_outside_reserved" = ["0xd0000000:0x10000"]
