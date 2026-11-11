@@ -8,3 +8,6 @@ novatek/novatek_nt36532_n81a_fw_csot.bin|750508bb4d75472d35ce5852ec8470d66afa6bf
 
 # Keyboard
 nanosic/MCU_Upgrade.bin|9eb7213603474d926d3af1124d3c14d63cbfc58ea2f7f7d9fedc088093fd63c5
+
+# Video
+qcom/sm8550/sheng/vpu30_4v.mbn|56c41b7b28694d261af67db40fa64a6f7076709171876fcc3abf0ce411506edb
