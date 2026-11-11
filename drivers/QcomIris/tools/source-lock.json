@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "linux": {
+    "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git",
+    "ref": "v7.3.3",
+    "commit": "d50d994bffa3c7c6db2d8bc4c5f0c55e3f46b0cd",
+    "files": {
+      "drivers/media/platform/qcom/iris/iris_vpu_buffer.c": "5a377805fb0b68ef20587e1105dc98acc729777d7e6361c734ac75fd54ba8e2e",
+      "drivers/media/platform/qcom/iris/iris_vpu_buffer.h": "8661857988ba99bbc52af2d58a9a31e59ae803a025bc8ec0815148db4a6d70d9",
+      "drivers/media/platform/qcom/iris/iris_hfi_gen1_defines.h": "55f3d6df21d3865dcf318793e40fcaf6af7096911fdf91ef20802cdd97f847ed",
+      "drivers/media/platform/qcom/iris/iris_hfi_gen2_defines.h": "4caef320905199464babd26a7cb381866f5420e08a13b542c105a6e845c6463a"
+    }
+  }
+}

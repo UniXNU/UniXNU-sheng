@@ -255,6 +255,15 @@ extern volatile uint64_t native_adreno_maint_phase[8][2] __attribute__((weak_imp
 extern volatile uint32_t native_adreno_table_pages[4] __attribute__((weak_import));
 extern unsigned NativeAdrenoGpuContextInputBits(void) __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recovery[8] __attribute__((weak_import));
+extern volatile int32_t native_video_stats[24] __attribute__((weak_import));
+extern char native_video_text[128] __attribute__((weak_import));
+extern volatile uint32_t vt_paravirt_stage __attribute__((weak_import)), vt_paravirt_opens __attribute__((weak_import)),
+    vt_paravirt_messages __attribute__((weak_import)), vt_paravirt_refused __attribute__((weak_import));
+extern volatile uint32_t vt_host_sessions __attribute__((weak_import)), vt_host_frames_in __attribute__((weak_import)),
+    vt_host_frames_out __attribute__((weak_import)), vt_host_frames_dropped __attribute__((weak_import)),
+    vt_host_errors __attribute__((weak_import)), vt_host_error_stage __attribute__((weak_import));
+extern volatile int32_t vt_host_error_value __attribute__((weak_import));
+extern volatile uint32_t iris_media_stats[14] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recovery_fault[5] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recover_trace[4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_fault_place[4] __attribute__((weak_import));
@@ -1180,6 +1189,32 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_adreno_table_pages ? native_adreno_table_pages[1] : 0, &native_adreno_table_pages ? native_adreno_table_pages[2] : 0,
              &native_adreno_table_pages ? native_adreno_table_pages[3] : 0, NativeAdrenoGpuContextInputBits ? NativeAdrenoGpuContextInputBits() : 0);
     at = put(out, at, cap, row, sizeof row);
+  }
+  // [video]: the VPU's state in native_video_stats order (VideoProbe.cpp: stage, error, SMMU domain, interrupts, PAS, core state, system
+  // error, recoveries, suspends, resumes, firmware, clocks, SCM results, RPMh, table status, pages mapped, live buffers), then the
+  // firmware's version. [video vt]: VideoToolbox's paravirtualized codecs over it: the transport's stage (1 classes
+  // registered, 2 service published), opens, messages and refused messages (VtParavirt.cpp); the host's sessions, frames given,
+  // frames handed over with a picture, frames handed over as dropped, errors and the last error's stage and value (VtHost.cpp).
+  if (&native_video_stats && native_video_stats[0]) {
+    const volatile int32_t *v = native_video_stats;
+    char row[320];
+    snprintf(row, sizeof row, "[video] %d %d %x %d %d %d %x %d %d %d %d %x %x/%x %x %d %d %d %.60s",
+             v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15], v[16], v[17],
+             &native_video_text ? native_video_text : "");
+    at = put(out, at, cap, row, sizeof row);
+    if (&vt_paravirt_stage && &vt_host_sessions) {
+      snprintf(row, sizeof row, "[video vt] %u %u %u %u | %u %u %u %u %u %u/%d",
+               vt_paravirt_stage, vt_paravirt_opens, vt_paravirt_messages, vt_paravirt_refused, vt_host_sessions, vt_host_frames_in,
+               vt_host_frames_out, vt_host_frames_dropped, vt_host_errors, vt_host_error_stage, vt_host_error_value);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    // [video media]: the decoder device's counts in iris_media_stats order (IrisMedia.cpp).
+    if (&iris_media_stats) {
+      const volatile uint32_t *m = iris_media_stats;
+      snprintf(row, sizeof row, "[video media] %u %u %u %u %u %x %u %x %x %u %u %u %u %x", m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8],
+               m[9], m[10], m[11], m[12], m[13]);
+      at = put(out, at, cap, row, sizeof row);
+    }
   }
   // [gpu recovery]: msm hangcheck and GPU restarts (NativeAdrenoSubmit::recover): hangs found, restarts, failed restarts, the last hung
   // fence, the last restart's IOReturn, submissions replayed, hangs with a guilty job, hangs of the kernel's VM; then the board's restart
@@ -2284,7 +2319,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if (boot_log_reset_watchdog[0]) at = put(out, at, cap, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
     if (boot_log_reset_result[0]) at = put(out, at, cap, boot_log_reset_result, sizeof boot_log_reset_result);
   }
-  // Ring switches the CP never finished (the first two): the CP's stall words as in [gpu stall], then the ring's progress words.
+  // Ring switches the CP never finished (the first two): the CP's stall words as in [gpu stall] (the last two: CP_CONTEXT_SWITCH_CNTL
+  // at the timeout, then 0x80000000 | the ring left << 8 | the ring asked for), then the ring's progress words.
   if (log_gpu_on && &native_adreno_switch_timeout && &native_adreno_switch_timeouts && native_adreno_switch_timeouts) {
     for (unsigned e = 0; e < 2 && e < native_adreno_switch_timeouts; ++e) {
       char row[360];
@@ -2444,8 +2480,9 @@ static int msg_stream_write(void) {
 // Log groups (boot arguments log-gpu, log-display, log-wifi, log-audio, log-input, log-power, log-sys; each =1 turns its rows on, all are off
 // without them). A slot's text is a list of sections: a line that starts with "[tag]" opens one and the lines after it (until the next
 // "[") belong to it. The slot's own head line and the panic text are always kept, and with diag=1 the [diag] row too.
-enum {LogGpu, LogDisplay, LogWifi, LogAudio, LogInput, LogPower, LogSys, LogGroups};
-static const char *const log_group_arg[LogGroups] = {"log-gpu", "log-display", "log-wifi", "log-audio", "log-input", "log-power", "log-sys"};
+enum {LogGpu, LogDisplay, LogWifi, LogAudio, LogInput, LogPower, LogVideo, LogSys, LogGroups};
+static const char *const log_group_arg[LogGroups] = {"log-gpu", "log-display", "log-wifi", "log-audio", "log-input", "log-power", "log-video",
+                                                     "log-sys"};
 static uint32_t log_group_on;
 // Tag prefixes by group, the first match wins ("gpu dcvs" before "gpu"); a tag in no list is a system row.
 static const struct {const char *prefix; uint8_t group;} log_tags[] = {
@@ -2455,6 +2492,7 @@ static const struct {const char *prefix; uint8_t group;} log_tags[] = {
   {"wifi", LogWifi}, {"qrtr", LogWifi},
   {"audio", LogAudio}, {"mic", LogAudio}, {"amps", LogAudio}, {"adsp", LogAudio},
   {"touch", LogInput}, {"hid", LogInput},
+  {"video", LogVideo},
   {"thermal", LogPower}, {"board clock", LogPower}, {"battery", LogPower}, {"charger", LogPower}, {"clocks", LogPower}, {"cpu", LogPower},
 };
 static unsigned log_tag_group(const char *tag) {
