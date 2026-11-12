@@ -269,6 +269,8 @@ extern volatile uint32_t vt_host_sessions __attribute__((weak_import)), vt_host_
     vt_host_frames_out __attribute__((weak_import)), vt_host_frames_dropped __attribute__((weak_import)),
     vt_host_errors __attribute__((weak_import)), vt_host_error_stage __attribute__((weak_import));
 extern volatile int32_t vt_host_error_value __attribute__((weak_import));
+extern char vt_host_trace[64][112] __attribute__((weak_import));
+extern volatile uint32_t vt_host_trace_count __attribute__((weak_import));
 extern volatile uint32_t iris_media_stats[14] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recovery_fault[5] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recover_trace[4] __attribute__((weak_import));
@@ -1236,6 +1238,15 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                vt_paravirt_stage, vt_paravirt_opens, vt_paravirt_messages, vt_paravirt_refused, vt_host_sessions, vt_host_frames_in,
                vt_host_frames_out, vt_host_frames_dropped, vt_host_errors, vt_host_error_stage, vt_host_error_value);
       at = put(out, at, cap, row, sizeof row);
+    }
+    // [video vt log]: the host's last 64 lines (VtHost.cpp, trace), oldest first.
+    if (&vt_host_trace_count && vt_host_trace_count) {
+      const uint32_t n = vt_host_trace_count;
+      for (uint32_t i = n > 64 ? n - 64 : 0; i < n; ++i) {
+        snprintf(row, sizeof row, "[video vt log] %u %.110s", i, vt_host_trace[i % 64]);
+        for (char *c = row; *c; ++c) if (*c == '\n') *c = ' ';
+        at = put(out, at, cap, row, sizeof row);
+      }
     }
     // [video media]: the decoder device's counts in iris_media_stats order (IrisMedia.cpp).
     if (&iris_media_stats) {
