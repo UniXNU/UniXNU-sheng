@@ -66,8 +66,8 @@ volatile uint32_t vt_host_frames_skipped;   // of those, never given to the devi
 volatile uint32_t vt_host_error_stage;
 volatile int32_t vt_host_error_value;
 volatile uint32_t vt_host_replies, vt_host_unknown, vt_host_last_unknown;
-// The host's last diagnostic lines, a ring of 16 (the kernel's message buffer turns over too fast to keep them).
-char vt_host_trace[16][112];
+// The host's last diagnostic lines, a ring of 64 (the kernel's message buffer turns over too fast to keep them).
+char vt_host_trace[64][112];
 volatile uint32_t vt_host_trace_count;
 }
 
@@ -78,9 +78,13 @@ void trace(const char *format, ...) {
     const uint32_t n = __atomic_fetch_add(&vt_host_trace_count, 1, __ATOMIC_RELAXED);
     va_list arguments;
     va_start(arguments, format);
-    vsnprintf(vt_host_trace[n % 16], sizeof vt_host_trace[0], format, arguments);
+    vsnprintf(vt_host_trace[n % 64], sizeof vt_host_trace[0], format, arguments);
     va_end(arguments);
 }
+
+// Every line the host writes to the kernel's message buffer is kept in the ring too: the buffer is gone at a reset, and the
+// system log does not hold kernel messages of this kind.
+#define IOLog(...) (trace(__VA_ARGS__), IOLog(__VA_ARGS__))
 
 void failed(uint32_t stage, int32_t value) {
     vt_host_errors = vt_host_errors + 1;
@@ -2201,7 +2205,7 @@ void supportedProperties(Client *c, const Header &h) {
 bool hevcOffered() {
     static int offered = -1;
     if (offered < 0) {
-        int value = 0;
+        int value = 1;
         PE_parse_boot_argn("vt-hevc", &value, sizeof value);
         offered = value != 0;
     }
@@ -2225,8 +2229,7 @@ void decoderList(Client *c, const Header &h) {
             const int values[5] = {p->array(&type, 1), p->string(codecs[i][2]), p->boolean(false), p->integer(400), p->string(codecs[i][1])};
             entries[i] = p->dict(keys, values, 5);
         }
-        // HEVC is listed only with vt-hevc=1: the VPU refuses to start an HEVC session on this board so far, and a decoder
-        // that is listed and fails leaves the stream undecoded, where an unlisted one leaves it to VideoToolbox's own.
+        // vt-hevc=0 leaves HEVC unlisted, and with it to VideoToolbox's own decoder.
         const int list = p->array(entries, decoderDevice() == ~0u ? 0 : hevcOffered() ? 2 : 1);
         Writer w(buffer, 4096);
         w.header(h.type, FlagReply, h.uuid, h.request);
@@ -2510,8 +2513,11 @@ int startSession(Session *s, const uint8_t *m, uint32_t n, bool fresh) {
     if (r) { failed(3, r); return refuse(-12911); }
     // Decode order (display delay 0): every frame out as soon as decoded, as Apple's host gives them (a device without it says
     // EINVAL: display order, every dfrm answered at once as before).
+    // vt-order=0 keeps the device's display order (pictures held back until later ones arrive, the tail out at a drain).
+    int order = 1;
+    PE_parse_boot_argn("vt-order", &order, sizeof order);
     uint32_t control[2] = {CidDecDisplayDelayEnable, 1};
-    s->decodeOrder = !ioctl(s, IocSCtrl, control, sizeof control, sizeof control);
+    s->decodeOrder = order && !ioctl(s, IocSCtrl, control, sizeof control, sizeof control);
     control[0] = CidDecDisplayDelay;
     control[1] = 0;
     if (s->decodeOrder) s->decodeOrder = !ioctl(s, IocSCtrl, control, sizeof control, sizeof control);
