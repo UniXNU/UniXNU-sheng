@@ -74,11 +74,16 @@ bool radioAddress(uint8_t m[6]) {
 // only this one returns the request's own result, which the framework's scan needs to find the end of the result list. Methods, as
 // the framework calls them (IOConnectCallStructMethod):
 //   0  an Apple80211 request: input {request code, data length, data[0x3c00], the 40-byte request}, output the request's data
-//      (4 bytes holding the value for a request without data); the result is the request's errno
+//      (4 bytes holding the value for a request without data); the result is the request's errno. The framework fills the
+//      request's name, type and value only: the length of a set's data is the data length in front, that of a get's answer the
+//      output's size.
 //   1  one byte: requests go through this connection
 //   5  one byte: events come through this connection's event pipe (no: the framework then listens on the kernel event socket)
 //   7  one byte: the driver is a DriverKit one (no)
 // A set needs the administrator privilege, as the wireless daemon has.
+// The original sandbox profiles of the wireless daemons allow the class IO80211APIUserClient only (IO80211Family's, which is in the
+// collection, so the name cannot be taken here); the interface names those daemons in NativeSandboxGrantProcess, the kernel's grant
+// in place of the profile's verdict (IOUserClient.cpp, native_sandbox_grant).
 class ShengWifiUserClient : public IOUserClient {
     OSDeclareDefaultStructors(ShengWifiUserClient)
     enum { kInputSize = 0x3c30, kRequestAt = 0x3c08, kDataAt = 8, kDataMax = 0x3c00 };
@@ -116,11 +121,12 @@ public:
             uint32_t code, sent, length;
             memcpy(&code, input, 4); memcpy(&sent, input + 4, 4); memcpy(&length, input + kRequestAt + 24, 4);
             const bool set = code == SHENG_SIOCSA80211;
-            // A get that names no length but brings an output buffer (the framework's first request, the driver version) has that
-            // buffer's size.
+            // The request's own length field is not filled. A set's payload has the length sent in front of it; a get that brings
+            // an output buffer has that buffer's size (4 bytes: the value alone).
             const uint32_t room = args->structureOutputDescriptor ? args->structureOutputDescriptorSize : args->structureOutputSize;
-            if (!set && !length && room > 4) {
-                length = room < kDataMax ? room : static_cast<uint32_t>(kDataMax);
+            if (!length) {
+                if (set) length = sent;
+                else if (room > 4) length = room < kDataMax ? room : static_cast<uint32_t>(kDataMax);
                 memcpy(input + kRequestAt + 24, &length, 4);
             }
             if ((set || code == SHENG_SIOCGA80211) && length <= kDataMax && sent <= kDataMax) {
@@ -273,6 +279,8 @@ bool ShengEthernet::start(IOService *provider)
     setProperty("IOClassNameOverride", "IO80211Controller");
     if (!attachInterface(reinterpret_cast<IONetworkInterface **>(&interface), false)) return false;
     interface->setProperty("IO80211InterfaceRole", "Infrastructure");
+    // The daemons whose profiles allow the original Wi-Fi user client and that open this one.
+    interface->setProperty("NativeSandboxGrantProcess", "airportd,sharingd,wifivelocityd");
     interface->registerService();
     return true;
 }

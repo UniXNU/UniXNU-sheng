@@ -168,6 +168,7 @@ extern volatile uint64_t native_gop_wait_stats[7] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_fence_wait[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_stall[24] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_stall_mem[59] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_stall_find[14] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_unstick[15] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_fence_pending[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wptr_fence[4] __attribute__((weak_import));
@@ -267,8 +268,24 @@ extern volatile uint64_t native_adreno_maint_phase[8][2] __attribute__((weak_imp
 extern volatile uint32_t native_adreno_table_pages[4] __attribute__((weak_import));
 extern unsigned NativeAdrenoGpuContextInputBits(void) __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recovery[8] __attribute__((weak_import));
+extern volatile int32_t native_video_stats[24] __attribute__((weak_import));
+extern char native_video_text[128] __attribute__((weak_import));
+extern volatile int32_t native_video_alloc[5] __attribute__((weak_import));
+extern char native_video_fw_text[4][100] __attribute__((weak_import));
+extern volatile uint32_t native_video_fw_lines __attribute__((weak_import));
+extern char native_video_fw_error[6][200] __attribute__((weak_import));
+extern volatile uint32_t native_video_fw_errors __attribute__((weak_import));
+extern volatile uint32_t vt_paravirt_stage __attribute__((weak_import)), vt_paravirt_opens __attribute__((weak_import)),
+    vt_paravirt_messages __attribute__((weak_import)), vt_paravirt_refused __attribute__((weak_import));
+extern volatile uint32_t vt_host_sessions __attribute__((weak_import)), vt_host_frames_in __attribute__((weak_import)),
+    vt_host_frames_out __attribute__((weak_import)), vt_host_frames_dropped __attribute__((weak_import)),
+    vt_host_errors __attribute__((weak_import)), vt_host_error_stage __attribute__((weak_import));
+extern volatile int32_t vt_host_error_value __attribute__((weak_import));
+extern volatile uint32_t iris_media_stats[14] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recovery_fault[5] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_recover_trace[4] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_vm_fail[4] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_global_fault[4] __attribute__((weak_import));
 extern volatile uint64_t native_adreno_fault_place[4] __attribute__((weak_import));
 extern char native_adreno_fault_owner[20] __attribute__((weak_import));
 extern uint32_t native_gpu_restart[4] __attribute__((weak_import));
@@ -285,6 +302,7 @@ extern unsigned sheng_wifi_rx_rows(char [][120], unsigned) __attribute__((weak_i
 extern volatile uint32_t native_adreno_freed_outside __attribute__((weak_import));
 extern volatile uint32_t native_adreno_bo_contig[2] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_map_fail[7][2] __attribute__((weak_import));
+extern volatile uint64_t native_adreno_map_met[7] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wc_audit[6] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_submit_ibs[4] __attribute__((weak_import));
 extern volatile uint32_t native_touch_edge_stats[4] __attribute__((weak_import));
@@ -1192,6 +1210,53 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_adreno_table_pages ? native_adreno_table_pages[3] : 0, NativeAdrenoGpuContextInputBits ? NativeAdrenoGpuContextInputBits() : 0);
     at = put(out, at, cap, row, sizeof row);
   }
+  // [video]: the VPU's state in native_video_stats order (VideoProbe.cpp: stage, error, SMMU domain, interrupts, PAS, core state, system
+  // error, recoveries, suspends, resumes, firmware, clocks, SCM results, RPMh, table status, pages mapped, live buffers), then the
+  // firmware's version. [video vt]: VideoToolbox's paravirtualized codecs over it: the transport's stage (1 classes
+  // registered, 2 service published), opens, messages and refused messages (VtParavirt.cpp); the host's sessions, frames given,
+  // frames handed over with a picture, frames handed over as dropped, errors and the last error's stage and value (VtHost.cpp).
+  if (&native_video_stats && native_video_stats[0]) {
+    const volatile int32_t *v = native_video_stats;
+    char row[320];
+    snprintf(row, sizeof row, "[video] %d %d %x %d %d %d %x %d %d %d %d %x %x/%x %x %d %d %d %.60s",
+             v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15], v[16], v[17],
+             &native_video_text ? native_video_text : "");
+    at = put(out, at, cap, row, sizeof row);
+    // [video alloc]: buffers the VPU could not be given (VideoProbe.cpp, native_video_alloc).
+    if (&native_video_alloc && native_video_alloc[0]) {
+      snprintf(row, sizeof row, "[video alloc] refused %d pages %d step %d result %x reach %d bits", native_video_alloc[0], native_video_alloc[1],
+               native_video_alloc[2], native_video_alloc[3], native_video_alloc[4]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    // [video fw]: the firmware's last four debug messages, oldest first, after how many it wrote.
+    if (&native_video_fw_lines && native_video_fw_lines) {
+      const uint32_t n = native_video_fw_lines;
+      for (uint32_t i = n > 4 ? n - 4 : 0; i < n; ++i) {
+        snprintf(row, sizeof row, "[video fw] %u %.99s", n, native_video_fw_text[i & 3]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+    }
+    // [video fw error]: the firmware's error messages, whole: how many, then the first two and the newest four.
+    if (&native_video_fw_errors && native_video_fw_errors) {
+      for (uint32_t i = 0; i < 6 && i < native_video_fw_errors; ++i) {
+        snprintf(row, sizeof row, "[video fw error] %u %.199s", native_video_fw_errors, native_video_fw_error[i]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+    }
+    if (&vt_paravirt_stage && &vt_host_sessions) {
+      snprintf(row, sizeof row, "[video vt] %u %u %u %u | %u %u %u %u %u %u/%d",
+               vt_paravirt_stage, vt_paravirt_opens, vt_paravirt_messages, vt_paravirt_refused, vt_host_sessions, vt_host_frames_in,
+               vt_host_frames_out, vt_host_frames_dropped, vt_host_errors, vt_host_error_stage, vt_host_error_value);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    // [video media]: the decoder device's counts in iris_media_stats order (IrisMedia.cpp).
+    if (&iris_media_stats) {
+      const volatile uint32_t *m = iris_media_stats;
+      snprintf(row, sizeof row, "[video media] %u %u %u %u %u %x %u %x %x %u %u %u %u %x", m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8],
+               m[9], m[10], m[11], m[12], m[13]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+  }
   // [gpu recovery]: msm hangcheck and GPU restarts (NativeAdrenoSubmit::recover): hangs found, restarts, failed restarts, the last hung
   // fence, the last restart's IOReturn, submissions replayed, hangs with a guilty job, hangs of the kernel's VM; then the board's restart
   // (restarts, the step a failed one stopped at, its status, RBBM_STATUS after the reset); then the SMMU faults ended before a restart
@@ -1208,6 +1273,18 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_adreno_recovery_fault ? native_adreno_recovery_fault[4] : 0);
     at = put(out, at, cap, row, sizeof row);
     // Where the last recover() stopped: step (1 fence read, 2 restart hook, 3 table write, 4 nop, 5 replay vm, 6 replay submit), the status there, fence, last submitted.
+    // An address space taken out of use: how many, the last one's status, source line (NativeAdrenoVm.cpp) and 1 for a process's.
+    if (&native_adreno_vm_fail && native_adreno_vm_fail[0]) {
+      snprintf(row, sizeof row, "[gpu vm fail] %u st %u line %u proc %u", native_adreno_vm_fail[0], native_adreno_vm_fail[1],
+               native_adreno_vm_fail[2], native_adreno_vm_fail[3]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    // The SMMU's global fault status: seen by an address space's check (count, word), cleared at a recovery (count, word).
+    if (&native_adreno_global_fault && (native_adreno_global_fault[0] || native_adreno_global_fault[2])) {
+      snprintf(row, sizeof row, "[gpu global fault] seen %u %x cleared %u %x", native_adreno_global_fault[0], native_adreno_global_fault[1],
+               native_adreno_global_fault[2], native_adreno_global_fault[3]);
+      at = put(out, at, cap, row, sizeof row);
+    }
     if (&native_adreno_recover_trace && native_adreno_recover_trace[0]) {
       snprintf(row, sizeof row, "[gpu recover stop] step %u st %x fence %u last %u", native_adreno_recover_trace[0], native_adreno_recover_trace[1],
                native_adreno_recover_trace[2], native_adreno_recover_trace[3]);
@@ -2097,6 +2174,15 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     for (unsigned k = 0; k < 5 && native_adreno_map_fail[k][1]; ++k) n += snprintf(row + n, sizeof row - n, " %x x%u", native_adreno_map_fail[k][0], native_adreno_map_fail[k][1]);
     snprintf(row + n, sizeof row - n, " | at last: spans=%u objects=%u iova_pfn=%x handle=%x", native_adreno_map_fail[5][0], native_adreno_map_fail[5][1], native_adreno_map_fail[6][0], native_adreno_map_fail[6][1]);
     at = put(out, at, cap, row, sizeof row);
+    if (&native_adreno_map_met) {
+      // What the last failed map asked (bytes; "again" where its handle was mapped already) and the mapping at or past its address.
+      const volatile uint64_t *m = native_adreno_map_met;
+      char met[220];
+      snprintf(met, sizeof met, "[map met] asked %llx+%llx%s | there: %llx+%llx handle=%llx jobs=%llu kind=%llx", (unsigned long long)m[0],
+               (unsigned long long)(m[1] & ~(1ull << 63)), m[1] >> 63 ? " again" : "", (unsigned long long)m[2], (unsigned long long)m[3],
+               (unsigned long long)m[4], (unsigned long long)m[5], (unsigned long long)m[6]);
+      at = put(out, at, cap, met, sizeof met);
+    }
   }
   if (log_gpu_on && (&native_adreno_client_stats)) {
     // per client slot: live objects/peak, refused BoAllocs, last refusal status and bytes, highest mapped end in the window (MiB),
@@ -2203,6 +2289,13 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       }
     // Map handles: next at the stalled job's submission, then under the BR IB1, BV IB1, BV IB2 (>= the first: mapped after it).
     if (&native_adreno_stall_mem) {
+      if (&native_adreno_stall_find && native_adreno_stall_find[11]) {
+        // The search of the stalled job's IB1s for the IB2 the thread stopped in (NativeAdrenoSubmit.cpp, findIb2).
+        const volatile uint32_t *f = native_adreno_stall_find;
+        snprintf(row, sizeof row, "[gpu stall] ib2 found %u in ib1 #%u %x:%x +%u: %x %x | %x %x %x %x | read %u ib1 %u dwords, %u unreadable",
+                 f[0], f[1], f[3], f[2], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13]);
+        at = put(out, at, cap, row, sizeof row);
+      }
       snprintf(row, sizeof row, "[gpu stall] handles job>=%u br=%u bv=%u bv2=%u", native_adreno_stall_mem[55], native_adreno_stall_mem[56],
                native_adreno_stall_mem[57], native_adreno_stall_mem[58]);
       at = put(out, at, cap, row, sizeof row);
@@ -2286,7 +2379,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if (boot_log_reset_watchdog[0]) at = put(out, at, cap, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
     if (boot_log_reset_result[0]) at = put(out, at, cap, boot_log_reset_result, sizeof boot_log_reset_result);
   }
-  // Ring switches the CP never finished (the first two): the CP's stall words as in [gpu stall], then the ring's progress words.
+  // Ring switches the CP never finished (the first two): the CP's stall words as in [gpu stall] (the last two: CP_CONTEXT_SWITCH_CNTL
+  // at the timeout, then 0x80000000 | the ring left << 8 | the ring asked for), then the ring's progress words.
   if (log_gpu_on && &native_adreno_switch_timeout && &native_adreno_switch_timeouts && native_adreno_switch_timeouts) {
     for (unsigned e = 0; e < 2 && e < native_adreno_switch_timeouts; ++e) {
       char row[360];
@@ -2481,8 +2575,9 @@ static int msg_stream_write(void) {
 // Log groups (boot arguments log-gpu, log-display, log-wifi, log-audio, log-input, log-power, log-sys; each =1 turns its rows on, all are off
 // without them). A slot's text is a list of sections: a line that starts with "[tag]" opens one and the lines after it (until the next
 // "[") belong to it. The slot's own head line and the panic text are always kept, and with diag=1 the [diag] row too.
-enum {LogGpu, LogDisplay, LogWifi, LogAudio, LogInput, LogPower, LogSys, LogGroups};
-static const char *const log_group_arg[LogGroups] = {"log-gpu", "log-display", "log-wifi", "log-audio", "log-input", "log-power", "log-sys"};
+enum {LogGpu, LogDisplay, LogWifi, LogAudio, LogInput, LogPower, LogVideo, LogSys, LogGroups};
+static const char *const log_group_arg[LogGroups] = {"log-gpu", "log-display", "log-wifi", "log-audio", "log-input", "log-power", "log-video",
+                                                     "log-sys"};
 static uint32_t log_group_on;
 // Tag prefixes by group, the first match wins ("gpu dcvs" before "gpu"); a tag in no list is a system row.
 static const struct {const char *prefix; uint8_t group;} log_tags[] = {
@@ -2492,6 +2587,7 @@ static const struct {const char *prefix; uint8_t group;} log_tags[] = {
   {"wifi", LogWifi}, {"qrtr", LogWifi},
   {"audio", LogAudio}, {"mic", LogAudio}, {"amps", LogAudio}, {"adsp", LogAudio},
   {"touch", LogInput}, {"hid", LogInput},
+  {"video", LogVideo},
   {"thermal", LogPower}, {"board clock", LogPower}, {"battery", LogPower}, {"charger", LogPower}, {"clocks", LogPower}, {"cpu", LogPower},
 };
 static unsigned log_tag_group(const char *tag) {

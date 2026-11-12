@@ -720,6 +720,27 @@ usb_late = USB_OUT / 'QcomDwc3.late.o'
 run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_QcomDwc3.cpp',
      USB_OUT / 'QcomDwc3.o', usb_late])
 input_objects += [usb_late, USB_OUT / 'usb-bindings.o', USB_OUT / 'usb-addresses.o', USB_OUT / 'UsbProbe.o']
+# The VPU: the iris driver's C parts, the SoC's video clock controller and apps SMMU domain, the board platform, the iris decoder as
+# a V4L2 decoder device, and VideoToolbox's paravirtualized codec transport and host over it (the transport's classes registered late).
+IRIS = Path(os.environ.get('QCOM_IRIS_DIR') or DEVICE / 'drivers/QcomIris')
+require((IRIS / 'include/QcomIrisDevice.h').exists() and (IRIS / 'kernel/VtParavirt.cpp').exists(), 'QcomIris module directory')
+IRIS_OUT = board_dir / 'qcom-iris'
+IRIS_OUT.mkdir(parents=True, exist_ok=True)
+input_objects += [Path(line.split(' ', 1)[1]) for line in run(['python3', ROOT / 'scripts/build-qcom-iris.py', IRIS, IRIS_OUT / 'c',
+    '--tree', ROOT], text=True).splitlines() if line.startswith('OBJ ')]
+for stem in ('Sm8550VideoCc', 'Sm8550AppsSmmu'):
+    compile_c(ROOT / 'kits/Sm8550Platform' / (stem + '.c'), IRIS_OUT / (stem + '.o'))
+    input_objects.append(IRIS_OUT / (stem + '.o'))
+iris_flags = ('-I', str(IRIS / 'include'), '-I', str(IRIS / 'kernel'), '-I', str(IRIS / 'shim'),
+              '-I', str(IRIS / 'deps/linux/drivers/media/platform/qcom/iris'), '-I', str(ROOT / 'kits/Sm8550Platform'), '-I', str(ROOT / 'kits/ArmSmmu4K'))
+for src in (KITS / 'VideoProbe.cpp', KITS / 'VideoToolboxProbe.cpp', IRIS / 'kernel/IrisMedia.cpp', IRIS / 'kernel/VtHost.cpp',
+            IRIS / 'kernel/VtParavirt.cpp'):
+    compile_cpp(src, IRIS_OUT / (src.stem + '.o'), iris_flags + ('-Os',))   # native text is short of room
+run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--globalize-symbol=__GLOBAL__sub_I_VtParavirt.cpp',
+     IRIS_OUT / 'VtParavirt.o', IRIS_OUT / 'VtParavirt.late.o'])
+input_objects += [IRIS_OUT / 'VideoProbe.o', IRIS_OUT / 'VideoToolboxProbe.o', IRIS_OUT / 'IrisMedia.o', IRIS_OUT / 'VtHost.o',
+                  IRIS_OUT / 'VtParavirt.late.o']
+print('Video: the iris decoder device and the VideoToolbox host')
 print(f'USB: {len(usb_bindings)} original bindings, {usb_vt} and {xhci_vt} match the original diversities')
 # macOS: the board's Ethernet controller en0 (ShengEthernet.cpp), an IOEthernetController of the original IONetworkingFamily compiled with
 # the macOS SDK's public family headers (after the kernel's own, so only IOKit/network comes from there). Its vtable must be the
@@ -875,6 +896,11 @@ sources += [Path(name) for name in json.loads((board_dir / 'qca-bluetooth/report
 for directory in ('include', 'src', 'shim', 'out/linux'):
     sources += sorted((BLUETOOTH / directory).rglob('*.h'))
 sources += [ROOT / 'kits/Sm8550Platform' / name for name in ('Sm8550GeniUart.h', 'Sm8550QupDma.h')]
+sources += [KITS / 'VideoProbe.cpp', KITS / 'VideoToolboxProbe.cpp', ROOT / 'scripts/build-qcom-iris.py', IRIS / 'tools/source-lock.json',
+            ROOT / 'kits/Sm8550Platform/Sm8550VideoCc.c', ROOT / 'kits/Sm8550Platform/Sm8550AppsSmmu.c']
+sources += [Path(name) for name in json.loads((IRIS_OUT / 'c/report.json').read_text())['source']]
+for directory in ('include', 'kernel', 'src', 'shim'):
+    sources += sorted((IRIS / directory).rglob('*.h')) + sorted((IRIS / directory).glob('*.cpp'))
 sources += [KITS / name for name in ('SmmuBypass.h', 'AppsSmmuLock.h', 'UsbProbe.cpp')]
 sources += [KITS / name for name in ('KeyboardCover.cpp', 'KeyboardProbe.cpp', 'Wn8030.c', 'Wn8030.h', 'GeniI2c.c', 'GeniI2c.h')]
 sources += [keyboard_firmware]

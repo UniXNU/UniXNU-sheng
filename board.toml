@@ -73,6 +73,8 @@ audio_system_plugins = ["BTAudioHALPlugin.driver"]
 wifi_tool = "scripts/build-wifi-userspace.py"
 wifi_target = "ios27"
 wifi_launchd_cache = true
+# Device firmware the board extracted (proprietary-files.txt), staged as data under the addon's firmware/ prefix.
+firmware_tools = ["scripts/stage-video-firmware.py"]
 wifi_bin_prefix = "wifi-bin"
 bluetooth_tool = "scripts/build-bluetooth-userspace.py"
 bluetooth_target = "ios27"
