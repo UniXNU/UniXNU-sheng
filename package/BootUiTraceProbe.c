@@ -773,11 +773,12 @@ void boot_kcpu_scan(unsigned seconds) {
   }
  }
  task_unlock(kernel_task);
- uint64_t frequency=0;__asm__ volatile("mrs %0, cntfrq_el0":"=r"(frequency));
- // recount_thread_time_mach is in mach time units; the board's user timebase may be scaled, the ratio between rows is what counts.
- for(unsigned k=0;k<BT_KCPU;++k)top[k].used=frequency?top[k].used*1000/frequency:0;
+ // Recount uses the kernel's Mach timebase, which can differ from CNTFRQ_EL0.
+ for(unsigned k=0;k<BT_KCPU;++k) {
+  uint64_t ns=0;absolutetime_to_nanoseconds(top[k].used,&ns);top[k].used=ns/1000000;
+ }
  memcpy(kcpu_published,top,sizeof(kcpu_published));kcpu_published_count=BT_KCPU;kcpu_interval=interval;
- kcpu_total_ms=frequency?(unsigned)(total*1000/frequency):0;
+ uint64_t total_ns=0;absolutetime_to_nanoseconds(total,&total_ns);kcpu_total_ms=(unsigned)(total_ns/1000000);
 }
 unsigned boot_kcpu_rows(char rows[][120],unsigned max) {
  unsigned n=0;

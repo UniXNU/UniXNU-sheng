@@ -32,8 +32,13 @@ static char capture_rows[10][120],published_rows[10][120];
 static unsigned capture_seen,capture_passes,published_passes,published_seen,publish_lock;
 static unsigned chrono_focus_initialized;
 static char focus_name[32],focus2_name[32],focus3_name[32],focus4_name[32];
+#if XNU_TARGET_OS_OSX
+static unsigned trace_slot[10]={0,1,1,1,1};
+static const char *targets[]={"launchd","WindowServer","Dock","Finder","loginwindow","lsd","keybagd","cfprefsd","containermanagerd","kernel_task"};
+#else
 static unsigned trace_slot[10]={0,1,1};
 static const char *targets[]={"launchd","backboardd","SpringBoard","PreBoard","runningboardd","lsd","keybagd","cfprefsd","containermanagerd","kernel_task"};
+#endif
 // boot-ui-follow=1: follow a wait chain by pid. follow_pid[0] is the process the SpringBoard slot sends to (traced in slot 4, role U),
 // follow_pid[1] the one that process sends to (traced in slot 1, role B); 0 = nothing to follow.
 static unsigned follow_enabled;
@@ -85,7 +90,8 @@ static int capture(proc_t p,void *arg) {
  }
  unsigned total=(unsigned)task->thread_count,slide=task->task_shared_region_slide;task_unlock(task);
  snprintf(capture_rows[index],120,"%.15s p%d n%u r%u w%u b%u t%u s%x/%d W%llx C%llx U%llx +%x",
-  name,proc_pid(p),total,running,waiting,busy,sampled,state,priority,wait,continuation,userPC,slide);
+  name,proc_pid(p),total,running,waiting,busy,sampled,state,priority,
+  (unsigned long long)wait,(unsigned long long)continuation,(unsigned long long)userPC,slide);
  if(trace_slot[index] && boot_ui_trace_task)boot_ui_trace_task(task,index,proc_pid(p),name,slide);
  capture_seen=capture_seen+1;return PROC_RETURNED;
 }
@@ -99,7 +105,10 @@ void boot_process_capture(void) {
   if(focus==1){targets[1]="chronod";targets[3]="backboardd";}
   // boot-ui-focus=<process> replaces the sampled second slot; the chronod flag above stays as a fallback.
   if(PE_parse_boot_argn("boot-ui-focus",focus_name,sizeof(focus_name)) && focus_name[0]) {
-   focus_name[sizeof(focus_name)-1]=0;targets[1]=focus_name;targets[3]="backboardd";
+   focus_name[sizeof(focus_name)-1]=0;targets[1]=focus_name;
+#if !XNU_TARGET_OS_OSX
+   targets[3]="backboardd";
+#endif
   }
   // boot-ui-focus2=<process> likewise replaces the third slot (normally SpringBoard, role S).
   if(PE_parse_boot_argn("boot-ui-focus2",focus2_name,sizeof(focus2_name)) && focus2_name[0]) {

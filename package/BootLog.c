@@ -29,6 +29,10 @@ extern uint32_t boot_cache_input_ready(void) __attribute__((weak_import));
 
 #if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
 extern void boot_process_start(void);
+extern void boot_process_snapshot(void) __attribute__((weak_import));
+extern char boot_process_rows[10][120] __attribute__((weak_import));
+extern volatile unsigned boot_process_passes, boot_process_seen, boot_process_attempts, boot_process_busy __attribute__((weak_import));
+extern unsigned boot_callout_rows(char rows[][120], unsigned cap) __attribute__((weak_import));
 #endif
 
 extern int native_ufs_log_open(uint64_t *, uint64_t *, const char **) __attribute__((weak_import));
@@ -789,6 +793,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // Every traced process's stacks (the banner shows only what fits the panel): role 0..3 are the boot-ui-focus slots, main thread in full
   // (symbolicate with unslid = address - cache slide), then its thread groups.
   LOG_AT("ui trace roles");
+  if (&boot_process_snapshot && &boot_process_rows) {
+    boot_process_snapshot();
+    char row[120];
+    snprintf(row, sizeof row, "[process capture] attempts=%u passes=%u seen=%u busy=%u",
+             boot_process_attempts, boot_process_passes, boot_process_seen, boot_process_busy);
+    at = put(out, at, cap, row, sizeof row);
+    for (unsigned i = 0; i < 10; ++i) at = put(out, at, cap, boot_process_rows[i], 120);
+  }
   if (&boot_ui_trace_role_rows) {
     static char rows[64][120];
     at = put(out, at, cap, "[stacks]", 10);
@@ -808,6 +820,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   // The busiest kernel threads of the last interval (BootUiTraceProbe.c boot_kcpu_scan).
   LOG_AT("kernel cpu scan");
+  if (&boot_callout_rows) {
+    static char rows[12][120];
+    unsigned n = boot_callout_rows(rows, 12);
+    for (unsigned i = 0; i < n; ++i) at = put(out, at, cap, rows[i], 120);
+  }
   if (&boot_kcpu_scan && &boot_kcpu_rows) {
     static char rows[6][120];
     boot_kcpu_scan(now);
