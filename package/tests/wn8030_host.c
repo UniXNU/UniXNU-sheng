@@ -176,8 +176,8 @@ int main(int argc, char **argv)
         FINGER(0, 1, 3, 1000, 1000);
         CHECK(wn8030_pointer_report(&st, r, o) == 0);                       /* the first touch does not move */
         FINGER(0, 1, 3, 1021, 990);
-        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[0] == WN8030_POINTER_ID && S16(o + 2) == 10 && S16(o + 4) == 5 && !o[6] && !o[7]);   /* Y falling by 10: the pointer goes down */
-        FINGER(0, 1, 3, 1022, 990);                                         /* the half count left over is kept */
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[0] == WN8030_POINTER_ID && S16(o + 2) == 21 && S16(o + 4) == 10 && !o[6] && !o[7]);   /* Y falling by 10: the pointer goes down */
+        FINGER(0, 1, 3, 1022, 990);                                         /* one raw count is visible immediately */
         CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && S16(o + 2) == 1 && S16(o + 4) == 0);
         FINGER(1, 1, 4, 1500, 990);
         CHECK(wn8030_pointer_report(&st, r, o) == 0);                       /* a second finger does not jump */
@@ -209,26 +209,45 @@ int main(int argc, char **argv)
         r[1] = 0;
         CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && o[1] == 0);
 
-        /* No movement is lost to the division: 101 steps of one count are 50 pointer counts with one half count pending, and a step
-         * back takes that half count away again. */
+        /* Every one-count sample is sent, including diagonals and a reversal. */
         memset(&st, 0, sizeof st);
         FINGER(0, 1, 7, 500, 500);
         CHECK(wn8030_pointer_report(&st, r, o) == 0);
         int total = 0;
         for (int i = 1; i <= 101; ++i) {
-            FINGER(0, 1, 7, 500 + i, 500);
-            if (wn8030_pointer_report(&st, r, o)) {CHECK(S16(o + 2) == 1 && !S16(o + 4)); ++total;}
+            FINGER(0, 1, 7, 500 + i, 500 + i);
+            CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT);
+            CHECK(S16(o + 2) == 1 && S16(o + 4) == -1);
+            total += S16(o + 2);
         }
-        CHECK(total == 50 && st.move_x == 1);
-        FINGER(0, 1, 7, 600, 500);
-        CHECK(wn8030_pointer_report(&st, r, o) == 0 && st.move_x == 0);
-        FINGER(0, 1, 7, 597, 503);                                          /* three counts back and three up: one count each, a half left */
-        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && S16(o + 2) == -1 && S16(o + 4) == -1 && st.move_x == -1 && st.move_y == -1);
-        /* Another contact in the finger's place is a new start, not a jump. */
+        CHECK(total == 101 && st.move_x == 0 && st.move_y == 0);
+        FINGER(0, 1, 7, 600, 602);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && S16(o + 2) == -1 && S16(o + 4) == -1);
+        FINGER(0, 1, 7, 597, 605);
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && S16(o + 2) == -3 && S16(o + 4) == -3);
+        /* Another contact in the finger's place starts without a jump or a remainder. */
         FINGER(0, 1, 8, 2500, 100);
-        CHECK(wn8030_pointer_report(&st, r, o) == 0 && st.move_x == -1);
+        CHECK(wn8030_pointer_report(&st, r, o) == 0 && st.move_x == 0);
         FINGER(0, 1, 8, 2504, 100);
-        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && S16(o + 2) == 1 && !S16(o + 4));
+        CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT && S16(o + 2) == 4 && !S16(o + 4));
+        CHECK(wn8030_pointer_report(&st, r, o) == 0);  /* genuinely unchanged samples remain suppressed */
+        /* Equal-rate paths retain all nonzero samples at every angle, including alternating (1,0)/(0,1). */
+        for (int path = 0; path < 4; ++path) {
+            memset(&st, 0, sizeof st);
+            int x = 1000, y = 1000, tx = 0, ty = 0;
+            FINGER(0, 1, 8, x, y);
+            CHECK(wn8030_pointer_report(&st, r, o) == 0);
+            for (int i = 0; i < 300; ++i) {
+                const int dx = path == 1 ? 0 : path == 3 ? (i & 1) : 1;
+                const int dy = path == 0 ? 0 : path == 3 ? !(i & 1) : 1;
+                x += dx; y += dy;
+                FINGER(0, 1, 8, x, y);
+                CHECK(wn8030_pointer_report(&st, r, o) == WN8030_POINTER_REPORT);
+                CHECK(S16(o + 2) == dx && S16(o + 4) == -dy);
+                tx += S16(o + 2); ty += S16(o + 4);
+            }
+            CHECK(tx == x - 1000 && ty == 1000 - y);
+        }
 
         /* Scroll: 48 counts a step, the rest kept; more steps than a report holds go out with the next reports. */
         memset(&st, 0, sizeof st);

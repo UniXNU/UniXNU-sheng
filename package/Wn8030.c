@@ -204,8 +204,7 @@ unsigned wn8030_touchpad_report(const uint8_t in[WN8030_TOUCHPAD_REPORT], uint8_
     return lifted;
 }
 
-/* 3048 counts span 9.35 cm (828 per inch); half of that is a common pointer resolution, and 48 counts (1.5 mm) make one scroll step. */
-#define WN8030_POINTER_DIVIDE 2
+/* Pointer motion keeps the controller counts. Scroll uses 48 counts (about 1.5 mm) per step. */
 #define WN8030_SCROLL_COUNTS 48
 static int32_t pointer_take(int32_t *pending, int32_t unit, int32_t limit)
 {
@@ -254,7 +253,7 @@ unsigned wn8030_pointer_report(struct wn8030_pointer *state, const uint8_t touch
         buttons |= state->click;
     } else state->click = 0;
     if (touchpad[1] & 2u) buttons |= 2u;
-    const int32_t mx = pointer_take(&state->move_x, WN8030_POINTER_DIVIDE, 32767), my = pointer_take(&state->move_y, WN8030_POINTER_DIVIDE, 32767);
+    const int32_t mx = pointer_take(&state->move_x, 1, 32767), my = pointer_take(&state->move_y, 1, 32767);
     const int32_t sy = pointer_take(&state->scroll_y, WN8030_SCROLL_COUNTS, 127), sx = pointer_take(&state->scroll_x, WN8030_SCROLL_COUNTS, 127);
     if (!mx && !my && !sx && !sy && buttons == state->buttons) return 0;
     state->buttons = buttons;

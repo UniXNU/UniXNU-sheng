@@ -67,8 +67,10 @@ const uint8_t kDescriptor[] = {
     0x05, 0x01, 0x09, 0x02, 0xa1, 0x01, 0x85, 0x1a, 0x09, 0x01, 0xa1, 0x00,
     0x05, 0x09, 0x19, 0x01, 0x29, 0x02, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x02, 0x81, 0x02,
     0x95, 0x06, 0x81, 0x03,
-    0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x16, 0x01, 0x80, 0x26, 0xff, 0x7f, 0x75, 0x10, 0x95, 0x02, 0x81, 0x06,
-    0x09, 0x38, 0x15, 0x81, 0x25, 0x7f, 0x75, 0x08, 0x95, 0x01, 0x81, 0x06,
+    // Raw counts at 828 counts/inch. Physical extents are thousandths of an inch; push/pop keeps units off the scroll axes.
+    0xa4, 0x65, 0x13, 0x55, 0x0d, 0x37, 0x6b, 0x65, 0xff, 0xff, 0x47, 0x95, 0x9a, 0x00, 0x00,
+    0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x16, 0x01, 0x80, 0x26, 0xff, 0x7f, 0x75, 0x10, 0x95, 0x02, 0x81, 0x06, 0xb4,
+    0x05, 0x01, 0x09, 0x38, 0x15, 0x81, 0x25, 0x7f, 0x75, 0x08, 0x95, 0x01, 0x81, 0x06,
     0x05, 0x0c, 0x0a, 0x38, 0x02, 0x81, 0x06,
     0xc0, 0xc0,
 #else
@@ -99,6 +101,8 @@ class ShengKeyboardCover : public IOHIDDevice {
     IOWorkLoop *inputLoop = nullptr;
     IOCommandGate *gate = nullptr;
     volatile uint8_t enabled = 1;
+    IOBufferMemoryDescriptor *inputReport = nullptr;
+    bool gateAdded = false, stopping = false, reporting = false;
 #if NATIVE_COVER_POINTER
     struct wn8030_pointer pointer = {};
 #endif
@@ -106,9 +110,16 @@ class ShengKeyboardCover : public IOHIDDevice {
     static IOReturn submitAction(OSObject *owner, void *bytes, void *length, void *, void *) {
         ShengKeyboardCover *self = OSDynamicCast(ShengKeyboardCover, owner);
         if (!self) return kIOReturnBadArgument;
-        IOBufferMemoryDescriptor *report = IOBufferMemoryDescriptor::withBytes(bytes, reinterpret_cast<uintptr_t>(length), kIODirectionNone);
-        const IOReturn result = report ? self->handleReport(report, kIOHIDReportTypeInput, 0) : kIOReturnNoMemory;
-        OSSafeReleaseNULL(report);
+        const uintptr_t count = reinterpret_cast<uintptr_t>(length);
+        if (self->stopping || self->reporting) return kIOReturnNotReady;
+        if (!self->inputReport || !count || count > kLongestReport) return kIOReturnBadArgument;
+        // The gate serializes producers. handleReport and its interface callbacks consume/copy the bytes before returning.
+        // A recursive callback must not overwrite a descriptor that is still being consumed.
+        self->reporting = true;
+        self->inputReport->setLength(count);
+        const IOReturn result = self->inputReport->writeBytes(0, bytes, count) == count
+            ? self->handleReport(self->inputReport, kIOHIDReportTypeInput, 0) : kIOReturnNoSpace;
+        self->reporting = false;
         if (result) {native_keyboard_hid_stats[2] = native_keyboard_hid_stats[2] + 1; native_keyboard_hid_stats[5] = result;}
         else native_keyboard_hid_stats[1] = native_keyboard_hid_stats[1] + 1;
         return result;
@@ -185,18 +196,26 @@ public:
         inputLoop = IOWorkLoop::workLoop();
         if (!inputLoop) return false;
         gate = IOCommandGate::commandGate(this);
-        if (!gate || inputLoop->addEventSource(gate) != kIOReturnSuccess) {OSSafeReleaseNULL(gate); return false;}
+        if (!gate || inputLoop->addEventSource(gate) != kIOReturnSuccess) return false;
+        gateAdded = true;
+        inputReport = IOBufferMemoryDescriptor::withCapacity(kLongestReport, kIODirectionNone);
+        if (!inputReport) return false;
         // The generic HID event personality, as for any keyboard; not built in.
         if (!setProperty("HIDDefaultBehavior", true)) return false;
-        if (!IOHIDDevice::start(provider)) {inputLoop->removeEventSource(gate); OSSafeReleaseNULL(gate); return false;}
+        if (!IOHIDDevice::start(provider)) return false;
         native_keyboard_hid_stats[0] = native_keyboard_hid_stats[0] + 1;
         return true;
     }
     void stop(IOService *provider) override {
-        if (gate) {inputLoop->removeEventSource(gate); OSSafeReleaseNULL(gate);}
+        if (gateAdded) gate->runAction([](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
+            static_cast<ShengKeyboardCover *>(owner)->stopping = true;
+            return kIOReturnSuccess;
+        });
         IOHIDDevice::stop(provider);
     }
     void free() override {
+        if (gateAdded) inputLoop->removeEventSource(gate);
+        OSSafeReleaseNULL(inputReport);
         OSSafeReleaseNULL(gate);
         OSSafeReleaseNULL(inputLoop);
         IOHIDDevice::free();
