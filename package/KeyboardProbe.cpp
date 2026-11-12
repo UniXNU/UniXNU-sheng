@@ -28,6 +28,7 @@
 #include <mach/kmod.h>
 #include <string.h>
 #include "AppsSmmuLock.h"
+#include "KeyboardService.h"
 extern "C" {
 #include "GeniI2c.h"
 #include "Wn8030.h"
@@ -42,6 +43,7 @@ extern "C" IOService *sheng_keyboard_cover_allocate(void);
 extern "C" void sheng_keyboard_cover_input(IOService *, const uint8_t *, uint32_t);
 extern "C" void sheng_keyboard_cover_enable(IOService *, bool);
 extern "C" void sheng_keyboard_cover_output_sink(void (*)(void *, uint8_t), void *);
+extern "C" void sheng_battery_keyboard_attached(int) __attribute__((weak_import));
 extern "C" int armcpu_spi_attach(uint32_t, bool, void (*)(void *), void *, uint32_t *, uint64_t *) __attribute__((weak_import));
 extern "C" int armcpu_spi_share(uint32_t, void (*)(void *), void *) __attribute__((weak_import));
 extern "C" bool sm8550_gcc_update32(volatile uint32_t *, uint32_t, uint32_t) __attribute__((weak_import));
@@ -70,7 +72,7 @@ constexpr uint32_t kHalts[] = {0x233d4, 0x233d0, 0x233cc, 0x23004, 0x1e13c};
 constexpr uint32_t kRcg = 0x1e148;
 constexpr uint32_t kSeIntid = 32 + 583, kTlmmIntid = 32 + 208;
 constexpr unsigned kStatusPin = 56, kSleepPin = 57, kResetPin = 58, kSdaPin = 60, kSclPin = 61, kIrqPin = 62, kLidPin = 171, kTabletPin = 172;
-constexpr uint32_t kKeepaliveMs = 12000, kDebounceMs = 15;
+constexpr uint32_t kDebounceMs = 15, kHallPollMs = 1000;
 // TLMM per pin (pinctrl-sm8550.c): CTL bits 1:0 pull (1 down, 3 up), 5:2 function, 8:6 drive, 9 output enable; IO bit 0 in, bit 1 out;
 // INTR_CFG bit 0 enable, 1 polarity, 3:2 detection (1 rising, 3 both), 4 raw status, 7:5 target (3 the application processor);
 // INTR_STATUS bit 0, acknowledged with 0.
@@ -110,9 +112,10 @@ struct Keyboard {
     volatile uint32_t mcuIrqs, hallIrqs;
     volatile uint32_t capsWanted, capsRequests;
     // Thread state.
-    uint32_t mcuSeen, hallSeen, capsSeen;
+    uint32_t hallSeen, capsSeen;
     bool attached, inputEnabled, lid, tablet, caps, hallPending;
-    uint64_t keepalive, hallDue;   // absolute deadlines
+    uint64_t hallDue, hallPoll;   // milliseconds
+    KeyboardService service;
     IOService *hid;
     bool classRegistered;
     uint8_t frame[WN8030_FRAME_BYTES];
@@ -337,6 +340,8 @@ bool setupInterrupts() {
 }
 
 bool powerOn() {
+    setOutput(PinSleep, false);
+    setOutput(PinReset, false);
     IOSleep(10);                       // supplies settle with the controller in reset
     setOutput(PinReset, true);
     IOSleep(20);                       // the boot ROM starts
@@ -372,7 +377,7 @@ bool loadImage() {
     native_keyboard_stats[3] |= (verified & 0xff) << 24;
     if (verified != Wn8030RomVerified) return fail(6, 0x200 | (verified & 0xff));
     // Edges of the interrupt line before the firmware runs are not frames.
-    kb->mcuSeen = __atomic_load_n(&kb->mcuIrqs, __ATOMIC_ACQUIRE);
+    kb->service.seen = __atomic_load_n(&kb->mcuIrqs, __ATOMIC_ACQUIRE);
     if (!romWrite(WN8030_ROM_BOOT)) return fail(6, -12);
     IOSleep(50);
     native_keyboard_stats[4] = (int32_t)(nowMs() - start);
@@ -429,31 +434,35 @@ void releaseInputs() {
 }
 
 // The controller's side of the input state: touchpad reports, indicator LEDs and the backlight.
-void applyInputState() {
+bool applyInputState() {
     Keyboard *kb = gKb;
-    if (!kb->attached) return;
+    if (!kb->attached) return true;
     const bool on = kb->inputEnabled;
-    control(WN8030_CMD_TOUCHPAD, on ? 1 : 0);
-    control(WN8030_CMD_INDICATOR, on && kb->caps ? WN8030_LED_CAPS_ON : WN8030_LED_CAPS_OFF);
-    control(WN8030_CMD_INDICATOR, WN8030_LED_MIC_OFF);
-    control(WN8030_CMD_BACKLIGHT, on ? kb->backlight : 0);
+    bool ok = control(WN8030_CMD_TOUCHPAD, on ? 1 : 0);
+    ok = control(WN8030_CMD_INDICATOR, on && kb->caps ? WN8030_LED_CAPS_ON : WN8030_LED_CAPS_OFF) && ok;
+    ok = control(WN8030_CMD_INDICATOR, WN8030_LED_MIC_OFF) && ok;
+    ok = control(WN8030_CMD_BACKLIGHT, on ? kb->backlight : 0) && ok;
+    return ok;
 }
 
 void attachCover() {
     Keyboard *kb = gKb;
     kb->attached = true;
     kb->caps = false;                 // the controller keeps the Caps Lock LED between attaches; the system starts with it off
-    applyInputState();
+    kb->service.statePending = true;
     kb->hid = createHid();
     if (kb->hid) sheng_keyboard_cover_enable(kb->hid, kb->inputEnabled);
     else bump(8, 1 << 24);
-    kb->keepalive = deadlineMs(kKeepaliveMs);
+    kb->service.keepalive = nowMs();
+    if (sheng_battery_keyboard_attached) sheng_battery_keyboard_attached(1);
     native_keyboard_stats[8] = (native_keyboard_stats[8] & ~0xff) + 0x100 + 1;
 }
 
 void detachCover() {
     Keyboard *kb = gKb;
     kb->attached = false;
+    kb->service.statePending = false;
+    if (sheng_battery_keyboard_attached) sheng_battery_keyboard_attached(0);
     if (IOService *hid = kb->hid) {
         kb->hid = nullptr;
         hid->terminate();
@@ -473,12 +482,12 @@ void readHall() {
     native_keyboard_stats[10] = enabled;
     if (!enabled) releaseInputs();
     if (kb->hid) sheng_keyboard_cover_enable(kb->hid, enabled);
-    applyInputState();
+    kb->service.statePending = true;
 }
 
-void handleFrame() {
+bool handleFrame() {
     Keyboard *kb = gKb;
-    if (!readFrame()) return;
+    if (!readFrame()) return false;
     bump(6);
     Wn8030Frame f;
     switch (wn8030_parse(kb->frame, &f)) {
@@ -505,6 +514,7 @@ void handleFrame() {
     case Wn8030Attach:
         if (f.attached == 1 && !kb->attached) attachCover();
         else if (f.attached == 0 && kb->attached) detachCover();
+        else if (f.attached >= 0 && sheng_battery_keyboard_attached) sheng_battery_keyboard_attached(f.attached);
         break;
     case Wn8030Accel:
         native_keyboard_accel[0] = f.x; native_keyboard_accel[1] = f.y; native_keyboard_accel[2] = f.z;
@@ -516,41 +526,82 @@ void handleFrame() {
     case Wn8030Invalid: break;
     default: bump(15, 0x10000); break;
     }
+    return true;
 }
+
+// Recover only from communication errors, never from a quiet keyboard. Reset releases the bus; the GENI engine must be idle before
+// its FIFO state is prepared again. Interrupt registrations and the existing HID device survive a controller reload.
+bool recoverController() {
+    Keyboard *kb = gKb;
+    releaseInputs();
+    setOutput(PinSleep, false);
+    setOutput(PinReset, false);
+    IOInterruptState state = IOSimpleLockLockDisableInterrupt(kb->busLock);
+    wr32(kb->se.va, GENI_M_IRQ_EN, 0);
+    wr32(kb->se.va, GENI_TX_WATERMARK, 0);
+    if (rd32(kb->se.va, 0x40) & 1u) wr32(kb->se.va, GENI_M_CMD_CTRL, GENI_CMD_CTRL_ABORT);
+    IOSimpleLockUnlockEnableInterrupt(kb->busLock, state);
+    for (unsigned i = 0; i < 20 && (rd32(kb->se.va, 0x40) & 1u); ++i) IOSleep(1);
+    if (rd32(kb->se.va, 0x40) & 1u) return false;
+    const GeniIo io = {ioRd, ioWr, reinterpret_cast<void *>(kb->se.va)};
+    uint32_t config = 0;
+    state = IOSimpleLockLockDisableInterrupt(kb->busLock);
+    const int prepared = geni_i2c_prepare(&kb->bus, &io, WN8030_ADDRESS, &config);
+    IOSimpleLockUnlockEnableInterrupt(kb->busLock, state);
+    if (prepared || !powerOn() || !loadImage()) return false;
+    stage(7);
+    return true;
+}
+
+struct KeyboardIO {
+    uint64_t now() const {return nowMs();}
+    uint32_t irqs() const {return __atomic_load_n(&gKb->mcuIrqs, __ATOMIC_ACQUIRE);}
+    bool attached() const {return gKb->attached;}
+    bool read() const {return handleFrame();}
+    void consumed(uint32_t seen) const {native_keyboard_stats[5] = (int32_t)seen;}
+    bool power() const {setOutput(PinSleep, true); return control(WN8030_CMD_KEYBOARD_POWER, 1);}
+    bool apply() const {return applyInputState();}
+    void release() const {releaseInputs();}
+    void wake() const {
+        setOutput(PinSleep, false); IOSleep(10);
+        setOutput(PinSleep, true); IOSleep(25);
+    }
+    bool recover() const {return recoverController();}
+};
 
 void serve() {
     Keyboard *kb = gKb;
+    KeyboardIO io;
+    kb->hallPoll = nowMs() + kHallPollMs;
+    kb->service.keepalive = nowMs() + KeyboardService::keepaliveMs;
     for (;;) {
-        while (kb->mcuSeen != __atomic_load_n(&kb->mcuIrqs, __ATOMIC_ACQUIRE)) {
-            ++kb->mcuSeen;
-            native_keyboard_stats[5] = (int32_t)kb->mcuSeen;
-            handleFrame();
-        }
         const uint32_t hall = __atomic_load_n(&kb->hallIrqs, __ATOMIC_ACQUIRE);
         if (hall != kb->hallSeen) {
             kb->hallSeen = hall;
             kb->hallPending = true;
-            kb->hallDue = deadlineMs(kDebounceMs);
+            kb->hallDue = nowMs() + kDebounceMs;
             native_keyboard_stats[9] = (native_keyboard_stats[9] & 3) | (int32_t)(hall << 8);
         }
-        const uint64_t now = mach_absolute_time();
-        if (kb->hallPending && now >= kb->hallDue) {kb->hallPending = false; readHall();}
+        const uint64_t now = nowMs();
+        if ((kb->hallPending && now >= kb->hallDue) || (!kb->hallPending && now >= kb->hallPoll)) {
+            kb->hallPending = false;
+            readHall();
+            kb->hallPoll = nowMs() + kHallPollMs;
+        }
         const uint32_t requests = __atomic_load_n(&kb->capsRequests, __ATOMIC_ACQUIRE);
         if (requests != kb->capsSeen) {
             kb->capsSeen = requests;
             kb->caps = __atomic_load_n(&kb->capsWanted, __ATOMIC_ACQUIRE) != 0;
-            if (kb->attached && kb->inputEnabled) control(WN8030_CMD_INDICATOR, kb->caps ? WN8030_LED_CAPS_ON : WN8030_LED_CAPS_OFF);
+            kb->service.statePending = kb->attached;
         }
-        if (kb->attached && now >= kb->keepalive) {
-            control(WN8030_CMD_KEYBOARD_POWER, 1);
-            kb->keepalive = deadlineMs(kKeepaliveMs);
-        }
-        uint64_t deadline = 0;
-        if (kb->attached) deadline = kb->keepalive;
-        if (kb->hallPending && (!deadline || kb->hallDue < deadline)) deadline = kb->hallDue;
-        if (deadline) assert_wait_deadline((event_t)&gWake, THREAD_UNINT, deadline);
-        else assert_wait((event_t)&gWake, THREAD_UNINT);
-        if (kb->mcuSeen != __atomic_load_n(&kb->mcuIrqs, __ATOMIC_ACQUIRE) || kb->hallSeen != __atomic_load_n(&kb->hallIrqs, __ATOMIC_ACQUIRE) ||
+        kb->service.step(io);
+        const uint64_t next = kb->service.deadline(nowMs(), io.irqs());
+        const uint64_t hallDeadline = kb->hallPending ? kb->hallDue : kb->hallPoll;
+        const uint64_t due = next < hallDeadline ? next : hallDeadline;
+        const uint64_t current = nowMs();
+        assert_wait_deadline((event_t)&gWake, THREAD_UNINT, deadlineMs(due > current ? (uint32_t)(due - current) : 1));
+        if (kb->service.deadline(nowMs(), io.irqs()) <= nowMs() ||
+            kb->hallSeen != __atomic_load_n(&kb->hallIrqs, __ATOMIC_ACQUIRE) ||
             kb->capsSeen != __atomic_load_n(&kb->capsRequests, __ATOMIC_ACQUIRE))
             clear_wait(current_thread(), THREAD_AWAKENED);
         else thread_block(THREAD_CONTINUE_NULL);

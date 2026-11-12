@@ -899,7 +899,7 @@ sources += [Path(name) for name in json.loads((IRIS_OUT / 'c/report.json').read_
 for directory in ('include', 'kernel', 'src', 'shim'):
     sources += sorted((IRIS / directory).rglob('*.h')) + sorted((IRIS / directory).glob('*.cpp'))
 sources += [KITS / name for name in ('SmmuBypass.h', 'AppsSmmuLock.h', 'UsbProbe.cpp')]
-sources += [KITS / name for name in ('KeyboardCover.cpp', 'KeyboardProbe.cpp', 'Wn8030.c', 'Wn8030.h', 'GeniI2c.c', 'GeniI2c.h')]
+sources += [KITS / name for name in ('KeyboardCover.cpp', 'KeyboardProbe.cpp', 'KeyboardService.h', 'Wn8030.c', 'Wn8030.h', 'GeniI2c.c', 'GeniI2c.h')]
 sources += [keyboard_firmware]
 sources += [USB / 'QcomDwc3.cpp', USB / 'QcomEusb2Phy.h', USB / 'QcomQmpUsb3.h', USB / 'QcomUcsi.h', ROOT / f'scripts/usb-xdci-{BUILD}.json', ROOT / f'scripts/usb-xhci-{BUILD}.json']
 

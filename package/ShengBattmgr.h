@@ -3,7 +3,7 @@
  * opcode); a property read is a request {battery 0, property, 0} answered by {property, value, result}; the DSP also sends notifications
  * when something changed. This is the message codec, the refresh cycle (one request in flight, the next one only when it is answered
  * or the owner's timer gives up on it) and the mapping to what iOS reads from a power source. No I/O, no waits: the owner sends the
- * bytes and feeds back what arrives. Charging itself stays with the DSP firmware; the one setting written here is the USB input current
+ * bytes and feeds back what arrives. Charging itself stays with the DSP firmware; settings written here are keyboard attachment and the USB input current
  * limit on a computer's port, which the firmware keeps low until the host side asks for more (as a USB device stack does once the
  * port configured it). */
 #ifndef SHENG_BATTMGR_H
@@ -22,6 +22,8 @@ extern "C" {
 #define SHENG_BATTMGR_OP_USB_GET 0x32u
 #define SHENG_BATTMGR_OP_USB_SET 0x33u
 #define SHENG_BATTMGR_OP_BOARD_GET 0x50u  /* the board's own properties, same request and answer shape: fuel gauges, charger state */
+#define SHENG_BATTMGR_OP_BOARD_SET 0x51u
+#define SHENG_BATTMGR_KEYBOARD_PLUGIN 0xe4u
 #define SHENG_BATTMGR_REQUEST_BYTES 24u
 #define SHENG_BATTMGR_ENABLE_BYTES 28u
 
@@ -39,7 +41,8 @@ enum {
 
 typedef struct {
     int32_t value[BmFields];
-    uint32_t valid;               /* bit per field */
+    uint32_t valid;               /* bit per field in the latest refresh */
+    uint32_t charge_known;        /* last successful status/USB-online readings survive transient errors */
     uint8_t cursor, in_flight, enabled, slow_due;
     uint32_t cycles_done, responses, notifications, errors, timeouts, ignored;
     uint32_t refresh_wanted;      /* a notification asked for a new cycle while one ran */
@@ -51,6 +54,10 @@ typedef struct {
     int32_t limit_port;
     uint32_t limit_due, limit_in_flight, limit_tries, limit_sets;
     int32_t limit_result;
+    int8_t keyboard_wanted, keyboard_acked, keyboard_in_flight; /* -1 unknown/none, 0 detached, 1 attached */
+    uint8_t keyboard_tries;
+    uint32_t keyboard_sets;
+    int32_t keyboard_result;
 } ShengBattmgr;
 
 /* What a power source shows. Temperatures are hundredths of a degree Celsius, as the firmware reports them. The charge comes from the
@@ -60,6 +67,7 @@ typedef struct {
     int present, external, charging, fully_charged, critical;
     int percent;                  /* 0..100 */
     int charge_known;             /* percent comes from a reading, not a default */
+    int external_known, status_known; /* unknown charger state must not publish a disconnect */
     int voltage_mv, current_ma;   /* current: positive while the battery takes charge */
     int temperature, temperature_valid;  /* valid: a reading in the range a battery can have */
     int raw_mah, full_mah, design_mah, cycles;
@@ -71,11 +79,13 @@ typedef struct {
 enum {BmIgnored = 0, BmAnswer = 1, BmCycleDone = 2, BmNotified = 3, BmEnabled = 4};
 
 void sheng_battmgr_init(ShengBattmgr *b);
+/* Queue the latest cover state. Calls are serialized by the battery work loop. */
+void sheng_battmgr_keyboard(ShengBattmgr *b, int attached);
 /* The notification enable request (sent once the channel is up). */
 uint32_t sheng_battmgr_enable_request(uint8_t out[SHENG_BATTMGR_ENABLE_BYTES]);
 /* Starts a refresh cycle (no effect while one runs: it is remembered and runs after). slow: also the fields that hardly change. */
 void sheng_battmgr_refresh(ShengBattmgr *b, int slow);
-/* The next request: an input current limit due after the last cycle, else the running cycle's next field; 0 when nothing is to be
+/* The next request: the latest keyboard state, a due input current limit, or the running cycle's next field; 0 when nothing is to be
  * sent now (one in flight, or nothing due). */
 uint32_t sheng_battmgr_next(ShengBattmgr *b, uint8_t out[SHENG_BATTMGR_REQUEST_BYTES]);
 /* The owner's request timer ran out: the field is skipped (a limit set counts as tried). */

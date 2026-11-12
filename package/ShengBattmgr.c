@@ -61,6 +61,16 @@ void sheng_battmgr_init(ShengBattmgr *b)
     b->last_timeout = -1;
     b->sdp_limit_ua = 900000;  /* a configured USB 3 port's 900 mA; the firmware's current limiting backs off if the port sags */
     b->limit_port = -1;
+    b->keyboard_wanted = b->keyboard_acked = b->keyboard_in_flight = -1;
+}
+
+void sheng_battmgr_keyboard(ShengBattmgr *b, int attached)
+{
+    attached = attached != 0;
+    if (b->keyboard_wanted == attached) return;
+    b->keyboard_wanted = (int8_t)attached;
+    b->keyboard_tries = 0;
+    sheng_battmgr_refresh(b, 0);
 }
 
 uint32_t sheng_battmgr_enable_request(uint8_t out[SHENG_BATTMGR_ENABLE_BYTES])
@@ -88,6 +98,7 @@ static void advance(ShengBattmgr *b)
 void sheng_battmgr_refresh(ShengBattmgr *b, int slow)
 {
     if (b->cursor != NO_CYCLE) {b->refresh_wanted = 1 + (slow != 0); return;}
+    b->keyboard_tries = 0;  /* periodic cycles retry an unacknowledged state, at most three sends per cycle */
     b->slow_due = slow || !(b->valid & (1u << BmFull));
     b->cursor = 0;
     b->in_flight = 0;
@@ -96,7 +107,17 @@ void sheng_battmgr_refresh(ShengBattmgr *b, int slow)
 
 uint32_t sheng_battmgr_next(ShengBattmgr *b, uint8_t out[SHENG_BATTMGR_REQUEST_BYTES])
 {
-    if (b->in_flight || b->limit_in_flight) return 0;
+    if (b->in_flight || b->limit_in_flight || b->keyboard_in_flight >= 0) return 0;
+    if (b->keyboard_wanted >= 0 && b->keyboard_wanted != b->keyboard_acked && b->keyboard_tries < 3) {
+        header(out, SHENG_BATTMGR_OP_BOARD_SET);
+        put32(out + 12, 0);
+        put32(out + 16, SHENG_BATTMGR_KEYBOARD_PLUGIN);
+        put32(out + 20, (uint32_t)b->keyboard_wanted);
+        b->keyboard_in_flight = b->keyboard_wanted;
+        b->keyboard_acked = -1;  /* after a timeout the firmware may still have applied this write */
+        b->keyboard_tries++;
+        return SHENG_BATTMGR_REQUEST_BYTES;
+    }
     if (b->limit_due) {
         header(out, SHENG_BATTMGR_OP_USB_SET);
         put32(out + 12, 0);
@@ -151,6 +172,7 @@ static int finish(ShengBattmgr *b)
 
 void sheng_battmgr_timeout(ShengBattmgr *b)
 {
+    if (b->keyboard_in_flight >= 0) {b->keyboard_in_flight = -1; b->keyboard_result = -60; b->timeouts++; return;}
     if (b->limit_in_flight) {b->limit_in_flight = 0; b->limit_result = -60; b->timeouts++; return;}
     if (b->cursor == NO_CYCLE || !b->in_flight) return;
     b->timeouts++;
@@ -171,8 +193,21 @@ int sheng_battmgr_receive(ShengBattmgr *b, const uint8_t *data, uint32_t length)
     }
     if (type != SHENG_BATTMGR_TYPE_REQUEST) {b->ignored++; return BmIgnored;}
     if (opcode == SHENG_BATTMGR_OP_REQUEST_NOTIFICATION) {b->enabled = 1; return BmEnabled;}
+    if (opcode == SHENG_BATTMGR_OP_BOARD_SET) {
+        if (b->keyboard_in_flight < 0 || length < 24 || le32(data + 12) != SHENG_BATTMGR_KEYBOARD_PLUGIN) {
+            b->ignored++; return BmIgnored;
+        }
+        b->keyboard_result = (int32_t)le32(data + 20);
+        if (!b->keyboard_result) {
+            b->keyboard_acked = b->keyboard_in_flight;
+            b->keyboard_sets++;
+            sheng_battmgr_refresh(b, 0);
+        } else b->errors++;
+        b->keyboard_in_flight = -1;
+        return BmAnswer;
+    }
     if (opcode == SHENG_BATTMGR_OP_USB_SET) {
-        if (!b->limit_in_flight || length < 24) {b->ignored++; return BmIgnored;}
+        if (!b->limit_in_flight || length < 24 || le32(data + 12) != 5) {b->ignored++; return BmIgnored;}
         b->limit_result = (int32_t)le32(data + 20);
         if (!b->limit_result) b->limit_sets++;
         b->limit_in_flight = 0;
@@ -189,6 +224,7 @@ int sheng_battmgr_receive(ShengBattmgr *b, const uint8_t *data, uint32_t length)
     } else {
         b->value[b->cursor] = (int32_t)value;
         b->valid |= 1u << b->cursor;
+        b->charge_known |= (1u << b->cursor) & ((1u << BmStatus) | (1u << BmUsbOnline));
     }
     advance(b);
     return finish(b) ? BmCycleDone : BmAnswer;
@@ -210,10 +246,12 @@ static uint32_t family(int type)
 
 void sheng_battmgr_snapshot(const ShengBattmgr *b, ShengBatterySnapshot *s)
 {
-#define HAS(f) ((b->valid >> (f)) & 1u)
+#define HAS(f) (((b->valid | b->charge_known) >> (f)) & 1u)
 #define V(f) (b->value[(f)])
     const int status = HAS(BmStatus) ? V(BmStatus) : 0;  /* POWER_SUPPLY_STATUS: 1 charging, 2 discharging, 3 not charging, 4 full */
     s->present = HAS(BmPresent) ? V(BmPresent) != 0 : HAS(BmCapacity);
+    s->external_known = HAS(BmUsbOnline);
+    s->status_known = HAS(BmStatus);
     s->external = HAS(BmUsbOnline) && V(BmUsbOnline) != 0;
     const int gauges = HAS(BmGauge1Remaining) && HAS(BmGauge1Full) && HAS(BmGauge2Remaining) && HAS(BmGauge2Full);
     const int64_t remaining = gauges ? (int64_t)(uint32_t)V(BmGauge1Remaining) + (uint32_t)V(BmGauge2Remaining) : 0;
@@ -223,7 +261,7 @@ void sheng_battmgr_snapshot(const ShengBattmgr *b, ShengBatterySnapshot *s)
     s->charge_known = full > 0 || HAS(BmCapacity);
     s->charging = s->external && status == 1;
     s->fully_charged = s->external && (status == 4 || s->percent == 100);
-    s->critical = s->present && !s->external && s->percent <= 2;
+    s->critical = s->present && s->external_known && !s->external && s->percent <= 2;
     s->voltage_mv = HAS(BmVoltage) ? V(BmVoltage) / 1000 : 0;
     s->current_ma = HAS(BmCurrent) ? -V(BmCurrent) / 1000 : 0;
     /* -40 to 90 C; the firmware answers a fixed out-of-range value when it has no reading */

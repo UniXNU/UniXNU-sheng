@@ -142,7 +142,7 @@ struct wn8030_pointer {
     uint8_t click;                            /* the button the click held now began as (0: none held) */
     uint8_t ids[WN8030_TOUCHPAD_FINGERS];     /* the touching fingers' contact ids, ascending */
     int32_t x, y;            /* where the finger (or the fingers' centre) was */
-    int32_t move_x, move_y;  /* motion not yet sent, in half counts */
+    int32_t move_x, move_y;  /* motion not yet sent, in controller counts */
     int32_t scroll_x, scroll_y;
 };
 unsigned wn8030_pointer_report(struct wn8030_pointer *state, const uint8_t touchpad[WN8030_TOUCHPAD_REPORT],
