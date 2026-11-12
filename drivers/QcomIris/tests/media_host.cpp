@@ -61,6 +61,12 @@ void qcom_iris_session_init(struct qcom_iris_session *s, const struct qcom_iris_
 int qcom_iris_session_open(struct qcom_iris_session *s) { ++asked.open; s->state = QcomIrisInit; return 0; }
 int qcom_iris_session_close(struct qcom_iris_session *s) { ++asked.close; s->state = QcomIrisDeinit; return 0; }
 int qcom_iris_decoder_set_format(struct qcom_iris_session *, uint32_t, uint32_t) { ++asked.format; return 0; }
+static int64_t outputOrder = -1;
+int qcom_iris_session_set_cap(struct qcom_iris_session *, enum qcom_iris_cap id, int64_t value) {
+    if (id != QcomIrisCapOutputOrder) return -22;
+    outputOrder = value;
+    return 0;
+}
 int qcom_iris_decoder_start_input(struct qcom_iris_session *s) { ++asked.startIn; s->state = QcomIrisInputStreaming; return 0; }
 int qcom_iris_decoder_start_output(struct qcom_iris_session *s, uint32_t, uint32_t) { ++asked.startOut; s->state = QcomIrisStreaming; return 0; }
 int qcom_iris_decoder_drain(struct qcom_iris_session *) { ++asked.drain; return 0; }
@@ -134,8 +140,15 @@ static void stream(uint32_t depth, uint32_t fourcc, uint32_t rowBytes) {
     V4l2Format f = {};
     f.type = Output; f.width = 1920; f.height = 1080; f.pixelformat = 0x34363248; f.num_planes = 1; f.planes[0].sizeimage = 2 << 20;
     CHECK(io(id, IocSFmt, &f, sizeof f) == 0 && asked.open == 1 && asked.format == 1 && f.planes[0].sizeimage == 1003520);
+    /* The display delay enabled at 0 is decode order; any other delay, or the control off, the firmware's display order. */
     uint32_t control[2] = {0x00990b8e, 1};
-    CHECK(io(id, IocSCtrl, control, sizeof control) != 0);   /* display order: no display delay control */
+    CHECK(io(id, IocSCtrl, control, sizeof control) == 0 && outputOrder == 1);
+    control[0] = 0x00990b8d; control[1] = 2;
+    CHECK(io(id, IocSCtrl, control, sizeof control) == 0 && outputOrder == 0);
+    control[1] = 0;
+    CHECK(io(id, IocSCtrl, control, sizeof control) == 0 && outputOrder == 1);
+    control[0] = 0x00980900;
+    CHECK(io(id, IocSCtrl, control, sizeof control) != 0);
     uint32_t request[5] = {4, Output, 2, 0, 0};
     CHECK(io(id, IocReqbufs, request, sizeof request) == 0 && request[0] == 4);
     V4l2Buffer b = {};

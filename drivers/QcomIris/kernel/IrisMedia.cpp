@@ -18,7 +18,7 @@ extern "C" {
 /* For the boot log: [0] sessions opened, [1] closed, [2] source changes, [3] streams the session cannot give, [4] sessions the
  * firmware failed, [5] its last error, [6] notes dropped at a full ring, [7] the last stream's bit depth word, [8] its coded
  * width << 16 | height, [9] bitstream buffers queued, [10] picture buffers queued, [11] pictures returned with data, [12] buffers
- * returned with the error flag, [13] the last ioctl that failed other than the display delay control (code << 16 | errno). */
+ * returned with the error flag, [13] the last ioctl that failed (code << 16 | errno). */
 extern "C" { extern volatile uint32_t iris_media_stats[14]; }
 volatile uint32_t iris_media_stats[14];
 
@@ -29,7 +29,7 @@ enum : uint32_t {
     TypeCaptureMplane = 9, TypeOutputMplane = 10, MemoryUserPtr = 2,
     EventEos = 2, EventSourceChange = 5,
     BufFlagKeyframe = 0x8, BufFlagError = 0x40, BufFlagLast = 0x00100000,
-    CidMinBuffersForCapture = 0x00980927,
+    CidMinBuffersForCapture = 0x00980927, CidDisplayDelay = 0x00990b8d, CidDisplayDelayEnable = 0x00990b8e,
     DecCmdStart = 0, DecCmdStop = 1,
     EvtError = 0, EvtDqbuf = 1, EvtEvent = 2,
     FourccH264 = 0x34363248, FourccHevc = 0x43564548, FourccVp9 = 0x30395056, FourccNv12 = 0x3231564e, FourccP010 = 0x30313050,
@@ -68,7 +68,8 @@ struct Slot {
     bool mapped, queued;
 };
 struct Media {
-    bool used, added, opened, failed;
+    bool used, added, opened, failed, delayEnabled;
+    uint32_t delay;
     uint32_t id;
     struct qcom_iris_session iris;
     struct qcom_iris_session_ops ops;
@@ -401,6 +402,15 @@ int getControl(Media *m, uint32_t *control) {   /* struct v4l2_control: id, valu
     control[1] = m->info.output_min_count;
     return 0;
 }
+/* V4L2_CID_MPEG_VIDEO_DEC_DISPLAY_DELAY_ENABLE with a delay of 0: the pictures in decode order, each as soon as it is decoded
+ * (H.264 and HEVC, before the input streams). Any other delay is the firmware's own: display order. */
+int setControl(Media *m, uint32_t *control) {   /* struct v4l2_control: id, value */
+    if (!m->opened || m->inputOn || (m->codec != QcomIrisCodecH264 && m->codec != QcomIrisCodecHevc)) return Einval;
+    if (control[0] == CidDisplayDelayEnable) m->delayEnabled = control[1] != 0;
+    else if (control[0] == CidDisplayDelay) m->delay = control[1];
+    else return Einval;
+    return qcom_iris_session_set_cap(&m->iris, QcomIrisCapOutputOrder, m->delayEnabled && !m->delay) ? Einval : 0;
+}
 int enumFramesizes(uint32_t *sizes) {   /* struct v4l2_frmsizeenum: index, pixel_format, type, stepwise (6), reserved */
     if (sizes[0]) return Einval;
     if (sizes[1] != FourccH264 && sizes[1] != FourccHevc && sizes[1] != FourccVp9) return Einval;
@@ -477,13 +487,13 @@ int iris_media_ioctl(unsigned device, uint32_t session, uint32_t code, void *pay
     case IocStreamon: r = size >= 4 ? streamOn(m, *static_cast<uint32_t *>(payload)) : Einval; break;
     case IocStreamoff: r = size >= 4 ? streamOff(m, *static_cast<uint32_t *>(payload)) : Einval; break;
     case IocGCtrl: r = size >= 8 ? getControl(m, static_cast<uint32_t *>(payload)) : Einval; break;
-    case IocSCtrl: r = Einval; break;   /* no display delay control: the firmware gives pictures in display order */
+    case IocSCtrl: r = size >= 8 ? setControl(m, static_cast<uint32_t *>(payload)) : Einval; break;
     case IocEnumFramesizes: r = size >= 44 ? enumFramesizes(static_cast<uint32_t *>(payload)) : Einval; break;
     case IocSubscribeEvent: r = 0; break;   /* source changes and the end of a drain are always reported */
     case IocDecoderCmd: r = size >= 4 ? decoderCommand(m, static_cast<uint32_t *>(payload)) : Einval; break;
     default: break;
     }
-    if (r && code != IocSCtrl) iris_media_stats[13] = code << 16 | uint32_t(r);   /* the display delay control is always refused */
+    if (r) iris_media_stats[13] = code << 16 | uint32_t(r);
     IOLockUnlock(lock());
     return r;
 }

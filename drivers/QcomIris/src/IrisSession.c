@@ -26,6 +26,11 @@ struct cap_def {uint8_t id; int64_t min, max, value; uint32_t hfi_id, flags; uin
 #define IN QcomIrisCapInputPort
 #define DYN QcomIrisCapDynamic
 #define MENU QcomIrisCapMenu
+/* Not in the pinned iris header. The firmware's decoder dispatches set-property by (id - 0x03000100) through a 148-entry table
+ * whose entry 0x5b is the handler that logs "HFI_PROP_DECODE_ORDER_OUTPUT: %d" (vpu30_4v), a u32 on the bitstream port. */
+#ifndef HFI_PROP_DECODE_ORDER_OUTPUT
+#define HFI_PROP_DECODE_ORDER_OUTPUT 0x0300015b
+#endif
 static const struct cap_def dec_caps[] = {
     {QcomIrisCapProfileH264, 0, 17, 4, HFI_PROP_PROFILE, OUT | MENU, SetU32Enum},
     {QcomIrisCapProfileHevc, 0, 2, 0, HFI_PROP_PROFILE, OUT | MENU, SetU32Enum},
@@ -48,6 +53,8 @@ static const struct cap_def dec_caps[] = {
     {QcomIrisCapCodedFrames, 0, 0, 0, HFI_PROP_CODED_FRAMES, 0, SetNone},
     {QcomIrisCapBitDepth, BIT_DEPTH_8, BIT_DEPTH_10, BIT_DEPTH_8, HFI_PROP_LUMA_CHROMA_BIT_DEPTH, 0, SetNone},
     {QcomIrisCapRapFrame, 0, 1, 1, HFI_PROP_DEC_START_FROM_RAP_FRAME, IN, SetU32},
+    /* 1: every picture out as soon as it is decoded (decode order) instead of held back for display order. */
+    {QcomIrisCapOutputOrder, 0, 1, 0, HFI_PROP_DECODE_ORDER_OUTPUT, IN, SetU32},
 };
 static const struct cap_def enc_caps[] = {
     {QcomIrisCapProfileH264, 0, 17, 4, HFI_PROP_PROFILE, OUT | MENU, SetProfile},
@@ -337,8 +344,11 @@ static int apply_setter(struct qcom_iris_session *s, enum qcom_iris_cap id)
 /* the loop of iris_set_properties after the config params: every capability with a setter, errors ignored as there */
 static void apply_caps(struct qcom_iris_session *s)
 {
-    for (unsigned id = 1; id < QcomIrisCapMax; ++id)
+    for (unsigned id = 1; id < QcomIrisCapMax; ++id) {
+        /* The output order is the firmware's own unless the client asked: nothing is sent for a session that did not. */
+        if (id == QcomIrisCapOutputOrder && !client_set(s, QcomIrisCapOutputOrder)) continue;
         if (s->caps[id].valid && s->caps[id].setter) (void)apply_setter(s, (enum qcom_iris_cap)id);
+    }
 }
 
 void qcom_iris_session_init(struct qcom_iris_session *s, const struct qcom_iris_session_ops *ops, uint32_t *header_id,

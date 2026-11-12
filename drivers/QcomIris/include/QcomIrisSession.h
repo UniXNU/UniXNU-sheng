@@ -32,7 +32,7 @@ enum qcom_iris_cap {
     QcomIrisCapLayer1BitrateH264, QcomIrisCapLayer2BitrateH264, QcomIrisCapLayer3BitrateH264, QcomIrisCapLayer4BitrateH264,
     QcomIrisCapLayer5BitrateH264, QcomIrisCapLayer0BitrateHevc, QcomIrisCapLayer1BitrateHevc, QcomIrisCapLayer2BitrateHevc,
     QcomIrisCapLayer3BitrateHevc, QcomIrisCapLayer4BitrateHevc, QcomIrisCapLayer5BitrateHevc, QcomIrisCapRequestSyncFrame,
-    QcomIrisCapTimeDeltaBasedRc, QcomIrisCapMax,
+    QcomIrisCapTimeDeltaBasedRc, QcomIrisCapOutputOrder, QcomIrisCapMax,
 };
 /* enum platform_inst_fw_cap_flags */
 enum {
