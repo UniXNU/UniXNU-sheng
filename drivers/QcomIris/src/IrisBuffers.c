@@ -210,7 +210,13 @@ uint32_t qcom_iris_buffer_size(const struct qcom_iris_buffer_query *q, enum qcom
     if (!q || type < QcomIrisBufInput || type >= QcomIrisBufTypeMax) return 0;
     view(&v, q);
     if (type == QcomIrisBufInput || type == QcomIrisBufOutput) return (uint32_t)iris_get_buffer_size(&v.inst, (enum iris_buffer_type)type);
-    return iris_vpu_buf_size(&v.inst, (enum iris_buffer_type)type);
+    uint32_t size = iris_vpu_buf_size(&v.inst, (enum iris_buffer_type)type);
+    /* The HEVC decoder's persist buffer of the firmware the device ships (vpu30_4v) also holds 768 bytes of three-dimension
+     * user data for each of its 32 pictures, which the pinned formula leaves out: with the smaller buffer that firmware answers
+     * the start command with HFI_ERROR_INSUFFICIENT_RESOURCES (run118). Every other decoder size of the pinned formulas is at
+     * least what that firmware's own driver gives it. */
+    if (!q->encoder && q->codec == QcomIrisCodecHevc && type == QcomIrisBufPersist) size = ALIGN(size + NUM_HW_PIC_BUF * 768, DMA_ALIGNMENT);
+    return size;
 }
 
 uint32_t qcom_iris_buffer_count(const struct qcom_iris_buffer_query *q, enum qcom_iris_buffer type)

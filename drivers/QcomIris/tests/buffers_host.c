@@ -21,6 +21,11 @@ static struct qcom_iris_buffer_query decoder(enum qcom_iris_codec codec, uint32_
 
 int main(void)
 {
+    {   /* the HEVC persist buffer with the shipped firmware's three-dimension user data: 100 KiB of slice lists, 48 x 3072 of
+         * frame information, 4097 tile words, 32 x (4096 + 768) of user data, rounded to 256 */
+        struct qcom_iris_buffer_query hevc = decoder(QcomIrisCodecHevc, 1280, 720);
+        assert(qcom_iris_buffer_size(&hevc, QcomIrisBufPersist) == ((1024u * 100 + 48u * 3072 + 4097u * 4 + 32u * (4096 + 768) + 255) & ~255u));
+    }
     struct qcom_iris_buffer_query q = decoder(QcomIrisCodecH264, 1920, 1080);
     /* NV12 1920x1088: stride 1920, Y 1088 lines, UV 544 lines: (1920 * 1088 + 1920 * 544) rounded to 4 KiB */
     assert(qcom_iris_buffer_size(&q, QcomIrisBufOutput) == ((1920u * 1088 + 1920u * 544 + 4095) & ~4095u));

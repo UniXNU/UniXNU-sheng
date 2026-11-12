@@ -35,6 +35,9 @@ extern volatile int native_gpu_addon_stage;
  * [15] the last table status, [16] bytes mapped / 4 KiB, [17] live buffers. native_video_text: the firmware's image version. */
 volatile int32_t native_video_stats[24];
 char native_video_text[128];
+/* The last buffer the VPU could not be given: [0] how many, [1] its bytes / 4 KiB, [2] the step (1 the memory, 2 wiring it, 3 its
+ * translation), [3] the step's result, [4] the physical address bits the VPU's table reaches. */
+volatile int32_t native_video_alloc[5];
 /* The firmware's last debug messages (log-video=1 asks it for errors, fatal and high ones), newest last. */
 char native_video_fw_text[4][100];
 volatile uint32_t native_video_fw_lines;
@@ -397,7 +400,7 @@ void logText(void *, const char *text)
         const uint32_t n = native_video_fw_lines;
         strlcpy(native_video_fw_text[n & 3], text, sizeof native_video_fw_text[0]);
         native_video_fw_lines = n + 1;
-        if (!strncmp(text, "<VFW_E", 6)) {
+        if (!strncmp(text, "<VFW_E", 6) && !strnstr(text, "ParseC2SysPacket", 120)) {   /* not its version and licence lines */
             const uint32_t e = native_video_fw_errors;
             strlcpy(native_video_fw_error[e < 2 ? e : 2 + (e & 3)], text, sizeof native_video_fw_error[0]);
             native_video_fw_errors = e + 1;
@@ -479,6 +482,7 @@ int mapPrepared(IOMemoryDescriptor *memory, uint64_t first, uint64_t end, uint32
         IOByteCount length = 0;
         const addr64_t pa = memory->getPhysicalSegment(at, &length, kIOMemoryMapperNone);
         if (!pa || (pa & 4095) || !length) return -EFAULT;
+        if (pa + length > (UINT64_C(1) << v.mmu.arena.config.output_bits)) return -EFAULT;   /* past what the VPU's table reaches */
         at += length > end - at ? end - at : length;
         ++count;
     }
@@ -507,14 +511,25 @@ int QcomIrisDeviceAllocate(uint64_t bytes, QcomIrisBuffer *b)
     *b = {};
     bytes = (bytes + 4095) & ~UINT64_C(4095);
     const uint64_t limit = UINT64_C(1) << v.mmu.arena.config.output_bits;
-    IOBufferMemoryDescriptor *memory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, (IOOptionBits)kIODirectionInOut,
-        bytes, (limit - 1) & ~UINT64_C(4095));
-    if (!memory) return -ENOMEM;
-    if (memory->prepare() != kIOReturnSuccess) {memory->release(); return -ENOMEM;}
+    /* A physical mask makes the kernel allocate the buffer as one contiguous run, which a 4K stream's buffers (50 to 130 MB each)
+     * did not get (run123: the capture start failed with ENOMEM). The VPU's table reaches at least 64 GiB of physical addresses on
+     * this SoC, above all of its memory, so the buffer needs no mask and may lie in scattered pages; a smaller reach keeps it. */
+    /* Pageable memory that prepare() wires: wiring waits for pages and reclaims the file cache for them, where a wired kernel
+     * allocation is refused at once when the free list is short. The system runs with tens of MiB free, and a 16.8 MiB reference
+     * picture was refused that way (run125: "[video alloc] refused 3 pages 4106 step 1"). The GPU's buffers are made the same way. */
+    IOBufferMemoryDescriptor *memory = limit >= (UINT64_C(1) << 36)
+        ? IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task, (IOOptionBits)kIODirectionInOut | (IOOptionBits)kIOMemoryPageable, bytes, 4096)
+        : IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, (IOOptionBits)kIODirectionInOut, bytes, (limit - 1) & ~UINT64_C(4095));
+    const auto refused = [&](int step, int result) {
+        native_video_alloc[0] = native_video_alloc[0] + 1; native_video_alloc[1] = (int32_t)(bytes >> 12);
+        native_video_alloc[2] = step; native_video_alloc[3] = result; native_video_alloc[4] = (int32_t)v.mmu.arena.config.output_bits;
+    };
+    if (!memory) {refused(1, 0); return -ENOMEM;}
+    if (const IOReturn wired = memory->prepare(); wired != kIOReturnSuccess) {refused(2, (int)wired); memory->release(); return -ENOMEM;}
     bzero(memory->getBytesNoCopy(), (size_t)bytes);
     uint32_t iova = 0;
     const int rc = mapPrepared(memory, 0, bytes, 4096, &iova);
-    if (rc) {memory->complete(); memory->release(); return rc;}
+    if (rc) {refused(3, rc); memory->complete(); memory->release(); return rc;}
     *b = {memory, iova, 0, bytes, memory->getBytesNoCopy(), nullptr};
     native_video_stats[17] = native_video_stats[17] + 1;
     return 0;
