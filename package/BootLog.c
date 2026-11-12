@@ -971,8 +971,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       }
     }
   }
-  // The display object's properties now (refresh intervals, timing, scale): the lines the original driver published.
-  LOG_AT("display properties");
+  // Registration properties stay immutable while display state changes on other threads.
+  LOG_AT("display snapshot");
   if (log_display_on && &native_legacy_properties_now) {
     static char props[7168];
     unsigned n = native_legacy_properties_now(props, sizeof props);

@@ -303,28 +303,24 @@ __attribute__((noinline)) void native_legacy_retirement_observed(IOService *disp
     native_legacy_retired_generation=completed;native_legacy_presented_generation=presented;native_legacy_retired_frames=frames;
     native_legacy_retirement_calls=native_legacy_retirement_calls+1;
 }
-// The display object's properties as they are now (the registration copy above predates setDisplayRefreshProperties and the rest): for the
-// UFS log. Returns the bytes written (NUL-terminated).
+// The log worker reads an immutable registration snapshot without taking registry locks.
 extern "C" unsigned native_legacy_properties_now(char *out,unsigned cap) {
     if(!out || !cap)return 0;
-    out[0]=0;
-    IOService *display=reinterpret_cast<IOService *>(native_legacy_object);
-    if(!display)return 0;
-    OSSerialize *xml=OSSerialize::withCapacity(8192);
-    unsigned size=0;
-    if(xml && display->serializeProperties(xml)) {
-        size=xml->getLength();if(size>=cap)size=cap-1;
-        memcpy(out,xml->text(),size);out[size]=0;
-    }
-    OSSafeReleaseNULL(xml);
+    unsigned size=__atomic_load_n(&native_legacy_properties_length,__ATOMIC_ACQUIRE);
+    if(size>=cap)size=cap-1;
+    memcpy(out,native_legacy_properties,size);out[size]=0;
     return size;
 }
 void native_legacy_registration_observed(IOService *display) {
     native_legacy_registration_calls=native_legacy_registration_calls+1;
+    static uint32_t snapshot_claimed;
+    uint32_t expected=0;
+    if(!__atomic_compare_exchange_n(&snapshot_claimed,&expected,1,false,__ATOMIC_RELAXED,__ATOMIC_RELAXED))return;
     OSSerialize *xml=OSSerialize::withCapacity(2048);
     if(xml && display->serializeProperties(xml)) {
         unsigned size=xml->getLength();if(size>=sizeof(native_legacy_properties))size=sizeof(native_legacy_properties)-1;
-        memcpy(native_legacy_properties,xml->text(),size);native_legacy_properties[size]=0;native_legacy_properties_length=size;
+        memcpy(native_legacy_properties,xml->text(),size);native_legacy_properties[size]=0;
+        __atomic_store_n(&native_legacy_properties_length,size,__ATOMIC_RELEASE);
     }
     OSSafeReleaseNULL(xml);
 }
