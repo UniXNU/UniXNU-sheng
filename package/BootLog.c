@@ -156,6 +156,7 @@ extern volatile uint64_t native_gop_wait_stats[7] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_fence_wait[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_stall[24] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_stall_mem[59] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_stall_find[14] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_unstick[15] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_fence_pending[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wptr_fence[4] __attribute__((weak_import));
@@ -257,6 +258,7 @@ extern unsigned NativeAdrenoGpuContextInputBits(void) __attribute__((weak_import
 extern volatile uint32_t native_adreno_recovery[8] __attribute__((weak_import));
 extern volatile int32_t native_video_stats[24] __attribute__((weak_import));
 extern char native_video_text[128] __attribute__((weak_import));
+extern volatile int32_t native_video_alloc[5] __attribute__((weak_import));
 extern char native_video_fw_text[4][100] __attribute__((weak_import));
 extern volatile uint32_t native_video_fw_lines __attribute__((weak_import));
 extern char native_video_fw_error[6][200] __attribute__((weak_import));
@@ -1208,6 +1210,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15], v[16], v[17],
              &native_video_text ? native_video_text : "");
     at = put(out, at, cap, row, sizeof row);
+    // [video alloc]: buffers the VPU could not be given (VideoProbe.cpp, native_video_alloc).
+    if (&native_video_alloc && native_video_alloc[0]) {
+      snprintf(row, sizeof row, "[video alloc] refused %d pages %d step %d result %x reach %d bits", native_video_alloc[0], native_video_alloc[1],
+               native_video_alloc[2], native_video_alloc[3], native_video_alloc[4]);
+      at = put(out, at, cap, row, sizeof row);
+    }
     // [video fw]: the firmware's last four debug messages, oldest first, after how many it wrote.
     if (&native_video_fw_lines && native_video_fw_lines) {
       const uint32_t n = native_video_fw_lines;
@@ -2269,6 +2277,13 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       }
     // Map handles: next at the stalled job's submission, then under the BR IB1, BV IB1, BV IB2 (>= the first: mapped after it).
     if (&native_adreno_stall_mem) {
+      if (&native_adreno_stall_find && native_adreno_stall_find[11]) {
+        // The search of the stalled job's IB1s for the IB2 the thread stopped in (NativeAdrenoSubmit.cpp, findIb2).
+        const volatile uint32_t *f = native_adreno_stall_find;
+        snprintf(row, sizeof row, "[gpu stall] ib2 found %u in ib1 #%u %x:%x +%u: %x %x | %x %x %x %x | read %u ib1 %u dwords, %u unreadable",
+                 f[0], f[1], f[3], f[2], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13]);
+        at = put(out, at, cap, row, sizeof row);
+      }
       snprintf(row, sizeof row, "[gpu stall] handles job>=%u br=%u bv=%u bv2=%u", native_adreno_stall_mem[55], native_adreno_stall_mem[56],
                native_adreno_stall_mem[57], native_adreno_stall_mem[58]);
       at = put(out, at, cap, row, sizeof row);

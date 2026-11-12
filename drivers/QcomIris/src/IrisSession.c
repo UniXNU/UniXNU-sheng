@@ -481,7 +481,8 @@ static int create_internal(struct qcom_iris_session *s, uint32_t type)
         struct qcom_iris_internal *b = NULL;
         for (unsigned k = 0; k < QcomIrisInternalMax && !b; ++k) if (!s->internal[k].type) b = &s->internal[k];
         if (!b) return -ENOSPC_;
-        if (s->ops->allocate(s->ops->context, size, &b->device_addr, &b->handle)) return -ENOMEM_;
+        const int made = s->ops->allocate(s->ops->context, size, &b->device_addr, &b->handle);
+        if (made) return made < 0 ? made : -ENOMEM_;   /* the platform's own reason where it gives one */
         b->type = type; b->index = i; b->size = size; b->queued = false; b->pending_release = false;
     }
     return 0;
@@ -523,7 +524,8 @@ static void destroy_unqueued(struct qcom_iris_session *s, const uint32_t *types,
             if (s->internal[k].type == types[t] && !s->internal[k].queued) destroy_internal(s, &s->internal[k]);
 }
 
-static const uint32_t dec_input_internal[] = {QcomIrisBufBin, QcomIrisBufComv, QcomIrisBufNonComv, QcomIrisBufLine, QcomIrisBufPartial};
+/* sm8550_dec_ip_int_buf_tbl: the partial data buffer belongs to AV1 alone, and the firmware says so of any other codec's. */
+static const uint32_t dec_input_internal[] = {QcomIrisBufBin, QcomIrisBufComv, QcomIrisBufNonComv, QcomIrisBufLine};
 static const uint32_t dec_output_internal[] = {QcomIrisBufDpb};
 static const uint32_t enc_input_internal[] = {QcomIrisBufVpss};
 static const uint32_t enc_output_internal[] = {QcomIrisBufBin, QcomIrisBufComv, QcomIrisBufNonComv, QcomIrisBufLine, QcomIrisBufScratch2};
@@ -791,7 +793,11 @@ int qcom_iris_session_close(struct qcom_iris_session *s)
 int qcom_iris_decoder_set_format(struct qcom_iris_session *s, uint32_t w, uint32_t h)
 {
     if (s->encoder || !w || !h) return -EINVAL_;
-    s->src_width = w; s->src_height = h;
+    /* iris_vdec_s_fmt: the coded size is kept rounded up to the codec's block (32 for HEVC and VP9, 16 for H.264), the size the
+     * firmware is told as the bitstream resolution. Its own internal buffer sizes follow that size: a 3840x2160 HEVC stream's
+     * co-located motion vector buffer sized for 2160 lines was refused at the start command ("insufficient memory: calculated
+     * 0x1fe0000, assigned 33178112", run121). */
+    s->src_width = ALIGN_UP(w, codec_align(s)); s->src_height = ALIGN_UP(h, codec_align(s));
     s->crop_left = s->crop_top = 0; s->crop_width = w; s->crop_height = h;
     s->dst_width = ALIGN_UP(w, 128u); s->dst_height = ALIGN_UP(h, 32u);
     s->output_min_count = qcom_iris_buffer_count(&(struct qcom_iris_buffer_query){.codec = s->codec, .dst_width = s->dst_width,

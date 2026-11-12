@@ -348,13 +348,13 @@ int streamOn(Media *m, uint32_t type) {
     if (type == TypeOutputMplane) {
         if (!m->opened) return Einval;
         if (m->inputOn) return 0;
-        if (qcom_iris_decoder_start_input(&m->iris)) return Eio;
+        if (const int e = qcom_iris_decoder_start_input(&m->iris)) return e < 0 ? -e : Eio;   /* the session's reason, for the stats row */
         m->inputOn = true;
         return 0;
     }
     if (type != TypeCaptureMplane || !m->haveInfo) return Einval;
     if (m->outputOn) return 0;
-    if (qcom_iris_decoder_start_output(&m->iris, m->info.output_width, m->info.output_height)) return Eio;
+    if (const int e = qcom_iris_decoder_start_output(&m->iris, m->info.output_width, m->info.output_height)) return e < 0 ? -e : Eio;
     m->outputOn = true;
     /* iris_vb2_start_streaming: the buffers queued before the port streamed go to the firmware now. */
     for (unsigned i = 0; i < m->outCount; ++i) {
