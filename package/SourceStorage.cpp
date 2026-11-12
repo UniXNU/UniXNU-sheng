@@ -279,9 +279,7 @@ extern "C" void native_source_storage_start(void)
 
     // Authenticate policies before registering hardware-facing classes. The
     // firmware hands off the envelope; the trusted anchor is compiled in.
-    unsigned container = 0;
-    PE_parse_boot_argn("root-container", &container, sizeof(container));
-    if (container != 1 && !native_source_root_policies_load())
+    if (!native_source_root_policies_load())
         panic("SourceStorage: root policy handoff or authentication failed");
     status = OSKextLoadKextWithIdentifier("com.apple.filesystems.apfs");
     if (status != kOSReturnSuccess)
