@@ -9,7 +9,13 @@ _Static_assert(sizeof(struct qcom_iris_hfi_buffer) == 64, "iris_hfi_buffer");
 static void copy_in(volatile uint8_t *to, const uint8_t *from, uint32_t n) {for (uint32_t i = 0; i < n; ++i) to[i] = from[i];}
 static void copy_out(uint8_t *to, const volatile uint8_t *from, uint32_t n) {for (uint32_t i = 0; i < n; ++i) to[i] = from[i];}
 static void zero(volatile uint8_t *p, size_t n) {for (size_t i = 0; i < n; ++i) p[i] = 0;}
-static void barrier(void) {__atomic_thread_fence(__ATOMIC_SEQ_CST); __asm__ volatile("dsb sy" ::: "memory");}
+static void barrier(void)
+{
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+#if defined(__aarch64__)
+    __asm__ volatile("dsb sy" ::: "memory");
+#endif
+}
 
 static volatile struct qcom_iris_queue_table *table(const struct qcom_iris_queues *q)
 {
