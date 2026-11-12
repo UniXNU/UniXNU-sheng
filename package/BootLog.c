@@ -157,6 +157,8 @@ extern volatile uint32_t native_adreno_fence_wait[8] __attribute__((weak_import)
 extern volatile uint32_t native_adreno_stall[24] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_stall_mem[59] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_stall_find[14] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_stall_hang __attribute__((weak_import));
+extern volatile uint32_t native_adreno_stall_fault[32] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_unstick[15] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_fence_pending[8] __attribute__((weak_import));
 extern volatile uint32_t native_adreno_wptr_fence[4] __attribute__((weak_import));
@@ -2275,6 +2277,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     int n = snprintf(row, sizeof row, "[gpu stall] fence=%u n=%u", native_adreno_stall[0], native_adreno_stall[1]);
     for (unsigned k = 2; k < 24 && n > 0 && (size_t)n < sizeof row; ++k) n += snprintf(row + n, sizeof row - n, " %x", native_adreno_stall[k]);
     at = put(out, at, cap, row, sizeof row);
+    // The snapshot is a hang's (taken by the hang check before the restart, kept until the next hang) or an ordinary stall's.
+    if (&native_adreno_stall_hang && native_adreno_stall_hang) {
+      snprintf(row, sizeof row, "[gpu stall] taken at hang %u", native_adreno_stall_hang);
+      at = put(out, at, cap, row, sizeof row);
+    }
     // SMMU FSR, FAR lo/hi, FSYNR0, then for the BR IB1, BV IB1 and BV IB2: the dword index in the IB where the 16 words start
     // (ffff00NN: NN words before the fetch address, the IB start being unknown), then 16 words; deadbeef = not readable.
     if (&native_adreno_stall_mem)
@@ -2293,6 +2300,16 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
         const volatile uint32_t *f = native_adreno_stall_find;
         snprintf(row, sizeof row, "[gpu stall] ib2 found %u in ib1 #%u %x:%x +%u: %x %x | %x %x %x %x | read %u ib1 %u dwords, %u unreadable",
                  f[0], f[1], f[3], f[2], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13]);
+        at = put(out, at, cap, row, sizeof row);
+      }
+      if (&native_adreno_stall_fault && native_adreno_stall_fault[30]) {
+        // The search of the stalled job's IB1s and IB2s for the faulting address (NativeAdrenoSubmit.cpp, findFault).
+        const volatile uint32_t *f = native_adreno_stall_fault;
+        snprintf(row, sizeof row, "[gpu stall] far found %u (hi 0: %u) l%u %x:%x +%u: %x %x %x %x %x %x %x %x [%x] %x | read %u ibs %u dwords",
+                 f[0], f[1], f[2], f[4], f[3], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14], f[15], f[30], f[31]);
+        at = put(out, at, cap, row, sizeof row);
+        snprintf(row, sizeof row, "[gpu stall] far base %x -%x l%u %x:%x +%u: %x %x %x %x %x %x [%x] %x",
+                 f[16], f[17], f[18], f[20], f[19], f[21], f[22], f[23], f[24], f[25], f[26], f[27], f[28], f[29]);
         at = put(out, at, cap, row, sizeof row);
       }
       snprintf(row, sizeof row, "[gpu stall] handles job>=%u br=%u bv=%u bv2=%u", native_adreno_stall_mem[55], native_adreno_stall_mem[56],
