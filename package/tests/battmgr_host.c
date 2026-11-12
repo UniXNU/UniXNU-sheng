@@ -13,6 +13,8 @@ static void put32(uint8_t *p, uint32_t v) {p[0] = (uint8_t)v; p[1] = (uint8_t)(v
 /* The scripted firmware: battery and USB property tables; a property marked failing answers with result 1. */
 static int32_t battery[24], usb[8], board[256];
 static uint32_t usb_set[8], usb_set_count, usb_set_result;
+static uint32_t keyboard_set_count, keyboard_set_value, keyboard_set_result;
+static uint32_t failing_usb = 0xffffffffu;
 static int board_answers;  /* 0: the firmware refuses the board properties */
 static uint32_t failing_battery = 0xffffffffu;
 static unsigned asked_battery[24], asked_usb[8];
@@ -29,6 +31,11 @@ static uint32_t answer(const uint8_t *request, uint8_t *out)
     } else if (opcode == SHENG_BATTMGR_OP_BOARD_GET) {
         CHECK(property < 256);
         put32(out + 16, (uint32_t)board[property]); put32(out + 20, !board_answers);
+    } else if (opcode == SHENG_BATTMGR_OP_BOARD_SET) {
+        CHECK(property == SHENG_BATTMGR_KEYBOARD_PLUGIN);
+        keyboard_set_value = le32(request + 20);
+        keyboard_set_count++;
+        put32(out + 16, keyboard_set_value); put32(out + 20, keyboard_set_result);
     } else if (opcode == SHENG_BATTMGR_OP_USB_SET) {
         CHECK(property < 8);
         usb_set[property] = le32(request + 20);
@@ -38,7 +45,7 @@ static uint32_t answer(const uint8_t *request, uint8_t *out)
     } else {
         CHECK(opcode == SHENG_BATTMGR_OP_USB_GET && property < 8);
         asked_usb[property]++;
-        put32(out + 16, (uint32_t)usb[property]); put32(out + 20, 0);
+        put32(out + 16, (uint32_t)usb[property]); put32(out + 20, property == failing_usb);
     }
     return 24;
 }
@@ -202,6 +209,84 @@ int main(void)
     CHECK(b.cycles_done == 1 && b.timeouts == BmFields && sheng_battmgr_next(&b, request) == 0);
     sheng_battmgr_snapshot(&b, &s);
     CHECK(!s.present && !s.external && s.percent == 0 && s.time_to_empty_min == -1);
+
+    /* Keyboard attachment precedes reads, coalesces changes and survives an in-flight older state. */
+    sheng_battmgr_init(&b);
+    CHECK(b.keyboard_wanted == -1 && b.keyboard_acked == -1 && b.keyboard_in_flight == -1);
+    sheng_battmgr_keyboard(&b, 1);
+    CHECK(sheng_battmgr_next(&b, request) == 24 && le32(request + 8) == 0x51 && le32(request + 16) == 0xe4 && le32(request + 20) == 1);
+    CHECK(sheng_battmgr_next(&b, reply) == 0);
+    sheng_battmgr_keyboard(&b, 0);  /* detach before the attach reply */
+    answer(request, reply);
+    put32(reply + 12, 0xe3);
+    CHECK(sheng_battmgr_receive(&b, reply, 24) == BmIgnored && b.keyboard_in_flight == 1);
+    put32(reply + 12, 0xe4);
+    CHECK(sheng_battmgr_receive(&b, reply, 24) == BmAnswer && b.keyboard_acked == 1);
+    CHECK(sheng_battmgr_next(&b, request) == 24 && le32(request + 20) == 0);
+    answer(request, reply);
+    CHECK(sheng_battmgr_receive(&b, reply, 24) == BmAnswer && b.keyboard_acked == 0);
+    run_cycle(&b); run_cycle(&b);
+    CHECK(b.keyboard_sets == 2 && keyboard_set_count == 2 && !keyboard_set_value);
+    sheng_battmgr_keyboard(&b, 1); sheng_battmgr_keyboard(&b, 0);  /* latest state already acknowledged */
+    CHECK(sheng_battmgr_next(&b, request) == 24 && le32(request + 8) != 0x51);
+    sheng_battmgr_timeout(&b); run_cycle(&b); run_cycle(&b);
+
+    /* A timed-out write may have taken effect: reverting to the previous state still needs an explicit write. */
+    sheng_battmgr_init(&b); sheng_battmgr_keyboard(&b, 0);
+    CHECK(sheng_battmgr_next(&b, request) == 24); answer(request, reply);
+    CHECK(sheng_battmgr_receive(&b, reply, 24) == BmAnswer);
+    run_cycle(&b); run_cycle(&b);
+    sheng_battmgr_keyboard(&b, 1); CHECK(sheng_battmgr_next(&b, request) == 24);
+    sheng_battmgr_keyboard(&b, 0); sheng_battmgr_timeout(&b);
+    CHECK(sheng_battmgr_next(&b, request) == 24 && le32(request + 8) == 0x51 && !le32(request + 20));
+    answer(request, reply); CHECK(sheng_battmgr_receive(&b, reply, 24) == BmAnswer);
+    run_cycle(&b); run_cycle(&b);
+
+    /* Timeout/error retries are bounded; reads continue and the periodic refresh retries later. */
+    sheng_battmgr_init(&b); sheng_battmgr_keyboard(&b, 1);
+    for (unsigned i = 0; i < 3; ++i) {
+        CHECK(sheng_battmgr_next(&b, request) == 24 && le32(request + 8) == 0x51);
+        sheng_battmgr_timeout(&b);
+    }
+    CHECK(b.keyboard_tries == 3 && b.keyboard_result == -60);
+    CHECK(run_cycle(&b) == BmFields && b.keyboard_acked == -1);
+    keyboard_set_result = 1;
+    sheng_battmgr_refresh(&b, 0);
+    CHECK(run_cycle(&b) == BmFields - 5 + 3 && b.keyboard_tries == 3 && b.keyboard_result == 1);
+    keyboard_set_result = 0;
+    sheng_battmgr_refresh(&b, 0); run_cycle(&b); run_cycle(&b);
+    CHECK(b.keyboard_acked == 1 && b.keyboard_sets == 1);
+    /* Reconnection creates a fresh queue and replays the last observed physical state. */
+    sheng_battmgr_init(&b); sheng_battmgr_keyboard(&b, 1);
+    CHECK(sheng_battmgr_next(&b, request) == 24 && le32(request + 8) == 0x51);
+    answer(request, reply); CHECK(sheng_battmgr_receive(&b, reply, 24) == BmAnswer);
+    run_cycle(&b); run_cycle(&b);
+
+    /* Missing readings stay unknown; a transient failure preserves the last confirmed charger state. */
+    sheng_battmgr_init(&b); sheng_battmgr_snapshot(&b, &s);
+    CHECK(!s.external_known && !s.status_known && !s.charging);
+    usb[0] = 1; usb[6] = 6; usb[7] = 6; battery[0] = 1;
+    sheng_battmgr_refresh(&b, 0); run_cycle(&b);
+    sheng_battmgr_snapshot(&b, &s); CHECK(s.external_known && s.status_known && s.external && s.charging);
+    failing_battery = 0; failing_usb = 0;
+    sheng_battmgr_refresh(&b, 0); run_cycle(&b);
+    sheng_battmgr_snapshot(&b, &s);
+    CHECK(!(b.valid & (1u << BmStatus)) && !(b.valid & (1u << BmUsbOnline)));
+    CHECK(s.external_known && s.status_known && s.external && s.charging);
+    failing_battery = failing_usb = 0xffffffffu;
+    usb[0] = 0; battery[0] = 2;
+    sheng_battmgr_refresh(&b, 0); run_cycle(&b);
+    sheng_battmgr_snapshot(&b, &s); CHECK(s.external_known && !s.external && !s.charging);
+    usb[0] = 1; battery[0] = 1;
+    sheng_battmgr_refresh(&b, 0); run_cycle(&b);
+    sheng_battmgr_refresh(&b, 0);
+    CHECK(sheng_battmgr_next(&b, request) == 24); sheng_battmgr_timeout(&b);
+    while (b.cursor != BmUsbOnline) {
+        CHECK(sheng_battmgr_next(&b, request) == 24); answer(request, reply);
+        CHECK(sheng_battmgr_receive(&b, reply, 24) == BmAnswer);
+    }
+    CHECK(sheng_battmgr_next(&b, request) == 24); sheng_battmgr_timeout(&b); run_cycle(&b);
+    sheng_battmgr_snapshot(&b, &s); CHECK(s.external && s.charging);
 
     /* A computer's standard port (SDP) at 100 mA: after the cycle the limit goes up to 900 mA, once; the next cycle reads it back. */
     sheng_battmgr_init(&b);
