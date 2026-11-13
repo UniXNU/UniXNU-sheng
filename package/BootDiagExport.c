@@ -13,12 +13,14 @@
 #include <sys/kauth.h>
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
+#include <kern/thread.h>
 
 extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
 
 static int safari_paths[] = {-1, -1, -1, -1};
+static void start_desktop_reader(void);
 
-void boot_safari_path_capture(unsigned now) {
+static void safari_path_capture_once(unsigned now) {
   static unsigned next_read = 15;
   if (now < next_read) return;
   next_read = now + 30;
@@ -37,6 +39,10 @@ void boot_safari_path_capture(unsigned now) {
   }
 }
 
+void boot_safari_path_capture(unsigned now) {
+  if (now >= 10) start_desktop_reader();
+}
+
 void boot_safari_path_status(int status[4]) {
   for (unsigned i = 0; i < 4; ++i) {
     status[i] = __atomic_load_n(&safari_paths[i], __ATOMIC_RELAXED);
@@ -44,30 +50,27 @@ void boot_safari_path_status(int status[4]) {
 }
 
 /* Mirror the bounded desktop report into the existing persistent log transport. */
-void boot_desktop_log_capture(unsigned now) {
+static void desktop_capture_once(void) {
   static uint64_t consumed;
-  static unsigned next_read;
+  static uint64_t file_id;
+  static int last_error = -1;
   static char *buffer;
-  uint32_t enabled = 0;
   enum {capacity = 8192};
-  if (!PE_parse_boot_argn("desktop-log", &enabled, sizeof enabled) || enabled != 1 || !&native_wifi_logf) return;
-  if (now > 600) {
-    if (buffer) {IOFreeData(buffer, capacity); buffer = NULL;}
-    return;
-  }
-  if (now < 10 || now < next_read) return;
-  next_read = now + 4;
   vfs_context_t ctx = vfs_context_kernel();
   vnode_t vp = NULLVP;
   int error = vnode_open("/private/var/log/sheng-desktop-diagnostics.log", FREAD, 0, 0, &vp, ctx);
   struct vnode_attr va;
-  VATTR_INIT(&va); VATTR_WANTED(&va, va_data_size);
+  VATTR_INIT(&va); VATTR_WANTED(&va, va_data_size); VATTR_WANTED(&va, va_fileid);
   if (!error) error = vnode_getattr(vp, &va, ctx);
-  if (!error && va.va_data_size < consumed) consumed = 0;
+  if (!error && (va.va_fileid != file_id || va.va_data_size < consumed)) {
+    consumed = 0;
+    file_id = va.va_fileid;
+  }
   if (!error && va.va_data_size > consumed) {
     if (!buffer) buffer = IOMallocData(capacity);
     if (buffer) {
       uint64_t offset = va.va_data_size - consumed > capacity ? va.va_data_size - capacity : consumed;
+      if (offset > consumed) native_wifi_logf(6, "desktop-file: skipped %llu bytes", offset - consumed);
       int length = (int)(va.va_data_size - offset), resid = length;
       error = vn_rdwr(UIO_READ, vp, buffer, length, (off_t)offset, UIO_SYSSPACE,
           IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
@@ -88,6 +91,39 @@ void boot_desktop_log_capture(unsigned now) {
     }
   }
   if (vp) vnode_close(vp, FREAD, ctx);
+  if (error != last_error) {
+    last_error = error;
+    native_wifi_logf(6, "desktop-file: read status %d", error);
+  }
+}
+
+static void desktop_capture_worker(void *argument, wait_result_t result) {
+  (void)argument; (void)result;
+  uint32_t enabled = 0;
+  PE_parse_boot_argn("desktop-log", &enabled, sizeof enabled);
+  unsigned elapsed = 15;
+  for (;;) {
+    safari_path_capture_once(elapsed);
+    if (enabled == 1 && &native_wifi_logf) desktop_capture_once();
+    IOSleep(4000);
+    elapsed += 4;
+  }
+}
+
+static void start_desktop_reader(void) {
+  static unsigned started;
+  unsigned expected = 0;
+  if (!__atomic_compare_exchange_n(&started, &expected, 1, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return;
+  // A blocked APFS read must not hold up the persistent kernel log writer or spawn more readers.
+  thread_t thread;
+  if (kernel_thread_start(desktop_capture_worker, NULL, &thread) == KERN_SUCCESS) thread_deallocate(thread);
+  else __atomic_store_n(&started, 0, __ATOMIC_RELAXED);
+}
+
+void boot_desktop_log_capture(unsigned now) {
+  uint32_t enabled = 0;
+  if (now >= 10 && PE_parse_boot_argn("desktop-log", &enabled, sizeof enabled) &&
+      enabled == 1 && &native_wifi_logf) start_desktop_reader();
 }
 
 /* Opt-in capture of the cache loader's own error log. Runs on the log writer,
