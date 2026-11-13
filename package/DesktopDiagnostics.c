@@ -154,6 +154,15 @@ static char *sample(uint64_t seq, const char *session, double gap, double previo
     err = sysctlbyname("vm.swapusage", &swap, &size, NULL, 0) ? errno : 0;
     fprintf(f, ",\"swap_error\":%d,\"swap_total_bytes\":%llu,\"swap_used_bytes\":%llu", err,
         (unsigned long long)swap.xsu_total, (unsigned long long)swap.xsu_used);
+    int io_boost = 0; uint64_t io_grants = 0;
+    size = sizeof io_boost;
+    err = sysctlbyname("vm.swapin_iotier_boost", &io_boost, &size, NULL, 0) ? errno : 0;
+    if (!err) {
+        size = sizeof io_grants;
+        err = sysctlbyname("vm.swapin_iotier_grants", &io_grants, &size, NULL, 0) ? errno : 0;
+    }
+    fprintf(f, ",\"swapin_io_boost_error\":%d,\"swapin_io_boost_enabled\":%d,\"swapin_io_boost_grants\":%llu",
+        err, io_boost, (unsigned long long)io_grants);
     unsigned pressure = 0; size = sizeof pressure;
     err = sysctlbyname("kern.memorystatus_vm_pressure_level", &pressure, &size, NULL, 0) ? errno : 0;
     fprintf(f, ",\"pressure_error\":%d,\"pressure_level\":%u", err, pressure);
