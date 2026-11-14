@@ -62,9 +62,9 @@ jobs:
         working-directory: device
         run: >-
           scripts/package.sh --os macos-27 --uefi ../uefi-sheng
-          --kernel-arg autoreset=420 --kernel-arg data-reset=1
+          --kernel-arg autoreset=7200 --kernel-arg data-reset=1
           --kernel-arg gpu-trace=1 --kernel-arg gpu-perf=1
-          --kernel-arg diag-export=300 --kernel-arg diag=1
+          --kernel-arg diag-export=6900 --kernel-arg diag=1
           --kernel-arg log-gpu=1 --kernel-arg log-power=1
       - name: Build root storage
         working-directory: UniXNU

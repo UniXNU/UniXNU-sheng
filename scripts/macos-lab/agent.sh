@@ -4,7 +4,21 @@ set -u
 /usr/bin/defaults write NSGlobalDomain NSQuitAlwaysKeepsWindows -bool false
 /usr/bin/defaults write com.apple.loginwindow TALLogoutSavesState -bool false
 /usr/bin/defaults -currentHost write com.apple.loginwindow TALLogoutSavesState -bool false
-/bin/sleep 120
+cache=/private/var/tmp/NativeAdrenoMetal.cache/prime.log
+ready=0
+for attempt in $(/usr/bin/seq 1 110); do
+    /bin/date -u
+    if [ -r "$cache" ]; then
+        state=$(/usr/bin/grep '^pass ' "$cache" | /usr/bin/tail -n 1)
+        /bin/echo "$state"
+        case "$state" in *' complete=1 '*) ready=1; break ;; esac
+    fi
+    /bin/sleep 60
+done
+if [ "$ready" != 1 ]; then
+    /bin/echo 'Priming is incomplete; the comparison scene remains pending.'
+    exit 1
+fi
 /bin/date -u
 /usr/bin/open -a Finder /Users/unixnu
 /bin/sleep 15
@@ -45,3 +59,4 @@ animation=$!
 /usr/sbin/screencapture -x -t png /Users/Shared/unixnu-test/desktop-270.png
 /bin/date -u
 wait "$animation"
+/usr/bin/touch /Users/Shared/unixnu-test/benchmark.done

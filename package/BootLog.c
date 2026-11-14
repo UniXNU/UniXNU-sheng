@@ -16,6 +16,7 @@
 #include "BootLatencyFiles.h"
 #include <kern/thread.h>
 #include <kern/clock.h>
+#include <sys/sysctl.h>
 #include <string.h>
 #include <pexpert/pexpert.h>
 #include <kern/misc_protos.h>
@@ -444,6 +445,11 @@ static uint32_t export_total, export_filled, export_generation, export_target, e
 static uint32_t diag_first, diag_bytes;
 static int diag_owned;
 volatile int boot_diag_status;
+static int boot_diag_request;
+SYSCTL_INT(_kern, OID_AUTO, unixnu_diag_request, CTLFLAG_RW | CTLFLAG_LOCKED,
+           &boot_diag_request, 0, "Request one enabled diagnostic export");
+SYSCTL_INT(_kern, OID_AUTO, unixnu_diag_status, CTLFLAG_RD | CTLFLAG_LOCKED,
+           (int *)&boot_diag_status, 0, "Diagnostic export state");
 extern volatile uint32_t boot_diag_files __attribute__((weak_import));
 extern volatile uint32_t boot_diag_alloc __attribute__((weak_import));
 extern volatile uint32_t boot_diag_skipped __attribute__((weak_import));
@@ -2779,7 +2785,8 @@ static void writer(void *arg, wait_result_t result) {
     LOG_AT("diag tick");
     if (diag == 1 && &boot_diag_shot_tick) boot_diag_shot_tick(now);
     LOG_AT("diag start");
-    if (((diag_at && now >= diag_at) || (&boot_cache_input_ready && boot_cache_input_ready())) && !boot_diag_status) {
+    if (((diag_at && now >= diag_at) || (diag == 1 && boot_diag_request) ||
+         (&boot_cache_input_ready && boot_cache_input_ready())) && !boot_diag_status) {
       thread_t diag;
       boot_diag_status = 1;
       if (kernel_thread_start_priority(diag_thread, NULL, MINPRI_KERNEL, &diag) == KERN_SUCCESS) thread_deallocate(diag);
