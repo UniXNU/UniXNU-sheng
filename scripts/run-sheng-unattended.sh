@@ -20,6 +20,8 @@ reader = Path(os.environ.get('READER', root / 'out/sheng/boot/sheng-linux-log.im
 output = Path(os.environ.get('OUT', root / 'build/sheng-logs')).resolve()
 if not image.is_file() or not reader.is_file() or limit <= 0:
     sys.exit('require existing test and reader images and a positive timeout')
+if sys.platform == 'darwin':
+    subprocess.Popen(['/usr/bin/caffeinate', '-is', '-w', str(os.getpid())])
 
 def devices():
     result = subprocess.run(['fastboot', 'devices'], capture_output=True, text=True, check=True, timeout=10)
