@@ -48,7 +48,7 @@ for (var index = 0; index < 20; index++) {
 }
 window.makeKeyAndOrderFront(null);
 app.activateIgnoringOtherApps(true);
-$.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(105));
+$.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(180));
 window.close;
 JXA
 animation=$!
@@ -58,5 +58,5 @@ animation=$!
 /bin/sleep 90
 /usr/sbin/screencapture -x -t png /Users/Shared/unixnu-test/desktop-270.png
 /bin/date -u
-wait "$animation"
 /usr/bin/touch /Users/Shared/unixnu-test/benchmark.done
+wait "$animation"
