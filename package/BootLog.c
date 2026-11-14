@@ -248,6 +248,7 @@ extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_qrtr_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_battery_raw[10] __attribute__((weak_import));
 extern volatile int32_t native_charger_stats[16] __attribute__((weak_import));
+extern volatile int32_t native_charger_auth_stats[32] __attribute__((weak_import));
 extern char native_qrtr_text[96] __attribute__((weak_import));
 extern volatile uint32_t native_swipe_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
@@ -2006,6 +2007,18 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                native_charger_stats[5], native_charger_stats[6], native_charger_stats[7], native_charger_stats[8], native_charger_stats[9],
                native_charger_stats[10], native_charger_stats[11], native_charger_stats[12], native_charger_stats[13], native_charger_stats[14],
                native_charger_stats[15]);
+      at = put(out, at, cap, row, sizeof row);
+    }
+    if (&native_charger_auth_stats) {
+      const volatile int32_t *a = native_charger_auth_stats;
+      snprintf(row, sizeof row, "[charger auth] state=%d attach=%d result=%d last=%d gauges=%x adapter=%d pending=%x read=%d write=%d errors=%d timeout=%d retry=%d host=%d valid=%x",
+               a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13]);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[charger pd] svid=%x pdo2=%x id=%x apdo=%d watts=%d fast=%d quick=%d pps_ptf=%d fg_fast=%d version=%x adapter_mv=%d adapter_temp=%d",
+               a[14], a[15], a[16], a[17], a[18], a[19], a[20], a[21], a[28], a[29], a[30], a[31]);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[charger pumps] ok=%d/%d bus_current=%d/%d bus_voltage=%d battery_voltage=%d",
+               a[22], a[23], a[24], a[25], a[26], a[27]);
       at = put(out, at, cap, row, sizeof row);
     }
   }
