@@ -25,13 +25,22 @@ assert report['swap_reported_gap_ms_including_idle']['max'] == 1000
 assert report['multipass_records_with_no_new_metal_pipeline_state'] == 1
 assert not report['qualifies_stable_120fps']
 assert not analyze('')['qualifies_stable_120fps']
-v2 = analyze('''K1 t=1.000s rp1 dr2 kpx512 cs0 bl0 ctc=5000us
+v2_text = '''K1 t=1.000s rp1 dr2 kpx512 cs0 bl0 ctc=5000us
 E1 age=10000us scheduled=-1us
 K2 t=1.010s rp0 dr0 kpx0 cs0 bl1 ctc=4000us
 E2 age=200us scheduled=20us
-''')
+'''
+v2 = analyze(v2_text)
 assert v2['commands_observed'] == 2 and v2['counter_scopes'] == ['v2_per_buffer_api_calls']
 assert v2['command_age_before_commit_us_including_caller_idle']['max'] == 10000
 assert v2['commit_to_scheduled_callback_us']['samples'] == 1
 assert v2['commit_to_scheduled_callback_us']['max'] == 20
-print('PASS: snapshot reprints deduplicate, missing callbacks remain unqualified, idle gaps preserved, no panel/FPS claim')
+# CRLF and mixed endings must preserve all K/W/E records and callback updates.
+for snapshot in (initial, initial + completed + completed, v2_text):
+    expected = analyze(snapshot)
+    for converted in (snapshot.replace('\n', '\r\n'),
+                      snapshot.replace('\n', '\r\n', 1),
+                      snapshot.rstrip('\n').replace('\n', '\r\n')):
+        assert analyze(converted) == expected
+assert analyze(initial + completed.replace('\n', '\r\n')) == analyze(initial + completed)
+print('PASS: snapshot reprints deduplicate, missing callbacks remain unqualified, idle gaps preserved, LF/CRLF equivalent, no panel/FPS claim')
