@@ -24,6 +24,7 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
       UNIXNU_LAB_PASSWORD: ${{ secrets.UNIXNU_LAB_PASSWORD }}
+      UNIXNU_MACOS_TEST: ${{ github.workspace }}/device/scripts/macos-lab
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,8 +32,8 @@ jobs:
           submodules: recursive
       - uses: actions/checkout@v4
         with:
-          repository: UniXNU/UniXNU
-          ref: 0c1bac3d51a3009dca1708b15a5198f4b43d057a
+          repository: rponeawa/UniXNU
+          ref: 4cc0f05
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4
@@ -59,7 +60,12 @@ jobs:
           python3 ../device/scripts/prepare-macos-install.py
       - name: Build images
         working-directory: device
-        run: scripts/package.sh --os macos-27 --uefi ../uefi-sheng
+        run: >-
+          scripts/package.sh --os macos-27 --uefi ../uefi-sheng
+          --kernel-arg autoreset=420 --kernel-arg data-reset=1
+          --kernel-arg gpu-trace=1 --kernel-arg gpu-perf=1
+          --kernel-arg diag-export=300 --kernel-arg diag=1
+          --kernel-arg log-gpu=1 --kernel-arg log-power=1
       - name: Build root storage
         working-directory: UniXNU
         run: |

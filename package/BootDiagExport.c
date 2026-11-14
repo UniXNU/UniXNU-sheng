@@ -106,6 +106,11 @@ enum {LatencyCapacity=16+524288*72};
 static const char *const diag_roots[] = {
   "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/frames.trace",
   "/private/var/root/Library/Caches/com.apple.backboardd/m2v/frames.trace",
+  "/private/var/tmp/NativeAdrenoMetal.trace/frames.trace",
+  "/private/var/tmp/NativeAdrenoMetal.cache",
+  "/Users/Shared/unixnu-test",
+  "/Library/Logs/DiagnosticReports",
+  "/Users/unixnu/Library/Logs/DiagnosticReports",
   "/private/var/mobile/Library/Logs/CrashReporter",
   "/private/var/root/Library/Logs/CrashReporter",
 };
@@ -142,7 +147,8 @@ static void note(const char *text, const char *path, int error) {
 }
 
 static void add(const char *path, uint32_t root, vfs_context_t ctx) {
-  if(!bl_latency_file(path) && !cache_path(path))return;
+  const unsigned macos_limit=bl_macos_file_limit(path);
+  if(!bl_latency_file(path) && !cache_path(path) && !macos_limit)return;
   vnode_t file = NULLVP;
   int error = vnode_lookup(path, 0, &file, ctx);
   if (error) {note("lookup", path, error); ++boot_diag_errors; return;}
@@ -159,6 +165,7 @@ static void add(const char *path, uint32_t root, vfs_context_t ctx) {
   struct diag_file *f = &diag_files[diag_count++];
   strlcpy(f->path, path, sizeof f->path);
   f->size = va.va_data_size; f->mode = va.va_mode; f->uid = va.va_uid; f->gid = va.va_gid; f->root = root; f->keep = 0;
+  if(macos_limit && f->size>macos_limit){note("truncated",path,(int)(f->size>>10));f->size=macos_limit;}
 }
 
 static void scan(const char *path, unsigned depth, uint32_t root, vfs_context_t ctx) {
@@ -502,7 +509,7 @@ uint64_t boot_diag_scan(uint64_t budget) {
   }
   for(unsigned i=0;i<sizeof diag_roots/sizeof diag_roots[0];++i)scan(diag_roots[i],0,i,ctx);
   qsort(diag_files,diag_count,sizeof diag_files[0],worth);
-  unsigned crash_count[5]={0};uint64_t crash_bytes=0;uint32_t files_kept=0;
+  unsigned crash_count[BlCrashProcessCount]={0};uint64_t crash_bytes=0;uint32_t files_kept=0;
   for(uint32_t i=0;i<diag_count;++i) {
     struct diag_file *f=&diag_files[i];int process=bl_crash_process(f->path);
     uint64_t cost=24+strlen(f->path)-1+f->size;

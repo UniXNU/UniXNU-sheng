@@ -89,6 +89,19 @@ class Writer:
 
 
 def main():
+    if len(sys.argv) == 5 and sys.argv[1] == '--raw':
+        image, partition, output = sys.argv[2], int(sys.argv[3]), sys.argv[4]
+        size = os.path.getsize(image)
+        if size % BLOCK or partition % BLOCK or size > partition or os.path.realpath(image) == os.path.realpath(output):
+            sys.exit('require separate files and block-aligned sizes within the userdata partition')
+        writer = Writer(output, partition // BLOCK)
+        with open(image, 'rb') as source:
+            for data in iter(lambda: source.read(CHUNK), b''):
+                writer.data(data)
+        writer.zeros((partition - size) // BLOCK)
+        writer.close()
+        print(f'{output}: root {size} bytes, partition {partition} bytes, remaining blocks filled with zeros')
+        return
     os_dmg, sys_dmg, root_json, partition, output = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5]
     pins = json.load(open(root_json))
     extra, object_specs = sys.argv[6:], []

@@ -16,6 +16,9 @@ say() { echo "$*" | tee -a $L > $O; }
 say "sheng log reader $(uname -r)"
 for m in /lib/modules/*.ko; do [ -e "$m" ] && insmod "$m" && say "loaded $m"; done
 
+# Return to fastboot after five minutes if the host disconnects.
+(sleep 300; /bin/rebootbl) &
+
 gadget() {
     for r in /sys/class/usb_role/*/role; do [ -e "$r" ] && echo device > "$r"; done
     G=/sys/kernel/config/usb_gadget/log

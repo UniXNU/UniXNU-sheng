@@ -805,7 +805,11 @@ struct cs_target boot_client_targets[32];
 volatile unsigned boot_client_target_count;
 // The render server and its main client. In backboardd the sampled threads are the Metal frontend's render (1), encode (2) and
 // completion (3) threads (NativeGpuThreadTargets); state carries the role in bits 12-13. Other processes are seen through the CPU time pass.
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+static const char *const cs_names[CS_TARGETS]={"WindowServer","Finder"};
+#else
 static const char *const cs_names[CS_TARGETS]={"backboardd","SpringBoard"};
+#endif
 #define CS_ROLES 3
 static task_t cs_task[CS_TARGETS],cs_found_task[CS_TARGETS];
 static int cs_pid[CS_TARGETS],cs_found_pid[CS_TARGETS];
@@ -915,7 +919,7 @@ static void cs_sample(unsigned slot,unsigned role) {
  struct bt_entry e;memset(&e,0,sizeof(e));
  bool got=false;int running_cpu=-1;
  thread_t thread=(thread_t)queue_first(&task->threads);
- const bool server=!strcmp(cs_names[slot],"backboardd");
+ const bool server=slot==0;
  const uint64_t render=server && &native_gpu_role_thread?native_gpu_role_thread((uint32_t)cs_pid[slot],role):0;
  if(server && role>1 && !render){task_unlock(task);vm_map_deallocate(map);if(space)is_release(space);return;}
  if(render) {
@@ -1095,7 +1099,7 @@ static void cs_wait_task(task_t task,int pid) {
  if(space)is_release(space);vm_map_deallocate(map);
 }
 static void cs_waiters(void) {
- for(unsigned i=0;i<CS_TARGETS;++i)if(cs_task[i] && (!strcmp(cs_names[i],"backboardd") || !strcmp(cs_names[i],"SpringBoard")))cs_wait_task(cs_task[i],cs_pid[i]);
+ for(unsigned i=0;i<CS_TARGETS;++i)if(cs_task[i])cs_wait_task(cs_task[i],cs_pid[i]);
  int peers[2]={cs_wait_peers[0],cs_wait_peers[1]};
  for(unsigned i=0;i<2;++i)if(peers[i]>0) {
   proc_t proc=proc_find(peers[i]);if(!proc)continue;
@@ -1115,7 +1119,7 @@ static void cs_thread(void *arg,wait_result_t result) {
   }
   if(tick%25==0){cs_refresh();cs_ptime_pass();cs_hot_samples();cs_waiters();}   // every 100 ms: an app's launch shows within that
   cs_tick=tick;
-  for(unsigned i=0;i<CS_TARGETS;++i)for(unsigned role=1;role<=(strcmp(cs_names[i],"backboardd")?1u:CS_ROLES);++role)cs_sample(i,role);
+  for(unsigned i=0;i<CS_TARGETS;++i)for(unsigned role=1;role<=(i?1u:CS_ROLES);++role)cs_sample(i,role);
   if(boot_cpu_ring) {
    struct cs_cpu c;memset(&c,0,sizeof(c));c.abs=mach_absolute_time();
    for(int cpu=0;cpu<8;++cpu) {

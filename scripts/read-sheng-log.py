@@ -81,8 +81,10 @@ def unpack_export(blob, run, name='export'):
         import subprocess
         command=[sys.executable,str(Path(__file__).with_name('decode-sheng-latency.py')),
                  str(out/'files/kernel.latency.bin'),'--out',str(out/'latency.jsonl')]
-        for home in ('mobile','root'):
-            frames=out/f'files/private/var/{home}/Library/Caches/com.apple.backboardd/m2v/frames.trace'
+        for rel in ('private/var/tmp/NativeAdrenoMetal.trace/frames.trace',
+                    'private/var/mobile/Library/Caches/com.apple.backboardd/m2v/frames.trace',
+                    'private/var/root/Library/Caches/com.apple.backboardd/m2v/frames.trace'):
+            frames=out/'files'/rel
             if frames.exists():command+=['--frames',str(frames)];break
         if (out/'files/kernel.touch.bin').exists():command+=['--touch',str(out/'files/kernel.touch.bin')]
         subprocess.run(command,check=True)
