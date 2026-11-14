@@ -55,6 +55,7 @@ def main():
     parser.add_argument('--kernel-arg', action='append', default=[])
     parser.add_argument('--remove-arg', action='append', default=[])
     parser.add_argument('--partition-bytes', type=int)
+    parser.add_argument('--payload-mib', type=int, help='FAT payload size for a diagnostic RAM boot')
     parser.add_argument('--payload-file', action='append', default=[], metavar='SOURCE=FAT_PATH')
     args = parser.parse_args()
     if args.output.exists() or args.input.resolve() == args.output.resolve():
@@ -73,7 +74,9 @@ def main():
         parser.error('boot image has truncated sections or unknown trailing data')
     kernel = blob[page:page + kernel_size]
     second = blob[second_at:second_at + second_size]
-    payload_bytes = ramdisk_size
+    payload_bytes = args.payload_mib * MIB if args.payload_mib else ramdisk_size
+    if payload_bytes < MIB:
+        parser.error('payload size must be at least 1 MiB')
     if args.partition_bytes:
         room = args.partition_bytes - page - align(kernel_size) - align(second_size)
         payload_bytes = min(payload_bytes, room // MIB * MIB)
@@ -87,18 +90,23 @@ def main():
         config = work / 'unixnu.toml'
         run('mcopy', '-i', original, '::/EFI/UniXNU/unixnu.toml', config)
         config.write_text(change_arguments(config.read_text(), args.kernel_arg, args.remove_arg))
+        replacements = []
         for specification in args.payload_file:
             source, separator, destination = specification.partition('=')
             relative = Path(destination)
             if not separator or not Path(source).is_file() or relative.is_absolute() or '..' in relative.parts:
                 parser.error('--payload-file needs an existing source and relative FAT path')
-            run('mcopy', '-o', '-i', original, source, '::/' + relative.as_posix())
+            replacements.append((Path(source), relative))
         payload = original
         if payload_bytes != ramdisk_size:
             files = work / 'files'
             files.mkdir()
             run('mcopy', '-s', '-i', original, '::*', files)
             (files / 'EFI/UniXNU/unixnu.toml').write_bytes(config.read_bytes())
+            for source, relative in replacements:
+                destination = files / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(source.read_bytes())
             payload = work / 'resized.img'
             with payload.open('wb') as output:
                 output.truncate(payload_bytes)
@@ -106,6 +114,8 @@ def main():
             for path in sorted(files.iterdir()):
                 run('mcopy', '-s', '-i', payload, path, '::/')
         else:
+            for source, relative in replacements:
+                run('mcopy', '-o', '-i', payload, source, '::/' + relative.as_posix())
             run('mcopy', '-o', '-i', payload, config, '::/EFI/UniXNU/unixnu.toml')
         ramdisk = payload.read_bytes()
     header = bytearray(blob[:page])
