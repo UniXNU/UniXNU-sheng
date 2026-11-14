@@ -59,6 +59,22 @@ struct Bluetooth {
     bool resources,powered,gated,clocked,serial_irq,wake_irq,service,initializing,loopback;
     uint8_t loop_rx[16];unsigned loop_length;
 } bt;
+struct qbt_discovery_stats discovery_snapshot;
+bool discovery_valid;
+
+void publishDiscovery(const struct qbt_discovery_stats &stats)
+{
+    for (unsigned i = 0; i < QBT_DISCOVERY_COMMANDS; i++) {
+        __atomic_store_n(&discovery_snapshot.sent[i], stats.sent[i], __ATOMIC_RELAXED);
+        __atomic_store_n(&discovery_snapshot.replied[i], stats.replied[i], __ATOMIC_RELAXED);
+        __atomic_store_n(&discovery_snapshot.status[i], stats.status[i], __ATOMIC_RELAXED);
+    }
+    __atomic_store_n(&discovery_snapshot.inquiry_results, stats.inquiry_results, __ATOMIC_RELAXED);
+    __atomic_store_n(&discovery_snapshot.le_reports, stats.le_reports, __ATOMIC_RELAXED);
+    __atomic_store_n(&discovery_snapshot.le_extended_reports, stats.le_extended_reports, __ATOMIC_RELAXED);
+    __atomic_store_n(&discovery_valid, true, __ATOMIC_RELEASE);
+}
+
 constexpr unsigned kRx=79,kBtEnable=81,kSwCtrl=82;
 constexpr uint32_t kBtEnableCfg=(7u<<6)|(1u<<9); // bt-en-pins: 16 mA, no bias, output
 constexpr uint32_t kDmaBytes=32768;
@@ -465,6 +481,7 @@ void worker(void *,wait_result_t) {
         uint64_t t=nowNs(nullptr);
         if(t>=health) {
             struct qbt_stats stats;qbt_get_stats(bt.core,&stats);
+            publishDiscovery(stats.discovery);
             native_bluetooth_stats[2]=bt.baud;native_bluetooth_stats[3]=stats.tx_bytes;native_bluetooth_stats[4]=stats.rx_bytes;
             native_bluetooth_stats[5]=bt.geni.stats.interrupts;native_bluetooth_stats[6]=stats.timeouts;native_bluetooth_stats[7]=stats.clock_sleeps;
             native_bluetooth_stats[8]=bt.domain.slot;native_bluetooth_stats[9]=bt.domain.bank;
@@ -522,4 +539,27 @@ extern "C" void sheng_bluetooth_probe(void) {
     if(kernel_thread_start(worker,nullptr,&thread)==KERN_SUCCESS)thread_deallocate(thread);
     else native_bluetooth_stats[0]=3;
     if(bt.log>=2 && kernel_thread_start(processWatch,nullptr,&thread)==KERN_SUCCESS)thread_deallocate(thread);
+}
+
+extern "C" bool sheng_bluetooth_discovery_row(char *row, size_t capacity)
+{
+    if (!__atomic_load_n(&discovery_valid, __ATOMIC_ACQUIRE)) return false;
+    struct qbt_discovery_stats stats;
+    for (unsigned i = 0; i < QBT_DISCOVERY_COMMANDS; i++) {
+        stats.sent[i] = __atomic_load_n(&discovery_snapshot.sent[i], __ATOMIC_RELAXED);
+        stats.replied[i] = __atomic_load_n(&discovery_snapshot.replied[i], __ATOMIC_RELAXED);
+        stats.status[i] = __atomic_load_n(&discovery_snapshot.status[i], __ATOMIC_RELAXED);
+    }
+    auto count = [](const uint32_t &value) { return __atomic_load_n(&value, __ATOMIC_RELAXED); };
+    snprintf(row, capacity,
+        "[bluetooth scan] sent/reply/status inquiry=%u/%u/%02x le-params=%u/%u/%02x le-enable=%u/%u/%02x "
+        "ext-params=%u/%u/%02x ext-enable=%u/%u/%02x results=%u/%u/%u",
+        stats.sent[QBT_INQUIRY], stats.replied[QBT_INQUIRY], stats.status[QBT_INQUIRY],
+        stats.sent[QBT_LE_SCAN_PARAMS], stats.replied[QBT_LE_SCAN_PARAMS], stats.status[QBT_LE_SCAN_PARAMS],
+        stats.sent[QBT_LE_SCAN_ENABLE], stats.replied[QBT_LE_SCAN_ENABLE], stats.status[QBT_LE_SCAN_ENABLE],
+        stats.sent[QBT_LE_EXT_SCAN_PARAMS], stats.replied[QBT_LE_EXT_SCAN_PARAMS], stats.status[QBT_LE_EXT_SCAN_PARAMS],
+        stats.sent[QBT_LE_EXT_SCAN_ENABLE], stats.replied[QBT_LE_EXT_SCAN_ENABLE], stats.status[QBT_LE_EXT_SCAN_ENABLE],
+        count(discovery_snapshot.inquiry_results), count(discovery_snapshot.le_reports),
+        count(discovery_snapshot.le_extended_reports));
+    return true;
 }

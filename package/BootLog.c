@@ -184,6 +184,7 @@ extern volatile int32_t native_touch_strokes[16][7] __attribute__((weak_import))
 extern volatile uint32_t native_touch_stroke_count __attribute__((weak_import));
 extern volatile uint32_t native_wifi_stats[29] __attribute__((weak_import));
 extern volatile uint64_t native_bluetooth_stats[32] __attribute__((weak_import));
+extern bool sheng_bluetooth_discovery_row(char *, size_t) __attribute__((weak_import));
 extern uint8_t native_bluetooth_boot_rx[512] __attribute__((weak_import));
 extern volatile uint32_t native_bluetooth_boot_rx_length __attribute__((weak_import));
 extern uint8_t native_bluetooth_boot_tail[256] __attribute__((weak_import));
@@ -1622,6 +1623,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
           qbt_transport_activity[0],qbt_transport_activity[1],qbt_transport_activity[2],qbt_transport_activity[3]);
       at=put(out,at,cap,row,sizeof row);
     }
+    if (&sheng_bluetooth_discovery_row && sheng_bluetooth_discovery_row(row, sizeof row))
+      at = put(out, at, cap, row, sizeof row);
     if(&native_bluetooth_ibs) {
       const volatile uint64_t *w=native_bluetooth_ibs;
       snprintf(row,sizeof row,"[bluetooth ibs] wake_ind=%llu wake_ack=%llu sleep_ind=%llu reverts=%llu refused=%llu unarmed=%llu cancel_timeouts=%llu wakes=%llu",
