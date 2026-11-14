@@ -10,6 +10,7 @@
 #include <pexpert/pexpert.h>
 #include <IOKit/IOLib.h>
 #include <kern/thread.h>
+#include "BootTime.h"
 
 extern kmod_info_t g_kernel_kmod_info;
 extern "C" void source_storage_base_init(void) __asm__("__GLOBAL__sub_I_IOBlockStorageDevice.cpp");
@@ -81,8 +82,7 @@ struct BenchWorker {
   uint32_t hist[kBenchBuckets];
   volatile uint32_t *done;
 };
-uint64_t benchFreq;
-uint64_t benchNs(uint64_t ticks) { return ticks * 1000000000ULL / benchFreq; }
+uint64_t benchNs(uint64_t ticks) { return boot_mach_ns(ticks); }
 void benchWork(void *arg, wait_result_t)
 {
   BenchWorker *w = static_cast<BenchWorker *>(arg);
@@ -111,7 +111,10 @@ void benchTest(BenchWorker *workers, uint32_t lun, uint64_t first, uint64_t bloc
                const char *tag = "")
 {
   volatile uint32_t done = 0;
-  const uint64_t start = mach_absolute_time() + benchFreq / 20, deadline = start + 3 * benchFreq;
+  uint64_t delay=0,span=0;
+  nanoseconds_to_absolutetime(50000000ULL,&delay);
+  nanoseconds_to_absolutetime(3000000000ULL,&span);
+  const uint64_t start = mach_absolute_time() + delay, deadline = start + span;
   for (uint32_t i = 0; i < qd; ++i) {
     BenchWorker &w = workers[i];
     uint8_t *buffer = w.buffer;
@@ -123,6 +126,7 @@ void benchTest(BenchWorker *workers, uint32_t lun, uint64_t first, uint64_t bloc
     else __atomic_add_fetch(&done, 1, __ATOMIC_RELEASE);
   }
   while (__atomic_load_n(&done, __ATOMIC_ACQUIRE) < qd) IOSleep(10);
+  const uint64_t finished=mach_absolute_time();
   uint32_t *hist = static_cast<uint32_t *>(IOMallocZero(sizeof(uint32_t) * kBenchBuckets));   // allocated: the kernel's __DATA is fixed
   if (!hist) return;
   uint64_t ops = 0, sum = 0, max = 0, errors = 0;
@@ -131,9 +135,10 @@ void benchTest(BenchWorker *workers, uint32_t lun, uint64_t first, uint64_t bloc
     if (workers[i].maxNs > max) max = workers[i].maxNs;
     for (unsigned b = 0; b < kBenchBuckets; ++b) hist[b] += workers[i].hist[b];
   }
-  const uint64_t avg = ops ? sum / ops : 0, mbps = ops * bytes / 3 * 1000 / 1000000;
+  const uint64_t elapsed=finished>start?benchNs(finished-start):1;
+  const uint64_t avg = ops ? sum / ops : 0, mbps = ops * bytes * 1000000ULL / elapsed;
   printf("ufsbench %s%s bs=%llu qd=%u ops=%llu iops=%llu MBps=%llu.%03llu avg_us=%llu.%03llu p50_us=%llu p99_us=%llu max_us=%llu err=%llu\n",
-         random ? "rand" : "seq ", tag, (unsigned long long)bytes, qd, (unsigned long long)ops, (unsigned long long)(ops / 3),
+         random ? "rand" : "seq ", tag, (unsigned long long)bytes, qd, (unsigned long long)ops, (unsigned long long)(ops * 1000000000ULL / elapsed),
          (unsigned long long)(mbps / 1000), (unsigned long long)(mbps % 1000), (unsigned long long)(avg / 1000),
          (unsigned long long)(avg % 1000), (unsigned long long)(benchPercentile(hist, ops, 500) / 1000),
          (unsigned long long)(benchPercentile(hist, ops, 990) / 1000), (unsigned long long)(max / 1000), (unsigned long long)errors);
@@ -145,8 +150,6 @@ void ufsBench(void)
   if (!PE_parse_boot_argn("ufs-bench", &on, sizeof on) || on != 1) return;
   if (!&native_ufs_part_find || !&native_ufs_part_read) { printf("ufsbench: driver exports missing\n"); return; }
   for (unsigned waited = 0; waited < 300 && !boot_log_rounds; ++waited) IOSleep(100);   // the log writer is running
-  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(benchFreq));
-  if (!benchFreq) benchFreq = 19200000;
   uint32_t lun = 0; uint64_t part = 0, partBlocks = 0;
   if (!native_ufs_part_find("userdata", &lun, &part, &partBlocks)) { printf("ufsbench: no userdata\n"); return; }
   uint8_t *probe = static_cast<uint8_t *>(IOMallocAligned(4096, 4096));

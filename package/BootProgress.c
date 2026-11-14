@@ -7,6 +7,7 @@
 #include <pexpert/pexpert.h>
 #include <kern/thread.h>
 #include <kern/clock.h>
+#include "BootTime.h"
 #include <kern/sched_prim.h>
 #include <kern/sched.h>
 #include <kern/host.h>
@@ -382,16 +383,13 @@ static void draw(unsigned now) {
     }
     if(&native_cpufreq_stage && native_cpufreq_stage>=2)line(39,native_cpufreq_row,0xff00ccff);
     {
-      // The same raw counter delta converted two ways: with the device-tree timebase (what the kernel and user space use)
-      // and with CNTFRQ_EL0. They agree only if the device-tree timebase matches the counter. mach_absolute_time() is
-      // avoided on purpose: this path runs very early, before per-CPU data exists.
+      // The raw counter's elapsed time beside the exported Mach timebase.
       static uint64_t count0;
-      uint64_t counter=ticks(),ns=0;
+      uint64_t counter=ticks();
       if(!count0)count0=counter;
-      absolutetime_to_nanoseconds(counter-count0,&ns);
-      uint64_t kms=ns/1000000,cms=boot_progress_frequency?(counter-count0)*1000/boot_progress_frequency:0;
-      snprintf(b,sizeof(b),"CLK cntfrq=%llu dt-timebase=%llu dt-converted=%llums cntfrq-converted=%llums (equal if the timebase is right)",
-        (unsigned long long)boot_progress_frequency,(unsigned long long)gPEClockFrequencyInfo.timebase_frequency_hz,kms,cms);
+      uint64_t cms=boot_progress_frequency?(counter-count0)*1000/boot_progress_frequency:0;
+      snprintf(b,sizeof(b),"CLK cntfrq=%llu mach-timebase=%llu raw-elapsed=%llums",
+        (unsigned long long)boot_progress_frequency,(unsigned long long)gPEClockFrequencyInfo.timebase_frequency_hz,(unsigned long long)cms);
       line(40,b,0xff00ccff);
     }
     // A panic on a secondary core flashes the panic screen while this monitor keeps running and redraws over it. Keep the
@@ -980,12 +978,11 @@ static void crash_banner(unsigned now) {
   // GPU CPU-cache maintenance (all passes: submissions, completions, allocations) since the last paint and in total, per submission,
   // the longest single pass and how much memory user BOs hold write-combined.
   if(&native_adreno_cache_stats && &native_adreno_coherence && native_adreno_coherence[0]) {
-    uint64_t f=0;__asm__ volatile("mrs %0, cntfrq_el0":"=r"(f));if(!f)f=19200000;
     uint64_t t=native_adreno_cache_stats[0],b=native_adreno_cache_stats[1],sub=native_adreno_coherence[0];
     uint64_t dt=t-banner_cache_ticks,db=b-banner_cache_bytes,ds=sub-banner_submits;
     snprintf(rows[n++],120,"GPUC  last: subs=%llu cache_ms=%llu MB=%llu per_sub_us=%llu | all: subs=%llu ms=%llu max_us=%llu wc_MB=%llu off@%u",
-      (unsigned long long)ds,(unsigned long long)(dt*1000/f),(unsigned long long)(db>>20),(unsigned long long)(ds?dt*1000000/f/ds:0),
-      (unsigned long long)sub,(unsigned long long)(t*1000/f),(unsigned long long)(native_adreno_cache_stats[2]*1000000/f),
+      (unsigned long long)ds,(unsigned long long)boot_mach_ms(dt),(unsigned long long)(db>>20),(unsigned long long)(ds?boot_mach_us(dt)/ds:0),
+      (unsigned long long)sub,(unsigned long long)boot_mach_ms(t),(unsigned long long)boot_mach_us(native_adreno_cache_stats[2]),
       (unsigned long long)(native_adreno_cache_stats[4]>>8),&native_adreno_wc_distrusted?native_adreno_wc_distrusted:0);
     banner_cache_ticks=t;banner_cache_bytes=b;banner_submits=sub;
     // The write-combine audit (int-100): submissions and IB lines compared, lines a CPU cache held dirty or stale, the first dirty page's
@@ -995,8 +992,8 @@ static void crash_banner(unsigned now) {
       snprintf(rows[n++],120,"GPUW  audited=%u lines=%u dirty=%u stale=%u attr=%x fail=%x reset=%u audit_us=%llu reassert_us=%llu",
         native_adreno_wc_audit[0],native_adreno_wc_audit[1],native_adreno_wc_audit[2],native_adreno_wc_audit[3],
         &native_adreno_audit_attr?native_adreno_audit_attr:0,native_adreno_wc_audit[4],native_adreno_wc_audit[5],
-        (unsigned long long)(&native_adreno_audit_ticks?native_adreno_audit_ticks*1000000/f:0),
-        (unsigned long long)(&native_adreno_reassert_ticks?native_adreno_reassert_ticks*1000000/f:0));
+        (unsigned long long)(&native_adreno_audit_ticks?boot_mach_us(native_adreno_audit_ticks):0),
+        (unsigned long long)(&native_adreno_reassert_ticks?boot_mach_us(native_adreno_reassert_ticks):0));
   }
   // SpringBoard and backboardd as the process probe last saw them (threads, run state, wired/user counters), when they exist.
   if(&boot_process_rows)

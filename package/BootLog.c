@@ -14,6 +14,7 @@
 // The header is written last in each round, so a reader never trusts a slot or an export the header does not count yet.
 #include <kern/startup.h>
 #include "BootLatencyFiles.h"
+#include "BootTime.h"
 #include <kern/thread.h>
 #include <kern/clock.h>
 #include <sys/sysctl.h>
@@ -614,9 +615,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       // With the requests the provider completed, their bytes and their time: whether bulk data goes through it and at what rate.
       char row[120]; int n = snprintf(row, sizeof row, "[software aes] state=%d", sheng_software_aes_state);
       if (&native_aes_completed && &native_aes_bytes && &native_aes_ticks && n > 0 && (size_t)n < sizeof row) {
-        uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
         snprintf(row + n, sizeof row - (size_t)n, " calls=%u bytes=%llu us=%llu", native_aes_completed, (unsigned long long)native_aes_bytes,
-                 (unsigned long long)(native_aes_ticks * 1000000ULL / f));
+                 (unsigned long long)boot_mach_us(native_aes_ticks));
       }
       at = put(out, at, cap, row, sizeof row);
     }
@@ -633,8 +633,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     // Disk requests (count/MiB/ms, gate wait, longest in us), synchronize (count/ms/bitmap blocks, timer-started), store commands.
     if (&native_data_io_reads && &native_data_write_back) {
       uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
-#define BL_MS(t) ((unsigned long long)((t) * 1000ULL / f))
-#define BL_US(t) ((unsigned long long)((t) * 1000000ULL / f))
+#define BL_MS(t) ((unsigned long long)boot_mach_ms(t))
+#define BL_US(t) ((unsigned long long)boot_mach_us(t))
       char io[560];
       int n = snprintf(io, sizeof io, "DIO wb=%u rd=%llu/%lluM/%llums wr=%llu/%lluM/%llums gate=%llums max=%lluus fl=%llu/%llums/%llu tf=%llu",
                native_data_write_back, (unsigned long long)native_data_io_reads, (unsigned long long)(native_data_io_read_bytes >> 20),
@@ -655,7 +655,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       }
       if (&native_ufs_block_reads && &native_ufs_read_ticks && &native_ufs_verify_ticks && n > 0 && (size_t)n < sizeof io)
         snprintf(io + n, sizeof io - (size_t)n, " root=%llu/%llums v=%llums", (unsigned long long)native_ufs_block_reads,
-                 BL_MS(native_ufs_read_ticks), BL_MS(native_ufs_verify_ticks));
+                 (unsigned long long)(native_ufs_read_ticks * 1000ULL / f),
+                 (unsigned long long)(native_ufs_verify_ticks * 1000ULL / f));
 #undef BL_MS
 #undef BL_US
       at = put(out, at, cap, io, sizeof io);
@@ -1430,14 +1431,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // The submissions' write-combine work: audits, IB lines compared and found dirty, pages set back to write-combined, the re-assertion's
   // total time, and the CPU cache maintenance passes (count, total ms, MiB).
   if (log_gpu_on && (&native_adreno_wc_audit && &native_adreno_reassert_ticks && &native_adreno_cache_stats)) {
-    uint64_t f = 0;
-    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
-    if (!f) f = 19200000;
     char row[200];
     snprintf(row, sizeof row, "[wc] audited=%u lines=%u dirty=%u reset=%u reassert_ms=%llu | maintenance passes=%llu ms=%llu MiB=%llu",
              native_adreno_wc_audit[0], native_adreno_wc_audit[1], native_adreno_wc_audit[2], native_adreno_wc_audit[5],
-             (unsigned long long)(native_adreno_reassert_ticks * 1000 / f), (unsigned long long)native_adreno_cache_stats[3],
-             (unsigned long long)(native_adreno_cache_stats[0] * 1000 / f), (unsigned long long)(native_adreno_cache_stats[1] >> 20));
+             (unsigned long long)boot_mach_ms(native_adreno_reassert_ticks), (unsigned long long)native_adreno_cache_stats[3],
+             (unsigned long long)boot_mach_ms(native_adreno_cache_stats[0]), (unsigned long long)(native_adreno_cache_stats[1] >> 20));
     at = put(out, at, cap, row, sizeof row);
   }
   // [maint]: the GPU driver's CPU cache maintenance by the phase that asked for it, passes/KiB: allocation, map, submission,
