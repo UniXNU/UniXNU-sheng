@@ -216,6 +216,7 @@ ramdisk_max_bytes = 199229440
 "roots" = ["com.apple.AppleFSCompression.AppleFSCompressionTypeZlib", "com.apple.driver.AppleARMPlatform", "com.apple.driver.AppleARMWatchdogTimer", "com.apple.driver.AppleAudioClockLibs", "com.apple.driver.AppleEffaceableStorage", "com.apple.driver.AppleIISController", "com.apple.driver.AppleM2ScalerCSCDriver", "com.apple.driver.AppleMobileFileIntegrity", "com.apple.driver.ApplePMGR", "com.apple.driver.IODARTFamily", "com.apple.filesystems.apfs", "com.apple.iokit.CoreAnalyticsFamily", "com.apple.iokit.IOAVFamily", "com.apple.iokit.IOAudio2Family", "com.apple.iokit.IOCECFamily", "com.apple.iokit.IOCryptoAcceleratorFamily", "com.apple.iokit.IOGPUFamily", "com.apple.iokit.IOHDCPFamily", "com.apple.iokit.IOMobileGraphicsFamily", "com.apple.iokit.IOReportFamily", "com.apple.iokit.IOSlowAdaptiveClockingFamily", "com.apple.iokit.IOStorageFamily", "com.apple.iokit.IOSurface", "com.apple.kec.Libm", "com.apple.kec.corecrypto", "com.apple.kext.AppleMatch", "com.apple.kext.CoreTrust", "com.apple.security.AppleImage4", "com.apple.security.sandbox", "com.apple.iokit.IOHIDFamily", "com.apple.iokit.IOHIDEventDriver", "com.apple.iokit.IOUSBDeviceFamily", "com.apple.driver.AppleUSBXDCI", "com.apple.driver.AppleUSBDeviceMux", "com.apple.iokit.IOUSBHostFamily", "com.apple.driver.usb.AppleUSBXHCI", "com.apple.driver.usb.AppleUSBHub", "com.apple.driver.usb.AppleUSBHostCompositeDevice", "com.apple.driver.usb.IOUSBHostHIDDevice", "com.apple.iokit.IOUSBMassStorageDriver", "com.apple.iokit.IOSCSIArchitectureModelFamily", "com.apple.iokit.IOSCSIBlockCommandsDevice", "!com.apple.driver.AppleOnboardSerial", "!com.apple.driver.AppleSMC"]
 
 ["os_overrides"."macos-27.3-26C5035r"."payload"]
+"timeout" = -1
 # The macOS kernel collection (137 MiB), the Data seed (20 MiB) and the GPU addon (the Metal plugin and Turnip, zlib-compressed).
 # iPadOS 17 and 26 images boot on this device with 208 MiB.
 "size_mib" = 200
@@ -243,6 +244,12 @@ ramdisk_max_bytes = 199229440
 # the page passes code signing validation; a write into the mapped page (the plugin's former ca-fb-8bit) made the page invalid and
 # code signing killed WindowServer.
 "text_fixups" = ["dyld_shared_cache_arm64e.03,5de1134,08060037,1f2003d5"]
+
+["os_overrides"."macos-27.3-26C5035r"."payload"."install"]
+"title" = "Initialize macOS Data and boot"
+"confirm" = "Erase macOS Data and initialize it from this installation seed?"
+"confirm_titles" = ["Initialize Data and boot"]
+"confirm_args" = ["data-reset=1"]
 
 ["os_overrides"."macos-27.3-26C5035r"."payload"."adt"]
 # T6050, the chip of Mac17,11.
@@ -286,7 +293,7 @@ ramdisk_max_bytes = 199229440
 "wifi_bin_prefix" = "bin"
 
 ["os_overrides"."macos-27.3-26C5035r"]
-"remove" = ["payload.install", "payload.skip_setup_tool", "payload.runtime.wallpapers", "payload.runtime.audio_system_plugins", "payload.runtime.wifi_launchd_cache", "payload.runtime.appsync", "payload.runtime.launchd_job_environment"]
+"remove" = ["payload.skip_setup_tool", "payload.runtime.wallpapers", "payload.runtime.audio_system_plugins", "payload.runtime.wifi_launchd_cache", "payload.runtime.appsync", "payload.runtime.launchd_job_environment"]
 
 ["os_overrides"."macos-27.3-26C5035r"."components"]
 # SoftwareAES: NativeAES.cpp is compiled against the 26C5035r IOAESAccelerator fixture (build-gop-legacy-display-27.py), not with
