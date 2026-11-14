@@ -3,6 +3,7 @@
 
 repack-sheng-boot.py INPUT OUTPUT --kernel-arg autoreset=480
 repack-sheng-boot.py INPUT OUTPUT --remove-arg data-reset --partition-bytes 201326592
+repack-sheng-boot.py INPUT OUTPUT --payload-file ADDON=EFI/UniXNU/Payloads/kernel.macho.gpuaddon
 """
 import argparse
 import hashlib
@@ -54,6 +55,7 @@ def main():
     parser.add_argument('--kernel-arg', action='append', default=[])
     parser.add_argument('--remove-arg', action='append', default=[])
     parser.add_argument('--partition-bytes', type=int)
+    parser.add_argument('--payload-file', action='append', default=[], metavar='SOURCE=FAT_PATH')
     args = parser.parse_args()
     if args.output.exists() or args.input.resolve() == args.output.resolve():
         parser.error('choose a new output file')
@@ -85,6 +87,12 @@ def main():
         config = work / 'unixnu.toml'
         run('mcopy', '-i', original, '::/EFI/UniXNU/unixnu.toml', config)
         config.write_text(change_arguments(config.read_text(), args.kernel_arg, args.remove_arg))
+        for specification in args.payload_file:
+            source, separator, destination = specification.partition('=')
+            relative = Path(destination)
+            if not separator or not Path(source).is_file() or relative.is_absolute() or '..' in relative.parts:
+                parser.error('--payload-file needs an existing source and relative FAT path')
+            run('mcopy', '-o', '-i', original, source, '::/' + relative.as_posix())
         payload = original
         if payload_bytes != ramdisk_size:
             files = work / 'files'

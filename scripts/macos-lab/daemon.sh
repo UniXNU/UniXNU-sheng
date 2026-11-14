@@ -13,23 +13,41 @@ snapshot() {
     /bin/ps -axo pid,pcpu,rss,comm
 }
 snapshot
+capture_and_reboot() {
+    snapshot
+    /usr/sbin/sysctl -w kern.unixnu_diag_request=1 || return 1
+    for wait in $(/usr/bin/seq 1 60); do
+        status=$(/usr/sbin/sysctl -n kern.unixnu_diag_status)
+        /bin/echo "diagnostic export status=$status"
+        if [ "$status" = 2 ]; then
+            /bin/sleep 10
+            /bin/sync
+            /sbin/reboot
+            return 0
+        fi
+        case "$status" in -*) return 1 ;; esac
+        /bin/sleep 2
+    done
+    return 1
+}
 for attempt in $(/usr/bin/seq 1 230); do
     if [ -f /Users/Shared/unixnu-test/benchmark.done ]; then
-        snapshot
-        /usr/sbin/sysctl -w kern.unixnu_diag_request=1 || exit 1
-        for wait in $(/usr/bin/seq 1 60); do
-            status=$(/usr/sbin/sysctl -n kern.unixnu_diag_status)
-            /bin/echo "diagnostic export status=$status"
-            if [ "$status" = 2 ]; then
-                /bin/sleep 10
-                /bin/sync
-                /sbin/reboot
-                exit 0
+        capture_and_reboot
+        exit $?
+    fi
+    if [ "$attempt" -gt 4 ]; then
+        values=$(/usr/sbin/ioreg -r -c IOPMPowerSource -l)
+        capacity=$(/bin/echo "$values" | /usr/bin/awk '/"CurrentCapacity" = [0-9]/ {print $NF; exit}')
+        maximum=$(/bin/echo "$values" | /usr/bin/awk '/"MaxCapacity" = [0-9]/ {print $NF; exit}')
+        if [ -n "$capacity" ] && [ -n "$maximum" ] && [ "$maximum" -gt 0 ]; then
+            percent=$((capacity * 100 / maximum))
+            /bin/echo "battery=$percent%"
+            if [ "$percent" -lt 15 ]; then
+                /bin/echo 'Returning to fastboot to recharge before continuing priming.'
+                capture_and_reboot
+                exit $?
             fi
-            case "$status" in -*) exit 1 ;; esac
-            /bin/sleep 2
-        done
-        exit 1
+        fi
     fi
     /bin/sleep 30
 done
