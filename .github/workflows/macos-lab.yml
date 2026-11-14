@@ -1,0 +1,96 @@
+name: sheng macOS lab
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [rponeawa/sheng-macos27-gpu-charge-20261115]
+    paths:
+      - .github/workflows/macos-lab.yml
+      - scripts/prepare-macos-install.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-lab-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  images:
+    runs-on: macos-26
+    timeout-minutes: 360
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      GITHUB_TOKEN: ${{ github.token }}
+      UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+      UNIXNU_LAB_PASSWORD: ${{ secrets.UNIXNU_LAB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: device
+          submodules: recursive
+      - uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: 0c1bac3d51a3009dca1708b15a5198f4b43d057a
+          path: UniXNU
+          submodules: recursive
+      - uses: actions/checkout@v4
+        with:
+          repository: UniXNU/uefi-sheng
+          ref: 66421cb7bb5694843aec8de1ca3d1de4c20cca38
+          path: uefi-sheng
+          submodules: recursive
+      - name: Install build tools
+        run: |
+          brew install dtc llvm lld cmake mtools ninja glslang shaderc spirv-tools bison pkgconf rustup unifdef openssl@3 zstd blacktop/tap/ipsw
+          {
+            echo "$HOME/.cargo/bin"
+            echo "/opt/homebrew/opt/bison/bin"
+          } >> "$GITHUB_PATH"
+          rustup toolchain install 1.98.0 --profile minimal --component rust-src
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Prepare installation
+        working-directory: UniXNU
+        run: |
+          ./unixnu defconfig sheng_macos_defconfig -D ../device --os macos-27
+          ./unixnu fetch --os macos-27
+          python3 ../device/scripts/prepare-macos-install.py
+      - name: Build images
+        working-directory: device
+        run: scripts/package.sh --os macos-27 --uefi ../uefi-sheng
+      - name: Build root storage
+        working-directory: UniXNU
+        run: |
+          python3 - <<'PY'
+          import subprocess, sys
+          sys.path.insert(0, 'scripts')
+          from unixnu.cli import parser
+          from unixnu.config import Context
+          ctx = Context(parser().parse_args(['build', 'userdata', '-D', '../device', '--os', 'macos-27']))
+          objects = []
+          for window in ctx.board['userdata']['windows']:
+              name = window['name']
+              objects += ['--object', f'{name}.vroot={ctx.tree}/build/verified-root-{name}/hashes.bin']
+          subprocess.run(['./unixnu', 'build', 'userdata', '--os', 'macos-27', *objects], check=True)
+          PY
+      - name: Stage device artifacts
+        run: |
+          mkdir artifacts
+          target=UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos
+          cp "$target/boot/boot.img" "$target/payload/payload.img" "$target/kernel/kernel.macho" "$target/package.manifest.json" artifacts/
+          cp "$target/runtime/data.dbr" "$target/userdata/userdata-root.json" artifacts/
+          zstd -T0 -3 --sparse "$target/userdata/userdata-root.img" -o artifacts/userdata-root.img.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sheng-macos-27
+          path: artifacts/
+          compression-level: 0
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-logs
+          path: UniXNU/out/sheng/*/*/logs/*.log
+          retention-days: 1
