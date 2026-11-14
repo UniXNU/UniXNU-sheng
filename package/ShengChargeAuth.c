@@ -90,12 +90,21 @@ void sheng_charge_auth_init(ShengChargeAuth *a, const ShengChargeCrypto *crypto)
     memset(a, 0, sizeof *a);
     if (crypto) {a->crypto = *crypto; a->enabled = crypto->random && crypto->hmac;}
 }
+void sheng_charge_auth_reconnect(ShengChargeAuth *a, uint64_t now) {
+    const ShengChargeCrypto crypto = a->crypto;
+    const uint32_t generation = a->generation, pending = a->pending, opcode = a->opcode,
+                   property = a->property, bytes = a->pending_bytes;
+    sheng_charge_auth_init(a, &crypto);
+    a->generation = generation; a->due_ms = now;
+    if (pending) {
+        a->pending = a->cancelled = 1;
+        a->opcode = opcode; a->property = property; a->pending_bytes = bytes;
+    }
+}
 void sheng_charge_auth_observe(ShengChargeAuth *a, int online, int usb_type, uint64_t now) {
     const int pd = usb_type == 6 || usb_type == 7 || usb_type == 8;
     if (!online || (!pd && a->online)) {
-        const ShengChargeCrypto crypto = a->crypto;
-        const uint32_t generation = a->generation;
-        sheng_charge_auth_init(a, &crypto); a->generation = generation;
+        sheng_charge_auth_reconnect(a, now);
         return;
     }
     if (!a->enabled || !pd) return;
@@ -159,6 +168,7 @@ uint32_t sheng_charge_auth_next(ShengChargeAuth *a, uint64_t now, uint8_t out[SH
 int sheng_charge_auth_receive(ShengChargeAuth *a, const uint8_t *data, uint32_t bytes, uint64_t now) {
     if (!a->pending || bytes < 16 || get32(data) != Owner || get32(data+4) != 1 ||
         get32(data+8) != a->opcode || get32(data+12) != a->property) return 0;
+    if (a->cancelled) {a->pending = a->cancelled = 0; return 1;}
     const int scalar_reply = bytes == 24;
     const int32_t result = scalar_reply ? (int32_t)get32(data+20) : 0;
     if ((!scalar_reply && bytes < 16 + (a->pending_bytes == 52 ? 32u : 16u)) ||
@@ -256,6 +266,7 @@ int sheng_charge_auth_receive(ShengChargeAuth *a, const uint8_t *data, uint32_t 
 void sheng_charge_auth_timeout(ShengChargeAuth *a, uint64_t now) {
     if (!a->pending) return;
     a->pending = 0; a->timeouts++;
+    if (a->cancelled) {a->cancelled = 0; return;}
     if (a->state == ChargeDiagnostics) {a->diagnostic_valid &= ~(1u << a->diagnostic_cursor); a->diagnostic_cursor++; return;}
     failure(a, -60, now);
 }

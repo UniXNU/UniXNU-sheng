@@ -31,11 +31,14 @@ typedef struct {
     uint32_t gauge_verified, adapter_verified, diagnostic_valid;
     int32_t diagnostic[ChargeDiagnosticCount];
     int32_t result, last_result, host_ready;
-    uint8_t online, enabled, slave, tries, seed_index, vdm_command, diagnostic_cursor, diagnostic_due;
+    uint8_t online, enabled, slave, tries, seed_index, vdm_command, diagnostic_cursor, diagnostic_due, cancelled;
     uint8_t challenge[32], expected[32];
 } ShengChargeAuth;
 
 void sheng_charge_auth_init(ShengChargeAuth *, const ShengChargeCrypto *);
+/* Retire an attachment. An outstanding exchange keeps its queue slot until its
+ * reply or timeout, so the reply cannot advance a replacement attachment. */
+void sheng_charge_auth_reconnect(ShengChargeAuth *, uint64_t now_ms);
 /* Called after a battery refresh. Authentication runs once per PD attachment. */
 void sheng_charge_auth_observe(ShengChargeAuth *, int online, int usb_type, uint64_t now_ms);
 /* All requests share the battery manager's serialized GLINK queue. */

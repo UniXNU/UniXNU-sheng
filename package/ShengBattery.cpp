@@ -37,6 +37,7 @@ extern "C" uint32_t qcom_ucsi_tick(uint8_t *) __attribute__((weak_import));
 extern "C" bool qcom_ucsi_polling(void) __attribute__((weak_import));
 extern "C" uint32_t qcom_ucsi_request_data_host(uint8_t *) __attribute__((weak_import));
 extern "C" int qcom_ucsi_data_host(void) __attribute__((weak_import));
+extern "C" bool qcom_ucsi_connection(uint32_t *, uint32_t *) __attribute__((weak_import));
 extern "C" ShengAdspChannel *sheng_adsp_channel(const char *, uint32_t, uint32_t, int, const ShengAdspClient *, void *) __attribute__((weak_import));
 extern "C" int sheng_adsp_send(ShengAdspChannel *, const void *, uint32_t) __attribute__((weak_import));
 // [0] stage (1 class up, 2 channel registered, 3 channel up, 4 published; negative: the step that failed), [1] percent, [2] mV,
@@ -88,6 +89,8 @@ class ShengBattery : public IOPMPowerSource {
     ShengBattmgr bm;
     ShengChargeAuth auth;
     bool chargeAuthEnabled = true;
+    bool cableKnown = false, usbDisconnected = false;
+    uint32_t cableGeneration = 0;
     IOTimerEventSource *authTimer = nullptr;
     uint32_t sdpLimit = 0;
     ShengAdspChannel *channel = nullptr;
@@ -97,6 +100,22 @@ class ShengBattery : public IOPMPowerSource {
     // charger rows before it show what the port was doing without the reset.
     uint32_t ucsiDelayMs = 0;
     bool ucsiPending = false;
+
+    bool observeCable() {
+        uint32_t generation = 0, status = 0;
+        if (!qcom_ucsi_connection || !qcom_ucsi_connection(&generation, &status)) return false;
+        const uint64_t now = chargeNowMs();
+        if (!cableKnown || generation != cableGeneration) {
+            cableKnown = true; cableGeneration = generation; usbDisconnected = false;
+            sheng_charge_auth_reconnect(&auth, now);
+            authTimer->cancelTimeout();
+            sheng_battmgr_refresh(&bm, 1);
+        }
+        const int connected = ((status >> 19) & 1) && !usbDisconnected;
+        const int pd_sink = ((status >> 16) & 7) == 3 && !((status >> 20) & 1);
+        sheng_charge_auth_observe(&auth, connected, pd_sink ? 6 : 5, now);
+        return true;
+    }
 
     void ucsiSend(uint32_t n) {
         if (n) sheng_adsp_send(channel, ucsiOut, n);
@@ -259,7 +278,7 @@ class ShengBattery : public IOPMPowerSource {
     void handle(int result) {
         if (result == BmCycleDone) {
             publish();
-            if ((bm.valid >> BmUsbOnline) & 1) {
+            if (!observeCable() && (bm.valid >> BmUsbOnline) & 1) {
                 int type = (bm.valid >> BmUsbAdapter) & 1 ? bm.value[BmUsbAdapter] : 0;
                 if (!type && (bm.valid >> BmUsbType) & 1) type = bm.value[BmUsbType];
                 if (type < 6 && (bm.valid >> BmRealType) & 1 && bm.value[BmRealType] >= 6 && bm.value[BmRealType] <= 8)
@@ -282,6 +301,7 @@ class ShengBattery : public IOPMPowerSource {
                 self->authTimer->cancelTimeout();
                 sheng_battmgr_init(&self->bm);
                 sheng_charge_auth_init(&self->auth, self->chargeAuthEnabled ? &kChargeCrypto : nullptr);
+                self->cableKnown = self->usbDisconnected = false;
                 self->bm.sdp_limit_ua = self->sdpLimit;
                 self->wasUp = false;
             }
@@ -303,6 +323,7 @@ class ShengBattery : public IOPMPowerSource {
                 self->request->cancelTimeout(); self->authTimer->cancelTimeout();
                 sheng_battmgr_init(&self->bm); self->bm.sdp_limit_ua = self->sdpLimit;
                 sheng_charge_auth_init(&self->auth, self->chargeAuthEnabled ? &kChargeCrypto : nullptr);
+                self->cableKnown = self->usbDisconnected = false;
             }
         }
         const int attached = __atomic_load_n(&gKeyboardAttached, __ATOMIC_ACQUIRE);
@@ -325,6 +346,7 @@ class ShengBattery : public IOPMPowerSource {
             if (!length) break;
             if (qcom_ucsi_receive && length >= 4 && (data[0] | data[1] << 8 | data[2] << 16 | (uint32_t)data[3] << 24) == 32779u) {
                 self->ucsiSend(qcom_ucsi_receive(data, length, self->ucsiOut));
+                self->observeCable();
                 self->pump();
                 continue;
             }
@@ -335,7 +357,15 @@ class ShengBattery : public IOPMPowerSource {
                 self->handle(BmAnswer);
                 continue;
             }
+            const bool onlineReply = self->bm.in_flight && self->bm.cursor == BmUsbOnline;
             const int result = sheng_battmgr_receive(&self->bm, data, length);
+            if (onlineReply && (result == BmAnswer || result == BmCycleDone) && (self->bm.valid >> BmUsbOnline) & 1) {
+                self->usbDisconnected = self->bm.value[BmUsbOnline] == 0;
+                if (self->usbDisconnected) {
+                    sheng_charge_auth_observe(&self->auth, 0, 0, chargeNowMs());
+                    self->authTimer->cancelTimeout();
+                }
+            }
             if (result == BmAnswer || result == BmCycleDone) self->request->cancelTimeout();
             self->handle(result);
         }
