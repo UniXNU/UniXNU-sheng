@@ -74,7 +74,7 @@ def main():
         parser.error('boot image has truncated sections or unknown trailing data')
     kernel = blob[page:page + kernel_size]
     second = blob[second_at:second_at + second_size]
-    payload_bytes = args.payload_mib * MIB if args.payload_mib else ramdisk_size
+    payload_bytes = args.payload_mib * MIB if args.payload_mib is not None else ramdisk_size
     if payload_bytes < MIB:
         parser.error('payload size must be at least 1 MiB')
     if args.partition_bytes:

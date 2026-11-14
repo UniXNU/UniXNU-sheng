@@ -3,7 +3,7 @@
 set -u
 /bin/mkdir -p /Users/Shared/unixnu-test
 /bin/chmod 1777 /Users/Shared/unixnu-test
-/bin/rm -f /Users/Shared/unixnu-test/benchmark.done
+/bin/rm -f /Users/Shared/unixnu-test/benchmark.done /Users/Shared/unixnu-test/reboot-requested
 snapshot() {
     /bin/date -u
     /usr/sbin/sysctl hw.memsize hw.ncpu vm.swapusage kern.boot_payload_memory
@@ -37,7 +37,7 @@ capture_and_reboot() {
     return 1
 }
 for attempt in $(/usr/bin/seq 1 230); do
-    if [ -f /Users/Shared/unixnu-test/benchmark.done ]; then
+    if [ -f /Users/Shared/unixnu-test/benchmark.done ] || [ -f /Users/Shared/unixnu-test/reboot-requested ]; then
         capture_and_reboot
         exit $?
     fi

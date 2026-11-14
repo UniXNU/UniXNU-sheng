@@ -7,7 +7,7 @@ set -u
 cache=/private/var/tmp/NativeAdrenoMetal.cache/prime.log
 boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)
 ready=0
-for attempt in $(/usr/bin/seq 1 110); do
+for attempt in $(/usr/bin/seq 1 105); do
     /bin/date -u
     if [ -r "$cache" ]; then
         state=$(/usr/bin/awk -v boot="$boot" '
@@ -25,6 +25,30 @@ if [ "$ready" != 1 ]; then
     exit 1
 fi
 /bin/date -u
+tool=/private/var/ngpu/test
+export VK_LAYER_PATH="$tool/etc/vulkan/explicit_layer.d"
+export VK_DRIVER_FILES="$tool/etc/vulkan/icd.d/turnip.json"
+export DYLD_LIBRARY_PATH="$tool/lib"
+"$tool/bin/gpu-acceptance" --loader "$tool/lib/libvulkan.1.dylib" \
+    --cache /Users/Shared/unixnu-test/gpu-cache --prime-log "$cache" --mode all \
+    > /Users/Shared/unixnu-test/gpu-acceptance.log 2>&1 &
+probe=$!
+(
+    /bin/sleep 180
+    /bin/kill -TERM "$probe" 2>/dev/null
+    /bin/sleep 5
+    /bin/kill -KILL "$probe" 2>/dev/null
+) &
+alarm=$!
+wait "$probe"
+result=$?
+/bin/kill -TERM "$alarm" 2>/dev/null
+if [ "$result" != 0 ]; then
+    /bin/echo "GPU acceptance returned $result"
+    /usr/bin/touch /Users/Shared/unixnu-test/reboot-requested
+    exit "$result"
+fi
+/bin/sleep 15
 /usr/bin/open -a Finder /Users/unixnu
 /bin/sleep 15
 /usr/bin/open -a 'System Settings'
