@@ -242,21 +242,16 @@ CI_ENABLE_METAL_GPU = "0"
 ["os_overrides"."macos-27.3-26C5035r"."payload"."adt"]
 # T6050, the chip of Mac17,11.
 "chip_id" = "6050"
-# The window starts at DRAM bank 1 (0x880000000) and spans the inaccessible range 0x8BB300000..0x8C0000000 up to the end of the
-# bank. DarwinBoot lists that range and the memory the firmware keeps in a table of this many ranges, and this kernel leaves them
-# out (window-memory-excluded-ranges.patch). 6 GiB is the most the 4 KiB bootstrap tables map. Other profiles keep the single run:
-# their kernels do not read the table.
+# The 6 GiB bootstrap window spans the high bank. DarwinBoot lists the holes
+# and firmware reservations so XNU skips them when creating VM pages.
 "owned_memory_size" = "0x180000000"
 "owned_memory_excluded_ranges" = 64
 # DarwinBoot records where the payload RAM disk and the entry's initrd buffer lie in the firmware's memory map
 # (sysctl kern.boot_payload_memory).
 "loader_inputs" = true
-# DarwinBoot lists the free memory outside the window (the low DRAM bank, about 867 MiB by the firmware's map): the kernel
-# adopts it as ordinary VM memory, page by page after a probe load (window-outside-memory-adoption.patch);
-# memory-outside=0 on the command line leaves it alone. The GPU pool over the same memory is off (gpu-pool=0): the kernel
-# owns that memory. The audio driver's DSP buffer sits in it at a fixed 32-bit address (package/AudioProbe.cpp kLowBuffer,
-# 64 KiB), so it is kept out.
-"owned_memory_outside_ranges" = 8
+# XNU adopts the low bank through DarwinBoot's free-range table. Keep the
+# fixed ADSP buffer outside the VM allocator.
+"owned_memory_outside_ranges" = 64
 "owned_memory_outside_reserved" = ["0xd0000000:0x10000"]
 
 ["os_overrides"."macos-27.3-26C5035r"."payload"."runtime"]
