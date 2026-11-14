@@ -1,5 +1,13 @@
 # Agent instructions
 
+## Build and installation ownership
+
+The user runs production builds and all physical-device installation commands.
+Provide the exact commands after validation. Do not flash, erase, repartition,
+temporarily boot an image, or reboot the physical device unless the user
+explicitly overrides this rule for that operation. Read-only device queries,
+QEMU validation, fixes, artifact checks and handoff remain the agent's work.
+
 This repository owns sheng board configuration, peripherals, firmware
 selection, partition layout, power policy, and packaging. Shared SM8550
 resources and operations belong to `UniXNU-sm8550-common`. The documentation
