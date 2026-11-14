@@ -108,11 +108,16 @@ enum {GunyahWdtControl = 0x86000005u, GunyahWdtStatus = 0x86000006u, GunyahWdtPi
       GunyahWdtEnable = 3, GunyahWdtDisable = 2, GunyahWdtTimeoutMs = 60000};
 volatile int32_t boot_reset_wdt_stats[4];   // [0] status call result, [1] set-time result, [2] enable result, [3] pings sent
 static uint32_t wdt_deadline;
+static uint64_t watchdog_ticks(void) {
+  uint64_t value;
+  __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(value));
+  return value;
+}
 static void wdt_thread(void *arg, wait_result_t wr) {
   (void)arg; (void)wr;
   uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
-  const uint64_t start = mach_absolute_time();
-  while ((mach_absolute_time() - start) / f < wdt_deadline) {
+  const uint64_t start = watchdog_ticks();
+  while ((watchdog_ticks() - start) / f < wdt_deadline) {
     smc2(GunyahWdtPing, 0, 0, NULL);
     boot_reset_wdt_stats[3] = boot_reset_wdt_stats[3] + 1;
     IOSleep(10000);
