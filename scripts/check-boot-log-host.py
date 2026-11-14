@@ -50,6 +50,7 @@ int main(int argc, char **argv) {
     if (step > n - at) step = n - at;
     if (round == 11) {   // the kernel's ring is replaced by a larger one (log_setsize)
       char *bigger = calloc(1, 262144);
+      free(kernel_ring.msg_bufc);
       kernel_ring.msg_bufc = bigger; kernel_ring.msg_size = 262144; kernel_ring.msg_bufx = 0;
     }
     for (size_t i = 0; i < step; ++i) kputc(text[at + i]);

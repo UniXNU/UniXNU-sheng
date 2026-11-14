@@ -4,7 +4,7 @@
   <key>Label</key><string>org.unixnu.desktop-diagnostics</string>
   <key>ProgramArguments</key><array><string>/bin/bash</string><string>/private/var/ngpu/bin/DesktopDiagnostics.sh</string></array>
   <key>RunAtLoad</key><true/>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>Standard</string>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>60</integer>
 </dict></plist>

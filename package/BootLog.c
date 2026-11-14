@@ -100,6 +100,11 @@ extern uint32_t ml_outside_memory_pages __attribute__((weak_import)), ml_outside
 extern unsigned int vm_page_free_count __attribute__((weak_import)), vm_page_active_count __attribute__((weak_import)),
     vm_page_inactive_count __attribute__((weak_import)), vm_page_wire_count __attribute__((weak_import)),
     vm_page_wire_count_initial __attribute__((weak_import)), vm_page_wire_count_on_boot __attribute__((weak_import));
+extern int vm_compressor_mode __attribute__((weak_import)), vm_num_swap_files __attribute__((weak_import));
+extern unsigned int vm_swapfile_total_segs_used __attribute__((weak_import)),
+    vm_swapfile_total_segs_alloced __attribute__((weak_import));
+extern uint64_t compressed_swap_chunk_size __attribute__((weak_import)),
+    vm_swapfile_last_failed_to_create_ts __attribute__((weak_import));
 extern volatile uint32_t armcpu_quiesce_calls __attribute__((weak_import)), armcpu_halt_calls __attribute__((weak_import));
 extern volatile uint64_t native_adreno_pool_scrubbing[16][2] __attribute__((weak_import));
 extern volatile int native_gpu_addon_written __attribute__((weak_import));
@@ -2479,6 +2484,16 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              vm_page_free_count, vm_page_active_count, vm_page_inactive_count, vm_page_wire_count,
              &vm_page_wire_count_initial ? vm_page_wire_count_initial : 0,
              &vm_page_wire_count_on_boot ? vm_page_wire_count_on_boot : 0, (unsigned)PAGE_SIZE);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  if (&vm_compressor_mode && &vm_num_swap_files && &compressed_swap_chunk_size &&
+      &vm_swapfile_total_segs_used && &vm_swapfile_total_segs_alloced) {
+    char row[160];
+    snprintf(row, sizeof row, "[vm backing] mode=%d files=%d used=%llu allocated=%llu failed-create-ts=%llu",
+             vm_compressor_mode, vm_num_swap_files,
+             (unsigned long long)vm_swapfile_total_segs_used * compressed_swap_chunk_size,
+             (unsigned long long)vm_swapfile_total_segs_alloced * compressed_swap_chunk_size,
+             (unsigned long long)(&vm_swapfile_last_failed_to_create_ts ? vm_swapfile_last_failed_to_create_ts : 0));
     at = put(out, at, cap, row, sizeof row);
   }
   if (&armcpu_quiesce_calls && &armcpu_halt_calls) {

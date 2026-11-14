@@ -173,6 +173,11 @@ kind = "source"
 reference = "board.toml"
 result = "[os_overrides.\"macos-27.3-26C5035r\".payload.runtime] data_seed_tool selects UniXNU scripts/make-macos-data-seed.py, which copies the system volume's Data template with owners as root."
 
+[[area.evidence]]
+kind = "source"
+reference = "package/BootLog.c"
+result = "Native APFS boot packages bind the VM role volume UUID and mount it writable at /System/Volumes/VM before launchd. VM mount status and compressor mode, swap file count, allocated bytes and used bytes are recorded separately from display swap counters. ARM64E syntax and mount identity/error checks passed; device swap-out verification is pending."
+
 [[area]]
 id = "display"
 status = "implemented"
