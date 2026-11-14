@@ -15,6 +15,12 @@ snapshot() {
 snapshot
 capture_and_reboot() {
     snapshot
+    cache=/private/var/tmp/NativeAdrenoMetal.cache
+    if [ -d "$cache" ]; then
+        /usr/bin/touch "$cache/prime-resume"
+        owner=$(/usr/bin/stat -f '%u:%g' "$cache")
+        /usr/sbin/chown "$owner" "$cache/prime-resume"
+    fi
     /usr/sbin/sysctl -w kern.unixnu_diag_request=1 || return 1
     for wait in $(/usr/bin/seq 1 60); do
         status=$(/usr/sbin/sysctl -n kern.unixnu_diag_status)
@@ -51,3 +57,4 @@ for attempt in $(/usr/bin/seq 1 230); do
     fi
     /bin/sleep 30
 done
+capture_and_reboot
