@@ -67,7 +67,7 @@ void boot_cache_loader_log_capture(unsigned now) {
 }
 
 enum {DiagMaxFiles = 128, DiagPath = 192, DiagDepth = 0, DiagChunk = 256 * 1024, DiagNote = 32768};
-struct diag_file {char path[DiagPath]; uint64_t size; uint32_t mode, uid, gid, root, keep;};
+struct diag_file {char path[DiagPath]; uint64_t size, offset; uint32_t mode, uid, gid, root, keep;};
 static struct diag_file *diag_files;
 static uint32_t diag_count, diag_skipped_count;
 static void *cache_input;
@@ -165,7 +165,14 @@ static void add(const char *path, uint32_t root, vfs_context_t ctx) {
   struct diag_file *f = &diag_files[diag_count++];
   strlcpy(f->path, path, sizeof f->path);
   f->size = va.va_data_size; f->mode = va.va_mode; f->uid = va.va_uid; f->gid = va.va_gid; f->root = root; f->keep = 0;
-  if(macos_limit && f->size>macos_limit){note("truncated",path,(int)(f->size>>10));f->size=macos_limit;}
+  f->offset=0;
+  if(macos_limit && f->size>macos_limit){
+    note("truncated",path,(int)(f->size>>10));
+    const size_t length=strlen(path);
+    if(length>=4 && !strcmp(path+length-4,".png")){--diag_count;return;}
+    if(length>=4 && !strcmp(path+length-4,".log"))f->offset=f->size-macos_limit;
+    f->size=macos_limit;
+  }
 }
 
 static void scan(const char *path, unsigned depth, uint32_t root, vfs_context_t ctx) {
@@ -783,7 +790,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
       const uint32_t want = f->size - at < DiagChunk ? (uint32_t)(f->size - at) : DiagChunk;
       int resid = (int)want;
       memset(chunk, 0, want);
-      if (vp && (error = vn_rdwr(UIO_READ, vp, (caddr_t)chunk, (int)want, (off_t)at, UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid,
+      if (vp && (error = vn_rdwr(UIO_READ, vp, (caddr_t)chunk, (int)want, (off_t)(f->offset+at), UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid,
                                  vfs_context_proc(ctx)))) {
         note("read", f->path, error); ++boot_diag_errors;
         vnode_close(vp, FREAD, ctx); vp = NULLVP;

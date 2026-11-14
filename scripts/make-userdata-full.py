@@ -9,6 +9,7 @@ Zero 4 KiB blocks become FILL chunks (written as zeros), the rest RAW chunks. Ea
 earlier userdata-root.json, and the manifest's against its manifest_sha256.
 
   make-userdata-full.py OS.dmg SYSTEMOS.dmg ROOT.json PARTITION_BYTES OUTPUT [WINDOW.dmg ...] [--object NAME=FILE ...]
+  make-userdata-full.py --raw USERDATA_ROOT.img PARTITION_BYTES OUTPUT
 """
 import hashlib
 import json

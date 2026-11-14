@@ -3,7 +3,7 @@ name: sheng macOS lab
 on:
   workflow_dispatch:
   push:
-    branches: [rponeawa/sheng-macos27-gpu-charge-20261115]
+    branches: [fix/sheng-macos27-bringup]
     paths:
       - .github/workflows/macos-lab.yml
       - scripts/prepare-macos-install.py
@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: rponeawa/UniXNU
-          ref: 4cc0f05
+          ref: cb67b44d12e1740d6e9acc8b976b36158eb104e8
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4

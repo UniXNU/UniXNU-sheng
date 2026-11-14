@@ -51,8 +51,12 @@ boot(reader)
 command = [sys.executable, str(root / 'scripts/read-sheng-log.py'), '--wait', '120', '--out', str(output)]
 if os.environ.get('PORT'):
     command += ['--port', os.environ['PORT']]
-result = subprocess.run(command, timeout=270)
+try:
+    result = subprocess.run(command, timeout=270).returncode
+except subprocess.TimeoutExpired:
+    result = 124
+    print('log retrieval exceeded 270s; waiting for the reader return timer', flush=True)
 wait_fastboot(330)
-print(f'{serial}: returned to fastboot; log reader exit={result.returncode}', flush=True)
-sys.exit(result.returncode)
+print(f'{serial}: returned to fastboot; log reader exit={result}', flush=True)
+sys.exit(result)
 PY
