@@ -5,11 +5,16 @@ set -u
 /usr/bin/defaults write com.apple.loginwindow TALLogoutSavesState -bool false
 /usr/bin/defaults -currentHost write com.apple.loginwindow TALLogoutSavesState -bool false
 cache=/private/var/tmp/NativeAdrenoMetal.cache/prime.log
+boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)
 ready=0
 for attempt in $(/usr/bin/seq 1 110); do
     /bin/date -u
     if [ -r "$cache" ]; then
-        state=$(/usr/bin/grep '^pass ' "$cache" | /usr/bin/tail -n 1)
+        state=$(/usr/bin/awk -v boot="$boot" '
+            /^list / {current = index($0, " boot=" boot " ") && index($0, " scope=2 "); state = ""}
+            /^pass / && current {state = $0}
+            END {print state}
+        ' "$cache")
         /bin/echo "$state"
         case "$state" in *' complete=1 '*) ready=1; break ;; esac
     fi
