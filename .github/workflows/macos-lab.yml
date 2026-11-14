@@ -35,7 +35,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: rponeawa/UniXNU
-          ref: f7ba0edeb51492e49822a8150e4a0295f34f2664
+          ref: 24099daec263e95e40c0bd910efd4668240d39cf
           path: UniXNU
           submodules: recursive
       - name: Check out firmware sources
@@ -56,8 +56,23 @@ jobs:
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/gpu-reference
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/mesa-work
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/adreno-metal-bridge
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/m2v-target
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/mesa-tu-macos27
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/runtime/data.dbr
             device/.cache/firmware
+      - name: Refresh pinned translator checkout
+        run: |
+          python3 - <<'PYTHON'
+          import json, shutil, subprocess
+          from pathlib import Path
+          core = Path('UniXNU')
+          pin = json.loads((core / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']['commit']
+          source = core / 'out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/gpu-reference/metal2vulkan'
+          if source.exists():
+              actual = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
+              if actual != pin:
+                  shutil.rmtree(source)
+          PYTHON
       - name: Install build tools
         run: |
           brew install dtc llvm lld cmake mtools ninja glslang shaderc spirv-tools bison pkgconf rustup unifdef openssl@3 zstd blacktop/tap/ipsw
@@ -103,6 +118,7 @@ jobs:
           target=UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos
           cp "$target/boot/boot.img" "$target/payload/payload.img" "$target/kernel/kernel.macho" "$target/package.manifest.json" artifacts/
           cp "$target/runtime/data.dbr" "$target/userdata/userdata-root.json" artifacts/
+          cp "$target/tree/build/prime-list.txt" "$target/tree/build/prime-list.json" artifacts/
           zstd -T0 -3 --sparse "$target/userdata/userdata-root.img" -o artifacts/userdata-root.img.zst
       - uses: actions/upload-artifact@v4
         with:
@@ -126,5 +142,7 @@ jobs:
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/gpu-reference
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/mesa-work
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/adreno-metal-bridge
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/m2v-target
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/mesa-tu-macos27
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/runtime/data.dbr
             device/.cache/firmware
