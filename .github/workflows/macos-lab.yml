@@ -26,22 +26,38 @@ jobs:
       UNIXNU_LAB_PASSWORD: ${{ secrets.UNIXNU_LAB_PASSWORD }}
       UNIXNU_MACOS_TEST: ${{ github.workspace }}/device/scripts/macos-lab
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out device sources
+        uses: actions/checkout@v4
         with:
           path: device
           submodules: recursive
-      - uses: actions/checkout@v4
+      - name: Check out core sources
+        uses: actions/checkout@v4
         with:
           repository: rponeawa/UniXNU
-          ref: cb67b44d12e1740d6e9acc8b976b36158eb104e8
+          ref: f7ba0edeb51492e49822a8150e4a0295f34f2664
           path: UniXNU
           submodules: recursive
-      - uses: actions/checkout@v4
+      - name: Check out firmware sources
+        uses: actions/checkout@v4
         with:
           repository: UniXNU/uefi-sheng
           ref: 66421cb7bb5694843aec8de1ca3d1de4c20cca38
           path: uefi-sheng
           submodules: recursive
+      - name: Restore build inputs
+        id: build-cache
+        uses: actions/cache/restore@v4
+        with:
+          key: sheng-macos27-build-v1-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: sheng-macos27-build-v1-${{ runner.os }}-
+          path: |
+            UniXNU/out/feeds
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/gpu-reference
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/mesa-work
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/adreno-metal-bridge
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/runtime/data.dbr
+            device/.cache/firmware
       - name: Install build tools
         run: |
           brew install dtc llvm lld cmake mtools ninja glslang shaderc spirv-tools bison pkgconf rustup unifdef openssl@3 zstd blacktop/tap/ipsw
@@ -100,3 +116,15 @@ jobs:
           name: build-logs
           path: UniXNU/out/sheng/*/*/logs/*.log
           retention-days: 1
+      - name: Save build inputs
+        if: always() && steps.build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          key: sheng-macos27-build-v1-${{ runner.os }}-${{ github.run_id }}
+          path: |
+            UniXNU/out/feeds
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/gpu-reference
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/mesa-work
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/adreno-metal-bridge
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/runtime/data.dbr
+            device/.cache/firmware
