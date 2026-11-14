@@ -30,8 +30,7 @@ export VK_LAYER_PATH="$tool/etc/vulkan/explicit_layer.d"
 export VK_DRIVER_FILES="$tool/etc/vulkan/icd.d/turnip.json"
 export DYLD_LIBRARY_PATH="$tool/lib"
 "$tool/bin/gpu-acceptance" --loader "$tool/lib/libvulkan.1.dylib" \
-    --cache /Users/Shared/unixnu-test/gpu-cache --prime-log "$cache" --mode all \
-    > /Users/Shared/unixnu-test/gpu-acceptance.log 2>&1 &
+    --cache /Users/Shared/unixnu-test/gpu-cache --prime-log "$cache" --mode all &
 probe=$!
 (
     /bin/sleep 180
