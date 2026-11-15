@@ -1,0 +1,78 @@
+name: wifi-check
+
+# Fast isolated validation of the late-failing WiFi userspace path (fetch pinned Ath12kWifi
+# sources + build the native supplicant for macOS). Runs in ~10 min instead of discovering the
+# same error 40 min into a full build. No kernel/IPSW/GPU; only Xcode clang/make are needed.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wifi-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wifi:
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: device
+          submodules: recursive
+      - name: cache ath12k deps
+        uses: actions/cache@v4
+        with:
+          path: device/drivers/Ath12kWifi/deps
+          key: ath12k-deps-${{ hashFiles('device/drivers/Ath12kWifi/tools/source-lock.json') }}
+      - name: wifi firmware
+        working-directory: device
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, urllib.request
+          from pathlib import Path
+          base = 'https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/ath12k/WCN7850/hw2.0/'
+          src = Path('firmware/wcn7850')
+          manifest = json.loads((src / 'manifest.json').read_text())['files']
+          for name, exp in manifest.items():
+              if name not in ('amss.bin', 'm3.bin', 'board-2.bin'):
+                  continue
+              dest = src / name
+              if dest.exists() and dest.stat().st_size == exp['bytes'] and hashlib.sha256(dest.read_bytes()).hexdigest() == exp['sha256']:
+                  print(f'{name}: already present and verified', flush=True); continue
+              print(f'fetching {name} from linux-firmware …', flush=True)
+              req = urllib.request.Request(base + name, headers={'User-Agent': 'unixnu-ci'})
+              data = urllib.request.urlopen(req, timeout=180).read()
+              if len(data) != exp['bytes'] or hashlib.sha256(data).hexdigest() != exp['sha256']:
+                  raise SystemExit(f'{name} does not match the manifest')
+              dest.write_bytes(data)
+              print(f'{name}: {len(data)} bytes verified', flush=True)
+          PY
+      - name: fetch ath12k sources
+        working-directory: device/drivers/Ath12kWifi
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+          python3 tools/fetch-sources.py
+      - name: build wifi userspace
+        working-directory: device
+        run: |
+          set -euo pipefail
+          python3 scripts/build-wifi-userspace.py "$GITHUB_WORKSPACE/wifi-out" macos27
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wifi-check-logs
+          retention-days: 1
+          if-no-files-found: warn
+          path: |
+            wifi-out
+            device/drivers/Ath12kWifi/out/wpa-macos/build.log
+            device/drivers/Ath12kWifi/out/source-identity.json
