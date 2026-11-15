@@ -1,11 +1,18 @@
 diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -586,11 +586,13 @@
+@@ -81,6 +81,7 @@
+  */
+ 
+ #include <sys/param.h>
++extern void boot_log_checkpoint(const char *) __attribute__((weak_import));
+ #include <sys/filedesc.h>
+ #include <sys/kernel.h>
+ #include <sys/mount_internal.h>
+@@ -586,11 +587,12 @@
  #endif
  
  #define DEBUG_BSDINIT 0
-+extern void boot_log_checkpoint(const char *) __attribute__((weak_import));
 +#define bsd_init_checkpoint(x) do { if (&boot_log_checkpoint) boot_log_checkpoint(x); } while (0)
  
  #if DEBUG_BSDINIT
