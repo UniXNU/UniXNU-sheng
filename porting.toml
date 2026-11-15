@@ -862,6 +862,14 @@ revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
 command = "python3 scripts/run-local-kernel.py --sdk SDK --tools TOOLCHAIN -- build kernel prelink -D ../UniXNU-sheng --os macos-27 --data-ramdisk installed-data.dbr --skip-preflight"
 result = "Probe packaging resolves the LLVM tools through the shared host lookup used by the matching firmware build."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9a2ef561f225a440695f4304f608b62f90f208a3"
+revision = "9a2ef561f225a440695f4304f608b62f90f208a3"
+command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT OUTPUT --tools TOOLS --plugin PLUGIN --video-fixture HEVC8 --video-fixture-10bit HEVC10 --bluetooth-runtime BLUETOOTH --refresh-payload --uefi UEFI --autoreset 600 --preserve-data"
+result = "The current ARM64e lab tools and source-built guarded firmware produce a 100921344-byte boot image within the board transport limit. The 256 MiB decoded payload retains the installed Data seed and includes both decoder fixtures."
+
 [[area]]
 id = "diagnostics"
 status = "implemented"
@@ -942,6 +950,14 @@ reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9ea98e5b491c96883e5ea
 revision = "9ea98e5b491c96883e5ea55659d8e0b9feb7ab33"
 command = "gpu-correctness-probe --cache-only; video-probe video-probe.mp4 --require-hardware; python3 scripts/compare-video-probe.py video-probe.mp4 video-probe.log"
 result = "On Apple M1 Pro, 16 persistent IOSurface CPU/GPU round trips and both exact-heap layout policies pass. The 120-frame HEVC fixture returns 120 frames with no drops, and all 1880 sampled NV12 bytes match FFmpeg. The ARM64e lab tools and authored half compound AIR assemble and package successfully."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9a2ef561f225a440695f4304f608b62f90f208a3"
+revision = "9a2ef561f225a440695f4304f608b62f90f208a3"
+command = "gpu-correctness-probe --all; icon-probe icons.png"
+result = "On Apple M1 Pro, the source-compiled half kernel returns mix=0 and dot=32, missing-function lookup returns MTLLibraryErrorDomain code 5, both exact-heap layouts pass, and 16 persistent IOSurface CPU/GPU round trips pass. All 64 requested icons have finite source components; the RGBAh blur is finite."
 
 [[area]]
 id = "arm64e-os"
@@ -1031,3 +1047,11 @@ reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9ea98e5b491c96883e5ea
 revision = "9ea98e5b491c96883e5ea55659d8e0b9feb7ab33"
 command = "python3 scripts/check-vt-parameters-host.py video-probe.mp4"
 result = "The production VideoToolbox parameter-set parser accepts the complete 2416-byte HEVC configuration, including its SEI NAL, and rejects a truncated NAL under ASan and UBSan. The full-rate decoder delivery change compiles in the macOS arm64e kernel."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9a2ef561f225a440695f4304f608b62f90f208a3"
+revision = "9a2ef561f225a440695f4304f608b62f90f208a3"
+command = "video-probe video-probe.mp4 --require-hardware; video-probe video-probe-10bit.mp4 --require-hardware; python3 scripts/compare-video-probe.py FIXTURE VIDEO_LOG --sample INDEX"
+result = "On Apple M1 Pro, hardware decoding returns all 120 8-bit frames and all 12 3840x2160 10-bit frames without drops. Explicit NV12 and P010 outputs match FFmpeg at all 1880 and 1920 sampled components respectively."
