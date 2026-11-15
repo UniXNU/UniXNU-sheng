@@ -119,7 +119,9 @@ static const char *const diag_roots[] = {
   "/private/var/tmp/NativeAdrenoMetal.cache",
   "/Users/Shared/unixnu-test",
   "/Library/Logs/DiagnosticReports",
+  "/Library/Logs/DiagnosticReports/Retired",
   "/Users/unixnu/Library/Logs/DiagnosticReports",
+  "/Users/unixnu/Library/Logs/DiagnosticReports/Retired",
   "/private/var/mobile/Library/Logs/CrashReporter",
   "/private/var/root/Library/Logs/CrashReporter",
 };

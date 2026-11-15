@@ -22,3 +22,4 @@ zzzzzz-sheng-bsd-checkpoints.patch
 sheng-bootstrap-checkpoints.patch
 sheng-headless-startup-checkpoints.patch
 sheng-startup-failure-log.patch
+sheng-process-exit-log.patch

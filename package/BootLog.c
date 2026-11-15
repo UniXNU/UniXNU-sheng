@@ -495,6 +495,14 @@ void boot_log_startup_result(const char *stage, int result) {
   boot_log_startup_stage(0, text);
 }
 
+void boot_log_process_exit(int pid, const char *name, int status, unsigned space,
+                           uint64_t code, const char *description, unsigned csflags) {
+  if (!status && !space && strcmp(name, "WindowServer") && strcmp(name, "loginwindow") &&
+      strcmp(name, "WallpaperAgent") && strncmp(name, "Wallpaper", 9) && strcmp(name, "VTDecoderXPCService")) return;
+  printf("unixnu-exit: %s[%d] status=0x%x reason=%u/0x%llx csflags=0x%x description=%.256s\n",
+         name, pid, status, space, (unsigned long long)code, csflags, description ? description : "");
+}
+
 static volatile int boot_log_panicked;   // set by boot_log_panic_flush: the writer no longer writes
 
 // The export: boot_log_export_put takes the blob's pieces in order (any thread) and writes them through a staging buffer straight into

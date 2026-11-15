@@ -4,6 +4,32 @@ set -u
 /bin/mkdir -p /Users/Shared/unixnu-test
 /bin/chmod 1777 /Users/Shared/unixnu-test
 /bin/rm -f /Users/Shared/unixnu-test/benchmark.done /Users/Shared/unixnu-test/reboot-requested
+session=/Users/Shared/unixnu-test
+boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)
+/bin/echo "graphics capture boot=$boot" > "$session/graphics-events.log"
+/bin/rm -f "$session/graphics-events-previous.log"
+/bin/echo "graphics state boot=$boot" > "$session/graphics-state.log"
+predicate='process == "WindowServer" OR process == "loginwindow" OR process BEGINSWITH "Wallpaper" OR process == "VTDecoderXPCService" OR subsystem CONTAINS[c] "VideoToolbox" OR subsystem CONTAINS[c] "CoreMedia"'
+/usr/bin/log stream --style compact --level info --timeout 120m --predicate "$predicate" >> "$session/graphics-events.log" 2>&1 &
+graphics_log=$!
+trap '/bin/kill "$graphics_log" 2>/dev/null || :' EXIT
+graphics_state() {
+    {
+        /bin/date -u
+        /bin/echo "boot=$boot"
+        /bin/ps -axo pid,ppid,etime,pcpu,rss,comm
+        /usr/sbin/ioreg -r -c AppleVideoToolboxParavirtualizationDriver -l
+        /bin/ls -lt /Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports/Retired
+    } >> "$session/graphics-state.log" 2>&1
+    if [ "$(/usr/bin/stat -f %z "$session/graphics-state.log")" -gt 524288 ]; then
+        /usr/bin/tail -c 262144 "$session/graphics-state.log" > "$session/graphics-state.tmp"
+        /bin/mv "$session/graphics-state.tmp" "$session/graphics-state.log"
+    fi
+    if [ "$(/usr/bin/stat -f %z "$session/graphics-events.log")" -gt 2097152 ]; then
+        /usr/bin/tail -c 2097152 "$session/graphics-events.log" > "$session/graphics-events-previous.log"
+        : > "$session/graphics-events.log"
+    fi
+}
 snapshot() {
     /bin/date -u
     /usr/bin/sw_vers
@@ -20,6 +46,7 @@ snapshot() {
 }
 snapshot
 capture_and_reboot() {
+    graphics_state
     snapshot
     cache=/private/var/tmp/NativeAdrenoMetal.cache
     if [ -d "$cache" ]; then
@@ -43,6 +70,7 @@ capture_and_reboot() {
     return 1
 }
 for attempt in $(/usr/bin/seq 1 230); do
+    graphics_state
     if [ -f /Users/Shared/unixnu-test/benchmark.done ] || [ -f /Users/Shared/unixnu-test/reboot-requested ]; then
         capture_and_reboot
         exit $?

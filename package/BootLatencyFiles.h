@@ -8,7 +8,8 @@ static inline int bl_latency_contains(const char *text,size_t size,const char *t
  return 0;
 }
 static const char *const bl_crash_processes[]={"STExtractionService","dasd","WidgetRenderer","FitnessWidget","CalendarWidget",
- "WindowServer","Finder","loginwindow","System Settings"};
+ "WindowServer","Finder","loginwindow","System Settings","WallpaperAgent","WallpaperVideoExtension",
+ "WallpaperDynamicExtension","VTDecoderXPCService"};
 enum {BlCrashProcessCount=sizeof bl_crash_processes/sizeof bl_crash_processes[0]};
 static inline int bl_crash_process(const char *path) {
  const char *name=path;for(const char *at=path;*at;++at)if(*at=='/')name=at+1;
@@ -39,6 +40,8 @@ static inline unsigned bl_macos_file_limit(const char *path) {
  if(!strncmp(path,session,sizeof session-1)) {
   const char *name=path+sizeof session-1;
   if(!strcmp(name,"daemon.log") || !strcmp(name,"agent.log"))return 256*1024;
+  if(!strcmp(name,"graphics-events.log") || !strcmp(name,"graphics-events-previous.log"))return 2*1024*1024;
+  if(!strcmp(name,"graphics-state.log"))return 512*1024;
   if(!strcmp(name,"desktop-180.png") || !strcmp(name,"desktop-270.png"))return 2*1024*1024;
  }
  return 0;
@@ -46,7 +49,7 @@ static inline unsigned bl_macos_file_limit(const char *path) {
 static inline int bl_latency_message(const char *line,size_t size) {
  static const char *const terms[]={"panic","EXC_","memorystatus:","watermark","STExtractionService",
   "dasd","WidgetRenderer","FitnessWidget","CalendarWidget","GPU fault","GPU hang","PAC exception",
-  "WindowServer","loginwindow","NativeAdrenoMetal","memory outside","swap file","vm: Demand swap"};
+  "WindowServer","loginwindow","NativeAdrenoMetal","memory outside","swap file","vm: Demand swap","unixnu-exit:"};
  for(unsigned i=0;i<sizeof terms/sizeof terms[0];++i) {
   if(bl_latency_contains(line,size,terms[i]))return 1;
  }
