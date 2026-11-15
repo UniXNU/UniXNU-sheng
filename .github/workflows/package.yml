@@ -112,6 +112,16 @@ jobs:
           set -euo pipefail
           git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
           python3 tools/fetch-sources.py
+      - name: device proprietary firmware
+        working-directory: device
+        # Touch, keyboard and video firmware are proprietary inputs kept out of every repository.
+        # extract-files.py with no source downloads them from the public mirror pinned in
+        # proprietary-files.txt (@fetch) and verifies each SHA-256. The payload runtime's
+        # firmware_tools (stage-video-firmware.py) reads .cache/firmware/qcom/sm8550/sheng/vpu30_4v.mbn;
+        # without this step it fails. Idempotent: correct files are skipped.
+        run: |
+          set -euo pipefail
+          python3 scripts/extract-files.py
       - name: build
         working-directory: UniXNU
         env:
