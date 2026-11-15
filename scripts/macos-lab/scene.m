@@ -11,7 +11,7 @@ int main(int argc, const char **argv) {
             CABasicAnimation *animation = [CABasicAnimation animationWithKeyPath:@"transform.translation.x"];
             animation.preferredFrameRateRange = rate;
             rate = animation.preferredFrameRateRange;
-            printf("scene layers=20 duration=180 frame-rate=%.0f/%.0f/%.0f\n", rate.minimum, rate.maximum, rate.preferred);
+            printf("scene layers=20 duration=360 frame-rate=%.0f/%.0f/%.0f\n", rate.minimum, rate.maximum, rate.preferred);
             return 0;
         }
         NSApplication *app = NSApplication.sharedApplication;
@@ -43,9 +43,9 @@ int main(int argc, const char **argv) {
         [app finishLaunching];
         [window makeKeyAndOrderFront:nil];
         [app activateIgnoringOtherApps:YES];
-        printf("scene start layers=20 duration=180 preferred-fps=120\n");
+        printf("scene start layers=20 duration=360 preferred-fps=120\n");
         fflush(stdout);
-        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:180]];
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:360]];
         [window close];
         printf("scene complete\n");
     }
