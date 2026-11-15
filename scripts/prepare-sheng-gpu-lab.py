@@ -225,8 +225,8 @@ def main():
                    '--remove-arg', 'exec-log', '--remove-arg', 'vc-text', '--remove-arg', 'storage-probe',
                    '--remove-arg', 'icon-cb']
         for value in (f'autoreset={args.autoreset}', 'uefi-watchdog=1', 'diag=1', f'diag-export={args.autoreset-60}',
-                      'gpu-trace=1', 'log-gpu=1', 'log-power=1', 'log-sys=1', 'log-display=1',
-                      'log-video=1', 'log-bluetooth=3', 'build-tag=s00000'):
+                      'gpu-trace=1', 'log-gpu=1', 'log-video=1', 'log-bluetooth=3',
+                      'build-tag=s00000', 'ci-mps=0'):
             command += ['--kernel-arg', value]
         if args.icon_dump_cb:
             command += ['--remove-arg', 'gpu-perf', '--kernel-arg', 'icon-cb='+args.icon_dump_cb]
