@@ -1,7 +1,6 @@
 {
   "device": "sheng",
   "gpu": "Adreno 740",
-  "build_run": "https://github.com/rponeawa/UniXNU-sheng/actions/runs/43675340751",
   "image_device_revision": "e08bc6176578d615276fbf70df0949a52a04cba9",
   "image_core_revision": "cb2431b481b3a08b18d9f1a7d62ae5d11f85512d",
   "firmware_revision": "fb2b2ae1d2f8c855cc76bb24ee3bcd28e3ecacbb",
@@ -24,5 +23,6 @@
   },
   "host_build": "passed: XNU, source drivers, prelink, runtime, payload, firmware and userdata",
   "product_signatures": "strict codesign verification passed",
-  "device_runtime": "pending"
+  "device_runtime": "pending",
+  "build_run_id": 43675340751
 }
