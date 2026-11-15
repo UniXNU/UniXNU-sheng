@@ -1,6 +1,13 @@
 #!/bin/sh
 # Fixed window sequence after the current boot's shader priming pass.
 set -u
+/bin/rm -f /Users/Shared/unixnu-test/desktop-180.png /Users/Shared/unixnu-test/desktop-270.png
+(
+    /bin/sleep 180
+    /usr/sbin/screencapture -x -t png /Users/Shared/unixnu-test/desktop-180.png
+    /bin/sleep 90
+    /usr/sbin/screencapture -x -t png /Users/Shared/unixnu-test/desktop-270.png
+) &
 /usr/bin/defaults write NSGlobalDomain NSQuitAlwaysKeepsWindows -bool false
 /usr/bin/defaults write com.apple.loginwindow TALLogoutSavesState -bool false
 /usr/bin/defaults -currentHost write com.apple.loginwindow TALLogoutSavesState -bool false
