@@ -34,6 +34,8 @@ extern "C" __attribute__((weak)) void boot_progress_poll(void) {}
 extern "C" void boot_log_tick(unsigned now);
 extern "C" void boot_log_panic_flush(void);
 extern "C" int boot_kthread_report(const char *, char *, unsigned) __attribute__((weak_import));
+extern "C" processor_t thread_bind(processor_t);
+extern "C" kern_return_t kernel_thread_start_priority(thread_continue_t, void *, integer_t, thread_t *);
 extern "C" volatile uint32_t boot_log_state, boot_log_rounds, boot_log_errors;
 extern "C" const char *volatile boot_log_open_refusal;
 
