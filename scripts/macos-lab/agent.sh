@@ -1,9 +1,15 @@
 #!/bin/sh
-# Fixed window sequence for a boot started with data-reset=1.
+# Fixed window sequence after the current boot's shader priming pass.
 set -u
 /usr/bin/defaults write NSGlobalDomain NSQuitAlwaysKeepsWindows -bool false
 /usr/bin/defaults write com.apple.loginwindow TALLogoutSavesState -bool false
 /usr/bin/defaults -currentHost write com.apple.loginwindow TALLogoutSavesState -bool false
+/usr/bin/defaults write com.apple.finder ApplePersistenceIgnoreState -bool true
+/usr/bin/defaults write com.apple.systempreferences ApplePersistenceIgnoreState -bool true
+/usr/bin/pkill -u "$(/usr/bin/id -u)" -x 'System Settings' 2>/dev/null || :
+/usr/bin/pkill -u "$(/usr/bin/id -u)" -x Finder 2>/dev/null || :
+/bin/rm -rf '/Users/unixnu/Library/Saved Application State/com.apple.finder.savedState' \
+    '/Users/unixnu/Library/Saved Application State/com.apple.systempreferences.savedState'
 cache=/private/var/tmp/NativeAdrenoMetal.cache/prime.log
 boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)
 ready=0
