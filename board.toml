@@ -290,6 +290,9 @@ CI_ENABLE_METAL_GPU = "0"
 # its component build; AppleImage4 waits for an IOAESAccelerator service.
 "include" = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot", "ShengPreflight", "ShengUfs", "RamBlock", "GopFramebuffer", "AppleKeyStoreState", "Adreno740", "AdrenoMetal", "SoftwareAES"]
 
+["os_overrides"."macos-27.3-26C5035r"."bootimg"]
+"max_image_bytes" = 202375168
+
 ["os_overrides"."macos-27.3-26C5035r"."kernel"]
 "defconfig" = "sheng_macos_defconfig"
 "config_fragments" = ["arch:configs/common.config", "os:configs/macos.config"]
