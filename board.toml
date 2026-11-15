@@ -288,7 +288,7 @@ CI_ENABLE_METAL_GPU = "0"
 ["os_overrides"."macos-27.3-26C5035r"."components"]
 # SoftwareAES: NativeAES.cpp is compiled against the 26C5035r IOAESAccelerator fixture (build-gop-legacy-display-27.py), not with
 # its component build; AppleImage4 waits for an IOAESAccelerator service.
-"include" = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot", "ShengPreflight", "ShengUfs", "RamBlock", "GopFramebuffer", "AppleKeyStoreState", "Adreno740", "AdrenoMetal", "SoftwareAES"]
+"include" = ["ArmDTPlatform", "ArmCpu", "XnuPrelink", "DarwinBoot", "ShengPreflight", "ShengUfs", "QcaBluetooth", "RamBlock", "GopFramebuffer", "AppleKeyStoreState", "Adreno740", "AdrenoMetal", "SoftwareAES"]
 
 ["os_overrides"."macos-27.3-26C5035r"."bootimg"]
 "max_image_bytes" = 202375168
