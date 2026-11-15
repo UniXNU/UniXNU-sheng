@@ -135,7 +135,7 @@ int boot_reset_watchdog(uint32_t deadline, char *text, unsigned cap) {
     boot_reset_wdt_stats[1] = (int32_t)smc2(BR_WDT_SET_TIME, BR_WDT_TIMEOUT_MS, BR_WDT_TIMEOUT_MS, NULL);
   }
   if (boot_reset_wdt_stats[1]) {snprintf(text, cap, "watchdog: prepare %d", boot_reset_wdt_stats[1]); return 2;}
-  boot_reset_wdt_stats[2] = (int32_t)smc2(BR_WDT_CONTROL, BR_WDT_ENABLE, 0, NULL);
+  boot_reset_wdt_stats[2] = inherited ? 0 : (int32_t)smc2(BR_WDT_CONTROL, BR_WDT_ENABLE, 0, NULL);
   if (boot_reset_wdt_stats[2]) {snprintf(text, cap, "watchdog: enable %d", boot_reset_wdt_stats[2]); return 4;}
   wdt_deadline = deadline;
   thread_t thread;
