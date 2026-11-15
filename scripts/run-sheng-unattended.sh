@@ -11,6 +11,7 @@ import re
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 
@@ -71,6 +72,11 @@ def boot(path):
     return True
 
 output.mkdir(parents=True, exist_ok=True)
+tag = 's' + format(time.time_ns(), 'x')[-15:]
+tagged_directory = tempfile.TemporaryDirectory(prefix='sheng-timed-boot-')
+tagged = Path(tagged_directory.name) / image.name
+subprocess.run([sys.executable, str(root / 'scripts/repack-sheng-boot.py'), str(image), str(tagged),
+                '--kernel-arg', 'build-tag=' + tag], check=True)
 wait_fastboot(30)
 if userdata is not None:
     def variable(name):
@@ -93,7 +99,7 @@ if userdata is not None:
     print(f'{serial}: writing the complete {partition}-byte userdata partition', flush=True)
     subprocess.run(['fastboot', '-s', serial, 'flash', 'userdata', str(userdata)], check=True, timeout=3600)
 started = time.monotonic()
-acknowledged = boot(image)
+acknowledged = boot(tagged)
 time.sleep(2)
 wait_fastboot(limit)
 test_seconds = time.monotonic() - started
@@ -109,11 +115,17 @@ except subprocess.TimeoutExpired:
     result = 124
     print('log retrieval exceeded 270s; waiting for the reader return timer', flush=True)
 wait_fastboot(330)
+fresh = any(('tag=' + tag) in path.read_text(errors='replace').splitlines() for path in output.glob('*/header.txt'))
+if result == 0 and not fresh:
+    result = 3
+    print(f'{serial}: no log from test tag {tag}; the capture belongs to an earlier boot', flush=True)
 (output / 'cycle.json').write_text(json.dumps(dict(
     image=image.name, reader=reader.name, boot_acknowledged=acknowledged,
+    expected_tag=tag, fresh_log=fresh,
     test_seconds=round(test_seconds, 3), reader_acknowledged=reader_acknowledged,
     reader_seconds=round(time.monotonic() - reader_started, 3),
     reader_exit=result, final_fastboot=True), indent=2) + '\n')
 print(f'{serial}: returned to fastboot; log reader exit={result}', flush=True)
+tagged_directory.cleanup()
 sys.exit(result)
 PY
