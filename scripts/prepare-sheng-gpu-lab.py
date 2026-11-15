@@ -37,8 +37,8 @@ def main():
     args = parser.parse_args()
     if args.output.exists() or args.input.resolve() == args.output.resolve():
         parser.error('choose a new output file')
-    if args.refresh_payload and (not args.uefi or not args.unique_chip_id):
-        parser.error('--refresh-payload requires --uefi and --unique-chip-id')
+    if args.refresh_payload and not args.uefi:
+        parser.error('--refresh-payload requires --uefi')
     core = (ROOT / tomllib.loads((ROOT / 'board.toml').read_text())['package']['unixnu']).resolve()
     sys.path.insert(0, str(core / 'scripts'))
     from unixnu import ramdisk as codec
@@ -110,8 +110,8 @@ def main():
         bluetooth_dirs = []
         if args.bluetooth_runtime:
             report = json.loads((args.bluetooth_runtime / 'report.json').read_text())
-            for prefix, directory in report['directories'].items():
-                bluetooth_dirs += [prefix, args.bluetooth_runtime / directory]
+            for addon_prefix, directory in report['directories'].items():
+                bluetooth_dirs += [addon_prefix, args.bluetooth_runtime / directory]
             hashes.extend(item['cdhash'] for item in report['files'].values())
         code = args.plugin / 'NativeAdrenoMetal.bundle/Contents/MacOS'
         for path in sorted(files.rglob('*')) + sorted(code.iterdir()):
@@ -149,9 +149,18 @@ def main():
             from unixnu import bootimg, firmware, payload as fat_payload
             seed = work / 'scratch-data.img'
             run('mcopy', '-i', payload, '::/' + prefix.replace('kernel.macho.', '') + 'scratch-data.img', seed)
+            chip = args.unique_chip_id
+            if not chip:
+                adt = work / 'original.adt'
+                run('mcopy', '-i', payload, '::/' + prefix + 'adt', adt)
+                data = adt.read_bytes()
+                marker = b'unique-chip-id'.ljust(32, b'\0') + struct.pack('<I', 8)
+                if data.count(marker) != 1:
+                    parser.error('the input ADT requires one 64-bit unique-chip-id')
+                chip = format(struct.unpack_from('<Q', data, data.index(marker)+len(marker))[0], 'x')
             options = cli_parser().parse_args(['build', 'payload', '-D', str(ROOT), '--os', 'macos-27',
                 '--data-ramdisk', str(seed), '--owner-trust-cache', str(trust), '--gpu-addon', str(addon),
-                '--uefi', str(args.uefi.resolve()), '--unique-chip-id', args.unique_chip_id])
+                '--uefi', str(args.uefi.resolve()), '--unique-chip-id', chip])
             ctx = Context(options)
             ctx.uefi = args.uefi.resolve()
             spec = ctx.board['payload']
@@ -173,9 +182,10 @@ def main():
                     ctx.board['bootimg']['template'] = selected
             import hashlib
             import lzma
-            packed_template = work / 'guarded-firmware.img.xz'
+            packed_template = args.output.with_suffix('.firmware.img.xz')
             packed_template.write_bytes(lzma.compress(template.read_bytes()))
-            selected = dict(selected or {}, sha256=hashlib.sha256(packed_template.read_bytes()).hexdigest())
+            selected = dict(selected or {}, url=packed_template.resolve().as_uri(),
+                            sha256=hashlib.sha256(packed_template.read_bytes()).hexdigest())
             ctx.board['bootimg']['template'] = selected
             previous = os.environ.get('UNIXNU_BOOT_TEMPLATE')
             os.environ['UNIXNU_BOOT_TEMPLATE'] = str(packed_template)
