@@ -437,6 +437,10 @@ static uint8_t *boot_log_buffer;   // LogMsgBlocks blocks: the message buffer, t
 static uint8_t *boot_log_panic_buffer;   // LogMsgBlocks blocks for boot_log_panic_flush, which must not touch the writer's buffer
 static uint8_t *boot_log_msg_ring;   // LogMsgBlocks blocks: the medium's message area as the writer last left it (stream ring)
 static struct boot_log_header *volatile boot_log_live;   // the writer's header once its window is open
+static IOLock *checkpoint_lock;
+static char *checkpoint_buffer;
+static uint64_t checkpoint_sequence, checkpoint_role_sequence[2];
+extern int proc_selfpid(void);
 
 void boot_log_checkpoint(const char *stage) {
   uint32_t enabled = 0;
@@ -444,11 +448,17 @@ void boot_log_checkpoint(const char *stage) {
   const struct boot_log_header *live = boot_log_live;
   if (!live) {printf("[startup checkpoint] %s: log window pending\n", stage); return;}
   const uint64_t blocks = live->window_blocks;
-  if (blocks <= LogSlotFirst ||
-      LogSlotFirst + (blocks - LogSlotFirst) / LogSlotBlocks * LogSlotBlocks == blocks) return;
-  static char *checkpoint;
-  if (!checkpoint) checkpoint = IOMallocAligned(LogBlock, LogBlock);
-  if (!checkpoint) return;
+  if (blocks <= LogSlotFirst || !checkpoint_lock || !checkpoint_buffer) return;
+  const uint64_t first = LogSlotFirst + (blocks - LogSlotFirst) / LogSlotBlocks * LogSlotBlocks;
+  if (blocks - first < 2) return;
+  IOLockLock(checkpoint_lock);
+  const int pid = proc_selfpid();
+  const unsigned role = pid == 1;
+  const uint64_t half = (blocks - first) / 2;
+  const uint64_t count = role ? blocks - first - half : half;
+  const uint64_t slot = first + (role ? half : 0) + checkpoint_role_sequence[role]++ % count;
+  const uint64_t sequence = ++checkpoint_sequence;
+  char *checkpoint = checkpoint_buffer;
   uint64_t physical, virtual_count, frequency, control, deadline, daif, pending;
   __asm__ volatile("mrs %0, cntpct_el0" : "=r"(physical));
   __asm__ volatile("mrs %0, cntvct_el0" : "=r"(virtual_count));
@@ -461,12 +471,13 @@ void boot_log_checkpoint(const char *stage) {
   PE_parse_boot_argn("build-tag", tag, sizeof tag);
   memset(checkpoint, 0, LogBlock);
   snprintf(checkpoint, LogBlock,
-           "SHSTG001\ntag=%s\nstage=%s\nphysical=%llu\nvirtual=%llu\nabsolute=%llu\nfrequency=%llu\ntimer_ctl=%llx\ntimer_deadline=%llu\ndaif=%llx\npending=%llx\ncaller=%llx\n",
-           tag, stage, (unsigned long long)physical, (unsigned long long)virtual_count,
+           "SHSTG001\ntag=%s\nsequence=%llu\npid=%d\nthread=%llu\nstage=%s\nphysical=%llu\nvirtual=%llu\nabsolute=%llu\nfrequency=%llu\ntimer_ctl=%llx\ntimer_deadline=%llu\ndaif=%llx\npending=%llx\ncaller=%llx\n",
+           tag, (unsigned long long)sequence, pid, (unsigned long long)thread_tid(current_thread()), stage, (unsigned long long)physical, (unsigned long long)virtual_count,
            (unsigned long long)mach_absolute_time(), (unsigned long long)frequency,
            (unsigned long long)control, (unsigned long long)deadline, (unsigned long long)daif,
            (unsigned long long)pending, (unsigned long long)(uintptr_t)__builtin_return_address(0));
-  if (native_ufs_log_write(blocks - 1, 1, checkpoint) && &native_ufs_log_sync) native_ufs_log_sync();
+  if (native_ufs_log_write(slot, 1, checkpoint) && &native_ufs_log_sync) native_ufs_log_sync();
+  IOLockUnlock(checkpoint_lock);
 }
 
 static volatile int boot_log_panicked;   // set by boot_log_panic_flush: the writer no longer writes
@@ -2982,6 +2993,11 @@ void boot_log_tick(unsigned now) {
   prof_rank = (uint64_t *)IOMalloc(2048 * sizeof(uint64_t));
   compose_spawn = (char *)IOMalloc(16384);
   export_lock = IOLockAlloc();
+  uint32_t checkpoint_mode = 0;
+  if (PE_parse_boot_argn("storage-probe", &checkpoint_mode, sizeof checkpoint_mode) && checkpoint_mode == 1) {
+    checkpoint_lock = IOLockAlloc();
+    checkpoint_buffer = IOMallocAligned(LogBlock, LogBlock);
+  }
 #if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
   uint32_t diag = 0;
   // The process stack worker: with diag=1, or on its own with boot-ui-trace=1 (the worker checks that switch).

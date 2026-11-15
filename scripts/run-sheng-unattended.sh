@@ -111,7 +111,7 @@ test_seconds = time.monotonic() - started
 print(f'{serial}: test image returned after {test_seconds:.3f}s; collecting its log', flush=True)
 reader_started = time.monotonic()
 reader_acknowledged = boot(reader)
-command = [sys.executable, str(root / 'scripts/read-sheng-log.py'), '--wait', '120', '--out', str(output)]
+command = [sys.executable, str(root / 'scripts/read-sheng-log.py'), '--wait', '120', '--out', str(output), '--expected-tag', tag]
 if os.environ.get('PORT'):
     command += ['--port', os.environ['PORT']]
 try:

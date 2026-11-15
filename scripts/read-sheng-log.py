@@ -121,7 +121,7 @@ def messages(blob, h):
     return area[at:] + area[:at]
 
 
-def decode(blob, out):
+def decode(blob, out, expected_tag=None):
     h = header(blob)
     if h['magic'] != b'SHLOG001':
         raise SystemExit(f'no log header (magic {h["magic"]!r}): nothing was written, or the window is not the log')
@@ -137,8 +137,18 @@ def decode(blob, out):
             value = value.split('\0')[0]
         lines.append(f'{key}={value}')
     (run / 'header.txt').write_text('\n'.join(lines) + '\n')
-    checkpoint = blob[-BLOCK:].split(b'\0', 1)[0]
-    if checkpoint.startswith(b'SHSTG001\n'):
+    records = []
+    first_checkpoint = h['slot_first'] + h['slot_count'] * h['slot_blocks']
+    for block in range(first_checkpoint, min(h['window_blocks'], len(blob) // BLOCK)):
+        record = blob[block * BLOCK:(block + 1) * BLOCK].split(b'\0', 1)[0]
+        if record.startswith(b'SHSTG001\n'):
+            fields = dict(line.split('=', 1) for line in record.decode(errors='replace').splitlines() if '=' in line)
+            if fields.get('tag') == (expected_tag or tag):
+                records.append((int(fields.get('sequence', 0)), record))
+    if records:
+        records.sort(key=lambda item: item[0])
+        (run / 'startup-checkpoints.txt').write_bytes(b'\n\n'.join(record for _, record in records) + b'\n')
+        checkpoint = records[-1][1]
         (run / 'startup-checkpoint.txt').write_bytes(checkpoint + b'\n')
         print(checkpoint.decode(errors='replace'))
     msg = messages(blob, h)
@@ -251,7 +261,7 @@ class Shell:
         return bytes(data)
 
 
-def fetch(port_path, out, reboot, retries=6):
+def fetch(port_path, out, reboot, retries=6, expected_tag=None):
     shell = Shell(port_path)
     run = shell.run
     def pull(path, timeout=120):
@@ -261,8 +271,10 @@ def fetch(port_path, out, reboot, retries=6):
     (out / 'last-raw.gz').parent.mkdir(parents=True, exist_ok=True)
     (out / 'last-raw.gz').write_bytes(data)
     window = gzip.decompress(data)
-    run_dir = decode(window, out)
+    run_dir = decode(window, out, expected_tag)
     h = header(window)
+    if expected_tag and h['tag'].split(b'\0', 1)[0].decode(errors='replace') != expected_tag:
+        h['export_bytes'] = h['diag_bytes'] = 0
     # The export region below the window, read from userdata on the reader (the same partition lookup as its init).
     def region(first, size, name):
         blocks = (size + BLOCK - 1) // BLOCK
@@ -298,11 +310,12 @@ def main():
     ap.add_argument('--no-reboot', action='store_true')
     ap.add_argument('--wait', type=int, default=120)
     ap.add_argument('--decode', type=Path)
+    ap.add_argument('--expected-tag')
     a = ap.parse_args()
     if a.decode:
-        decode(a.decode.read_bytes(), a.out)
+        decode(a.decode.read_bytes(), a.out, a.expected_tag)
         return
-    fetch(a.port or find_port(a.wait), a.out, not a.no_reboot)
+    fetch(a.port or find_port(a.wait), a.out, not a.no_reboot, expected_tag=a.expected_tag)
 
 
 if __name__ == '__main__':
