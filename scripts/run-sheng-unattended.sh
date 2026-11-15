@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 exec python3 - "$ROOT" "$@" <<'PY'
 import os
+import json
 from pathlib import Path
 import re
 import struct
@@ -66,6 +67,8 @@ def boot(path):
         subprocess.run(['fastboot', '-s', serial, 'boot', str(path)], check=True, timeout=120)
     except subprocess.TimeoutExpired:
         print(f'{serial}: boot acknowledgement timed out; waiting for the image return timer', flush=True)
+        return False
+    return True
 
 output.mkdir(parents=True, exist_ok=True)
 wait_fastboot(30)
@@ -89,10 +92,14 @@ if userdata is not None:
         sys.exit('USERDATA must cover the complete reported userdata partition')
     print(f'{serial}: writing the complete {partition}-byte userdata partition', flush=True)
     subprocess.run(['fastboot', '-s', serial, 'flash', 'userdata', str(userdata)], check=True, timeout=3600)
-boot(image)
+started = time.monotonic()
+acknowledged = boot(image)
 time.sleep(2)
 wait_fastboot(limit)
-boot(reader)
+test_seconds = time.monotonic() - started
+print(f'{serial}: test image returned after {test_seconds:.3f}s; collecting its log', flush=True)
+reader_started = time.monotonic()
+reader_acknowledged = boot(reader)
 command = [sys.executable, str(root / 'scripts/read-sheng-log.py'), '--wait', '120', '--out', str(output)]
 if os.environ.get('PORT'):
     command += ['--port', os.environ['PORT']]
@@ -102,6 +109,11 @@ except subprocess.TimeoutExpired:
     result = 124
     print('log retrieval exceeded 270s; waiting for the reader return timer', flush=True)
 wait_fastboot(330)
+(output / 'cycle.json').write_text(json.dumps(dict(
+    image=image.name, reader=reader.name, boot_acknowledged=acknowledged,
+    test_seconds=round(test_seconds, 3), reader_acknowledged=reader_acknowledged,
+    reader_seconds=round(time.monotonic() - reader_started, 3),
+    reader_exit=result, final_fastboot=True), indent=2) + '\n')
 print(f'{serial}: returned to fastboot; log reader exit={result}', flush=True)
 sys.exit(result)
 PY
