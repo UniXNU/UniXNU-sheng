@@ -1,0 +1,57 @@
+{
+  "device": "sheng",
+  "os": "macOS 27.3 26C5035r",
+  "core_revision": "848627068f737d5a4ef2eb4c911ccd5a91b49a7c",
+  "kernel_device_revision": "e96d577b7f69e11e254502c3a0bdb07ca96419c5",
+  "lab_device_revision": "6ca29026d485a926296841d70b28ab2292b449fe",
+  "metal_component": "c54265be439f0617e96a8eda1223dd223b5de3f8",
+  "translator": "d9236a8a11d3b90a1aa27b54e2d74d3891c4d2e5",
+  "runtime": "0c6a597185dfb7ce905070445ecd032d",
+  "capture": {
+    "tag": "sa67a6",
+    "fresh": true,
+    "uptime_seconds": 631,
+    "files": 23,
+    "bytes": 43812809
+  },
+  "observations": {
+    "desktop": "Observed through the computer camera; wallpaper, Dock and Keyboard Setup Assistant visible.",
+    "windowserver_exits": [
+      "[ 3145.506983]: AMFI: Denying core dump for pid 1264 (WindowServer)unixnu-exit: WindowServer[1264] status=0xa reason=2/0xa csflags=0x22017b01 description=",
+      "[ 3226.452749]: AMFI: Denying core dump for pid 1356 (WindowServer)unixnu-exit: WindowServer[1356] status=0xa reason=2/0xa csflags=0x22017b01 description=",
+      "[ 3386.906907]: AMFI: Denying core dump for pid 1503 (WindowServer)unixnu-exit: WindowServer[1503] status=0xa reason=2/0xa csflags=0x22017b01 description="
+    ],
+    "filesystem_error": {
+      "volume": "/dev/disk3s1 mounted as the sealed read-only root",
+      "inode": 11399,
+      "compressed_stream": 11400,
+      "block_offset": 98435072,
+      "block_bytes": 16384,
+      "fault_page_offset": 98447360,
+      "error": 94,
+      "expected_sha256": "035febab6e1cf02933b963509a4bc278ab6c744ec4415948cf6ff360e74698b1",
+      "observed_sha256": "28a001fd6ad87685990cbd7602199f9bc368470d82117d9653dbcbf9f6309d37"
+    },
+    "gpu_hangs": 0,
+    "gpu_restarts": 0,
+    "gpu_recovery_failures": 0,
+    "video": {
+      "stage": 6,
+      "error": 0,
+      "sessions": 20,
+      "frames_in": 2,
+      "frames_out": 2,
+      "last_error_stage": 55,
+      "last_error": 22,
+      "standalone_probe": "Result was removed by state-log rotation; a dedicated log is selected for the next capture."
+    },
+    "shader_priming": "The exported prime.log identifies an older boot; it does not qualify this runtime."
+  },
+  "recovery": {
+    "test_seconds": 699.02,
+    "reader_seconds": 20.554,
+    "final_fastboot": true,
+    "persistent_boot_partition_modified": false
+  },
+  "qualification": "Startup and automatic recovery passed; desktop stability, HEVC playback and shader priming remain unresolved."
+}
