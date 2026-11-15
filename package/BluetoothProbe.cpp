@@ -19,6 +19,7 @@
 #include "AppsSmmuLock.h"
 #include "WcnPower.h"
 #include "BluetoothFirmware.h"
+#include "BluetoothHciTrace.h"
 
 extern "C" int armcpu_spi_attach(uint32_t,bool,void(*)(void *),void *,uint32_t *,uint64_t *);
 extern "C" int armcpu_spi_share(uint32_t,void(*)(void *),void *);
@@ -45,6 +46,12 @@ volatile uint64_t native_bluetooth_ibs[8];
 volatile uint32_t native_bluetooth_discovery[18];
 }
 namespace {
+struct bt_hci_trace *hci_trace;
+void traceHci(void *, bool tx, uint8_t type, const uint8_t *data, size_t length) {
+    uint64_t ns;
+    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+    bt_hci_record(__atomic_load_n(&hci_trace, __ATOMIC_ACQUIRE), ns, tx, type, data, length);
+}
 struct Region {IOMemoryMap *map;volatile uint32_t *va;};
 struct Bluetooth {
     Region gcc,uart,wrapper,tlmm,smmu;
@@ -431,7 +438,13 @@ void powerResult(bool enabled,int error) {
 }
 void worker(void *,wait_result_t) {
     thread_set_thread_name(current_thread(),"bluetooth");
-    struct qbt_platform ops={nullptr,allocate,release,nowNs,writeUart,drained,setRate,flow,clockVote,pump,waitUntil,nativeRx,firmware,firmwarePut,log};
+    struct qbt_platform ops={nullptr,allocate,release,nowNs,writeUart,drained,setRate,flow,clockVote,pump,waitUntil,nativeRx,firmware,firmwarePut,log,nullptr};
+    if (bt.log >= 3) {
+        struct bt_hci_trace *trace = static_cast<struct bt_hci_trace *>(IOMallocZeroData(sizeof(*trace)));
+        __atomic_store_n(&hci_trace, trace, __ATOMIC_RELEASE);
+        if (trace) ops.trace_hci = traceHci;
+        else printf("[bluetooth hci] allocation failed\n");
+    }
     bt.core=qbt_create(&ops);if(!bt.core){native_bluetooth_stats[0]=3;return;}
     struct qbt_transport_ops transport={nullptr,wake,requestPower};
     int e=qbt_transport_init(&transport);if(e){native_bluetooth_stats[0]=3;return;}
@@ -497,6 +510,9 @@ void worker(void *,wait_result_t) {
         waitUntil(nullptr,deadline);
     }
 }
+}
+extern "C" size_t sheng_bluetooth_hci_dump(char *out, size_t capacity, uint64_t *cursor) {
+    return bt_hci_dump(__atomic_load_n(&hci_trace, __ATOMIC_ACQUIRE), out, capacity, cursor);
 }
 struct proc;
 extern "C" {
