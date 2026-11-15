@@ -50,7 +50,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: rponeawa/UniXNU
-          ref: 307f733259bd325535ccda2639ee658a5a962af6
+          ref: f4b1d8c60cdea05820aa0c437d077ad3fd5510fe
           path: UniXNU
           submodules: recursive
       - name: Check out firmware sources

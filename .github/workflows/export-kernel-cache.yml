@@ -21,6 +21,8 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 15
     steps:
+      - name: Select the kernel Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
       - uses: actions/cache/restore@v4
         with:
           key: ${{ inputs.cache_key }}
@@ -42,10 +44,11 @@ jobs:
           import shutil
           tools = Path('export/toolchain/bin')
           tools.mkdir(parents=True)
-          for name in ('migcom', 'iig', 'tightbeamc', 'ctfconvert', 'ctfmerge'):
+          for name in ('clang', 'clang++', 'ld', 'ar', 'ranlib', 'libtool', 'nm', 'strip', 'dsymutil',
+                       'migcom', 'iig', 'tightbeamc', 'ctfconvert', 'ctfmerge'):
               found = subprocess.run(['xcrun', '--find', name], capture_output=True, text=True)
               if found.returncode:
-                  if name in ('migcom', 'iig'):
+                  if name in ('clang', 'clang++', 'ld', 'migcom', 'iig'):
                       raise SystemExit('Required kernel tool missing: ' + name)
                   continue
               shutil.copy2(found.stdout.strip(), tools / name)
@@ -53,14 +56,24 @@ jobs:
           compiler = Path(subprocess.check_output(['xcrun', '--find', 'clang'], text=True).strip())
           libraries = tools.parent / 'lib'
           libraries.mkdir()
-          shutil.copy2(compiler.parent.parent / 'lib/libclang.dylib', libraries / 'libclang.dylib')
+          for name in ('libclang.dylib', 'libLTO.dylib', 'libIndexStore.dylib'):
+              source = compiler.parent.parent / 'lib' / name
+              if source.exists():
+                  shutil.copy2(source, libraries / name)
+          resource = Path(subprocess.check_output([str(compiler), '-print-resource-dir'], text=True).strip())
+          shutil.copytree(resource, libraries / 'clang' / resource.name, symlinks=False)
           Path('export/build-paths.json').write_text(json.dumps(dict(
               tree=str(Path(sys.argv[1]).resolve()), sdk=sys.argv[2],
+              toolchain=str(compiler.parent.parent),
+              compiler=subprocess.check_output([str(compiler), '--version'], text=True),
               xcode=subprocess.check_output(['xcodebuild', '-version'], text=True)), indent=2) + '\n')
           PY
+          tar -C export -cf - toolchain | zstd -T2 -3 -o export/compiler-toolchain.tar.zst
       - uses: actions/upload-artifact@v4
         with:
           name: local-kernel-build-inputs
-          path: export/
+          path: |
+            export/*.tar.zst
+            export/build-paths.json
           retention-days: 1
           compression-level: 0
