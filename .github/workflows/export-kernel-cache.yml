@@ -50,6 +50,10 @@ jobs:
                   continue
               shutil.copy2(found.stdout.strip(), tools / name)
               print(subprocess.check_output(['otool', '-L', str(tools / name)], text=True))
+          compiler = Path(subprocess.check_output(['xcrun', '--find', 'clang'], text=True).strip())
+          libraries = tools.parent / 'lib'
+          libraries.mkdir()
+          shutil.copy2(compiler.parent.parent / 'lib/libclang.dylib', libraries / 'libclang.dylib')
           Path('export/build-paths.json').write_text(json.dumps(dict(
               tree=str(Path(sys.argv[1]).resolve()), sdk=sys.argv[2],
               xcode=subprocess.check_output(['xcodebuild', '-version'], text=True)), indent=2) + '\n')
