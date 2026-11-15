@@ -14,7 +14,7 @@ boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)
 /bin/rm -f "$session/graphics-events-previous.log"
 /bin/echo "graphics state boot=$boot" > "$session/graphics-state.log"
 /bin/echo "video probe boot=$boot" > "$session/video-probe.log"
-predicate='process == "WindowServer" OR process == "loginwindow" OR process BEGINSWITH "Wallpaper" OR process == "VTDecoderXPCService" OR process == "video-probe" OR subsystem CONTAINS[c] "VideoToolbox"'
+predicate='process == "WindowServer" OR process == "loginwindow" OR process BEGINSWITH "Wallpaper" OR process CONTAINS[c] "iconservices" OR process == "icon-probe" OR process == "VTDecoderXPCService" OR process == "video-probe" OR subsystem CONTAINS[c] "VideoToolbox" OR subsystem CONTAINS[c] "CoreImage"'
 /usr/bin/log stream --style compact --level info --timeout 120m --predicate "$predicate" >> "$session/graphics-events.log" 2>&1 &
 graphics_log=$!
 trap '/bin/kill "$graphics_log" 2>/dev/null || :' EXIT
@@ -37,7 +37,7 @@ graphics_state() {
     {
         /bin/date -u
         /bin/echo "boot=$boot"
-        /bin/ps -axo pid,ppid,etime,pcpu,rss,comm | /usr/bin/awk 'NR == 1 || /WindowServer|loginwindow|Wallpaper|video-probe|VTDecoder|KeyboardSetupAssistant/'
+        /bin/ps -axo pid,ppid,etime,pcpu,rss,comm | /usr/bin/awk 'NR == 1 || /WindowServer|loginwindow|Wallpaper|iconservices|icon-probe|video-probe|VTDecoder|KeyboardSetupAssistant/'
         /usr/sbin/ioreg -r -c AppleVideoToolboxParavirtualizationDriver -l
         /bin/launchctl print gui/501/org.unixnu.test.agent
         /bin/ls -lt /Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports/Retired

@@ -18,6 +18,29 @@ set -u
 /usr/bin/pkill -u "$(/usr/bin/id -u)" -x Finder 2>/dev/null || :
 /bin/rm -rf '/Users/unixnu/Library/Saved Application State/com.apple.finder.savedState' \
     '/Users/unixnu/Library/Saved Application State/com.apple.systempreferences.savedState'
+(
+    /bin/sleep 30
+    tool=/private/var/ngpu/test/bin/icon-probe
+    log=/Users/Shared/unixnu-test/icon-probe.log
+    /bin/echo "icon probe boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)" > "$log"
+    for mps in 1 0; do
+        CI_ENABLE_MPS="$mps" "$tool" >> "$log" 2>&1 &
+        probe=$!
+        ( /bin/sleep 90; /bin/kill -KILL "$probe" 2>/dev/null ) &
+        alarm=$!
+        wait "$probe"
+        /bin/echo "blur mps=$mps exit=$?" >> "$log"
+        /bin/kill "$alarm" 2>/dev/null || :
+    done
+    CI_ENABLE_MPS=0 "$tool" /Users/Shared/unixnu-test/icons.png >> "$log" 2>&1 &
+    probe=$!
+    ( /bin/sleep 120; /bin/kill -KILL "$probe" 2>/dev/null ) &
+    alarm=$!
+    wait "$probe"
+    /bin/echo "icons exit=$?" >> "$log"
+    /bin/kill "$alarm" 2>/dev/null || :
+    /usr/bin/open -a 'System Settings'
+) &
 cache=/private/var/tmp/NativeAdrenoMetal.cache/prime.log
 boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)
 ready=0

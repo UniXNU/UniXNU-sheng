@@ -29,9 +29,16 @@ def main():
     parser.add_argument('--payload-mib', type=int, default=256, help='decoded FAT volume size in MiB')
     parser.add_argument('--video-fixture', type=Path, help='HEVC MP4 for the timed VideoToolbox decode probe')
     parser.add_argument('--preserve-data', action='store_true')
+    parser.add_argument('--bluetooth-runtime', type=Path, help='signed runtime report from build-bluetooth-userspace.py')
+    parser.add_argument('--refresh-payload', action='store_true', help='build the current board menu, ADT and firmware transport')
+    parser.add_argument('--uefi', type=Path, help='built firmware checkout for --refresh-payload')
+    parser.add_argument('--unique-chip-id', help='device platform seed for --refresh-payload')
+    parser.add_argument('--autoreset', type=int, default=7200)
     args = parser.parse_args()
     if args.output.exists() or args.input.resolve() == args.output.resolve():
         parser.error('choose a new output file')
+    if args.refresh_payload and (not args.uefi or not args.unique_chip_id):
+        parser.error('--refresh-payload requires --uefi and --unique-chip-id')
     core = (ROOT / tomllib.loads((ROOT / 'board.toml').read_text())['package']['unixnu']).resolve()
     sys.path.insert(0, str(core / 'scripts'))
     from unixnu import ramdisk as codec
@@ -76,6 +83,11 @@ def main():
             '-O2', '-Wall', '-Wextra', '-Werror', ROOT / 'scripts/macos-lab/clock-probe.c',
             '-Wl,-segalign,0x4000', '-o', files / 'bin/clock-probe')
         run('codesign', '--force', '--sign', '-', '--timestamp=none', '--pagesize', '4096', files / 'bin/clock-probe')
+        run('xcrun', 'clang', '-target', 'arm64e-apple-macos27.0', '-isysroot', sdk,
+            '-O2', '-Wall', '-Wextra', '-Werror', '-fobjc-arc', '-framework', 'AppKit',
+            '-framework', 'CoreImage', '-framework', 'Metal', ROOT / 'scripts/macos-lab/icon-probe.m',
+            '-Wl,-segalign,0x4000', '-o', files / 'bin/icon-probe')
+        run('codesign', '--force', '--sign', '-', '--timestamp=none', '--pagesize', '4096', files / 'bin/icon-probe')
         if args.video_fixture:
             run('xcrun', 'clang', '-target', 'arm64e-apple-macos27.0', '-isysroot', sdk,
                 '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-deprecated-declarations', '-fobjc-arc',
@@ -95,6 +107,12 @@ def main():
         driver['ICD']['library_path'] = '/Library/GPUBundles/NativeAdrenoMetal.bundle/Contents/MacOS/libvulkan_freedreno.dylib'
         icd.write_text(json.dumps(driver, indent=2) + '\n')
         hashes = []
+        bluetooth_dirs = []
+        if args.bluetooth_runtime:
+            report = json.loads((args.bluetooth_runtime / 'report.json').read_text())
+            for prefix, directory in report['directories'].items():
+                bluetooth_dirs += [prefix, args.bluetooth_runtime / directory]
+            hashes.extend(item['cdhash'] for item in report['files'].values())
         code = args.plugin / 'NativeAdrenoMetal.bundle/Contents/MacOS'
         for path in sorted(files.rglob('*')) + sorted(code.iterdir()):
             if not path.is_file():
@@ -123,8 +141,53 @@ def main():
             '--prefix', 'GPUBundles', '--prime-list', core / 'build/prime-list.txt', gpu,
             env=dict(os.environ, ADRENO_PLUGIN_DIR=str(args.plugin.resolve())))
         run(sys.executable, core / 'scripts/addon-add-dir.py', original_addon, addon,
-            '--addon', gpu, 'test', files, 'test', ROOT / 'scripts/macos-lab')
+            '--addon', gpu, 'test', files, 'test', ROOT / 'scripts/macos-lab', *bluetooth_dirs)
         run(sys.executable, core / 'scripts/trust-append-module.py', original_trust, trust, *sorted(set(hashes)))
+        if args.refresh_payload:
+            from unixnu.cli import parser as cli_parser
+            from unixnu.config import Context
+            from unixnu import bootimg, firmware, payload as fat_payload
+            seed = work / 'scratch-data.img'
+            run('mcopy', '-i', payload, '::/' + prefix.replace('kernel.macho.', '') + 'scratch-data.img', seed)
+            options = cli_parser().parse_args(['build', 'payload', '-D', str(ROOT), '--os', 'macos-27',
+                '--data-ramdisk', str(seed), '--owner-trust-cache', str(trust), '--gpu-addon', str(addon),
+                '--uefi', str(args.uefi.resolve()), '--unique-chip-id', args.unique_chip_id])
+            ctx = Context(options)
+            ctx.uefi = args.uefi.resolve()
+            spec = ctx.board['payload']
+            spec['size_mib'], spec['timeout'] = args.payload_mib, 1
+            removed = {'exec-log', 'vc-text', 'storage-probe', 'data-reset'}
+            spec['kernel_args'] = [item for item in spec['kernel_args'] if item.split('=', 1)[0] not in removed]
+            options.kernel_arg = [f'autoreset={args.autoreset}', f'diag-export={args.autoreset-60}',
+                'uefi-watchdog=1', 'diag=1', 'gpu-trace=1', 'gpu-perf=1', 'log-gpu=1',
+                'log-video=1', 'build-tag=s00000', 'ci-mps=0']
+            fd = firmware.fd_path(ctx, ctx.uefi, 'DEBUG')
+            # The template carries every firmware module built for this candidate.
+            # Its ramdisk is empty; the account and OS remain private payload inputs.
+            template = work / 'guarded-firmware.img'
+            selected = ctx.board['bootimg'].pop('template', None)
+            try:
+                bootimg.build(ctx, ctx.uefi, fd, ctx.tree / ctx.board['bootimg']['dtb'], None, template)
+            finally:
+                if selected is not None:
+                    ctx.board['bootimg']['template'] = selected
+            import hashlib
+            import lzma
+            packed_template = work / 'guarded-firmware.img.xz'
+            packed_template.write_bytes(lzma.compress(template.read_bytes()))
+            selected = dict(selected or {}, sha256=hashlib.sha256(packed_template.read_bytes()).hexdigest())
+            ctx.board['bootimg']['template'] = selected
+            previous = os.environ.get('UNIXNU_BOOT_TEMPLATE')
+            os.environ['UNIXNU_BOOT_TEMPLATE'] = str(packed_template)
+            try:
+                fat_payload.build(ctx)
+                bootimg.build(ctx, ctx.uefi, fd, None, fat_payload.paths(ctx)[1], args.output)
+            finally:
+                if previous is None:
+                    os.environ.pop('UNIXNU_BOOT_TEMPLATE', None)
+                else:
+                    os.environ['UNIXNU_BOOT_TEMPLATE'] = previous
+            return
         command = [sys.executable, ROOT / 'scripts/repack-sheng-boot.py', args.input, args.output,
                    '--payload-mib', args.payload_mib,
                    '--payload-file', str(addon) + '=' + prefix + 'gpuaddon',

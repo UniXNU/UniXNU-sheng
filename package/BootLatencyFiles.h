@@ -9,7 +9,7 @@ static inline int bl_latency_contains(const char *text,size_t size,const char *t
 }
 static const char *const bl_crash_processes[]={"STExtractionService","dasd","WidgetRenderer","FitnessWidget","CalendarWidget",
  "WindowServer","Finder","loginwindow","System Settings","WallpaperAgent","WallpaperVideoExtension",
- "WallpaperDynamicExtension","VTDecoderXPCService"};
+ "WallpaperDynamicExtension","VTDecoderXPCService","iconservicesagent","iconservicesd","icon-probe","Aerials"};
 enum {BlCrashProcessCount=sizeof bl_crash_processes/sizeof bl_crash_processes[0]};
 static inline int bl_crash_process(const char *path) {
  const char *name=path;for(const char *at=path;*at;++at)if(*at=='/')name=at+1;
@@ -43,6 +43,8 @@ static inline unsigned bl_macos_file_limit(const char *path) {
   if(!strcmp(name,"graphics-events.log") || !strcmp(name,"graphics-events-previous.log"))return 2*1024*1024;
   if(!strcmp(name,"graphics-state.log"))return 512*1024;
   if(!strcmp(name,"video-probe.log"))return 128*1024;
+  if(!strcmp(name,"icon-probe.log"))return 256*1024;
+  if(!strcmp(name,"icons.png"))return 2*1024*1024;
   if(!strcmp(name,"desktop-180.png") || !strcmp(name,"desktop-270.png"))return 2*1024*1024;
  }
  return 0;
