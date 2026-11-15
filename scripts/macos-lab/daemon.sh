@@ -13,6 +13,21 @@ predicate='process == "WindowServer" OR process == "loginwindow" OR process BEGI
 /usr/bin/log stream --style compact --level info --timeout 120m --predicate "$predicate" >> "$session/graphics-events.log" 2>&1 &
 graphics_log=$!
 trap '/bin/kill "$graphics_log" 2>/dev/null || :' EXIT
+video_probe() {
+    /bin/sleep 90
+    tool=/private/var/ngpu/test
+    [ -x "$tool/bin/video-probe" ] || return
+    /bin/echo "video probe boot=$boot" >> "$session/graphics-state.log"
+    "$tool/bin/video-probe" "$tool/share/video-probe.mp4" --require-hardware >> "$session/graphics-state.log" 2>&1 &
+    probe=$!
+    ( /bin/sleep 30; /bin/kill -KILL "$probe" 2>/dev/null ) &
+    alarm=$!
+    wait "$probe"
+    result=$?
+    /bin/kill "$alarm" 2>/dev/null || :
+    /bin/echo "video probe exit=$result" >> "$session/graphics-state.log"
+}
+video_probe &
 graphics_state() {
     {
         /bin/date -u
