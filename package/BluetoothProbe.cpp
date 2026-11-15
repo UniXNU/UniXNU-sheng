@@ -41,6 +41,8 @@ volatile uint32_t native_bluetooth_boot_text_length;
 /* In-band sleep: wake indications sent, wake acknowledgements sent, sleep indications sent, clock stops undone by a wake
  * inside the stop, writes an idle UART refused, interrupts of the shared line that found the wake disarmed, RX stop timeouts, wakes taken. */
 volatile uint64_t native_bluetooth_ibs[8];
+/* Per HCI discovery command: sent, completed, status; then received report counts. */
+volatile uint32_t native_bluetooth_discovery[18];
 }
 namespace {
 struct Region {IOMemoryMap *map;volatile uint32_t *va;};
@@ -477,6 +479,15 @@ void worker(void *,wait_result_t) {
             native_bluetooth_ibs[0]=stats.wake_ind;native_bluetooth_ibs[1]=stats.wake_ack;native_bluetooth_ibs[2]=stats.sleep_ind;
             native_bluetooth_ibs[3]=stats.clock_reverts;native_bluetooth_ibs[4]=stats.tx_refused;
             native_bluetooth_ibs[6]=bt.geni.stats.cancel_timeouts;
+            static_assert(QBT_DISCOVERY_COMMANDS == 5, "Update the discovery log ABI");
+            for (unsigned i=0;i<QBT_DISCOVERY_COMMANDS;i++) {
+                native_bluetooth_discovery[i*3]=stats.discovery.sent[i];
+                native_bluetooth_discovery[i*3+1]=stats.discovery.replied[i];
+                native_bluetooth_discovery[i*3+2]=stats.discovery.status[i];
+            }
+            native_bluetooth_discovery[15]=stats.discovery.inquiry_results;
+            native_bluetooth_discovery[16]=stats.discovery.le_reports;
+            native_bluetooth_discovery[17]=stats.discovery.le_extended_reports;
             health=t+1000000000ULL;
         }
         uint64_t deadline=bt.powered?qbt_deadline(bt.core):UINT64_MAX;
