@@ -1,0 +1,14 @@
+{
+  "time": "2026-11-15T02:52:56.524717+00:00",
+  "purpose": "firmware watchdog before XNU initialization",
+  "firmware": "fb2b2ae1d2f8c855cc76bb24ee3bcd28e3ecacbb",
+  "kernel_psci_fallback_seconds": 120,
+  "elapsed_seconds": 70.503,
+  "fastboot_returned": true,
+  "hardware_timeout_seconds": 30,
+  "device": "sheng",
+  "core": "0adb13dc5e38fd5331915721da138a97e7f07d80",
+  "revision": "011f452ac016a67664a63a879a62f506fc133796",
+  "image_sha256": "0cb6db0d12a43814d65373878d5048cdc4dc5095eb1aa2f3d5e8646efbaa36c1",
+  "command": "python3 scripts/prepare-sheng-watchdog-probe.py known-boot.img watchdog-probe.img --uefi ../uefi-sheng --fd SILICIUM_UEFI.fd --dtb sheng.dtb; fastboot -s SERIAL boot watchdog-probe.img"
+}
