@@ -146,7 +146,11 @@ jobs:
         run: |
           ./unixnu defconfig sheng_macos_defconfig -D ../device --os macos-27
           ./unixnu fetch --os macos-27
-          python3 ../device/scripts/prepare-macos-install.py
+          if [ '${{ inputs.root_storage }}' = true ]; then
+            python3 ../device/scripts/prepare-macos-install.py
+          else
+            python3 ../device/scripts/prepare-macos-install.py --reuse-policies
+          fi
       - name: Build images
         working-directory: device
         run: >-

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Prepare a fresh macOS Data seed and signed root windows for sheng packaging."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,9 @@ from unixnu.userdata import disk_blocks, image_size
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--reuse-policies', action='store_true', help='use the selected profile\'s signed root headers and public key')
+    args = parser.parse_args()
     subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] /
                                       'scripts/extract-files.py')], check=True)
     subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] /
@@ -35,6 +39,13 @@ def main():
                        input=json.dumps({'name': 'unixnu', 'password': password}).encode(), check=True)
         subprocess.run(['sudo', 'chown', str(os.getuid()), str(seed)], check=True)
     policies = ctx.device / 'scripts/policies' / ctx.work.parent.name
+    if args.reuse_policies:
+        if any(not (policies / window['name'] / name).is_file()
+               for window in ctx.board['userdata']['windows']
+               for name in ('manifest.header.bin', 'trusted-key.bin', 'verification.json')):
+            raise SystemExit('Import the selected boot image policies with scripts/import-root-policies.py before reusing them')
+        print('Reusing the selected profile signed root policy inputs.')
+        return
     for window in ctx.board['userdata']['windows']:
         name = window['name']
         image = source.disk_image(window['component'])
