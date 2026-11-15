@@ -534,6 +534,7 @@ result = "AirPods Pro pair, reconnect after reboot and play A2DP at normal volum
 [[area.evidence]]
 kind = "host"
 reference = "package/tests/bluetooth_hci_trace.c"
+revision = "7936e39134e41ce8851f067ed28eb74051914022"
 command = "clang -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined package/tests/bluetooth_hci_trace.c -o /tmp/hci-trace-test && /tmp/hci-trace-test"
 result = "The HCI recorder passes full-packet, short-buffer, disk-retry cursor, overwrite, contention and nonblocking panic-snapshot checks. The QcaBluetooth runtime suite passes with ASan/UBSan and under ARM64 QEMU, including UART-refused and fragmented Inquiry commands, complete result payloads and exclusion of key and ACL data. BluetoothProbe.cpp, BootLog.c and qbt_core.c compile with the recorded arm64e target commands. Radio discovery and physical log readback remain pending."
 
