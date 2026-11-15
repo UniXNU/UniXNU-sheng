@@ -50,7 +50,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: rponeawa/UniXNU
-          ref: beb7abd4126e695553a9ec4e1f26ba7d9906253e
+          ref: fbd98ba1c158353e9445280ddab6178f42d234e2
           path: UniXNU
           submodules: recursive
       - name: Check out firmware sources
@@ -137,9 +137,9 @@ jobs:
       - name: Fetch the source-matched Metal bridge
         run: |
           mkdir metal-bridge
-          GH_TOKEN="$GITHUB_TOKEN" gh release download sheng-metal-bridge-99da261 --repo rponeawa/UniXNU \
-            --pattern metal-bridge-macos27-99da261.tar.zst --dir metal-bridge
-          zstd -dc metal-bridge/metal-bridge-macos27-99da261.tar.zst | tar -xf - -C metal-bridge
+          GH_TOKEN="$GITHUB_TOKEN" gh release download sheng-metal-bridge-0e018dc --repo rponeawa/UniXNU \
+            --pattern metal-bridge-macos27-0e018dc.tar.zst --dir metal-bridge
+          zstd -dc metal-bridge/metal-bridge-macos27-0e018dc.tar.zst | tar -xf - -C metal-bridge
           rm -rf UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/m2v-target
       - name: Prepare installation
         working-directory: UniXNU
