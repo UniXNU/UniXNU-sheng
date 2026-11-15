@@ -150,7 +150,8 @@ def main():
                                     str(candidate), '--kernel-args', line], cwd=tree, env=env, check=True)
             replacements = [(candidate if relative == destination else source, relative) for source, relative in replacements]
         payload = original
-        if payload_bytes != original_size:
+        # Rebuild file replacements on a fresh FAT with zeroed free clusters.
+        if payload_bytes != original_size or replacements:
             files = work / 'files'
             files.mkdir()
             run('mcopy', '-s', '-i', original, '::*', files)
