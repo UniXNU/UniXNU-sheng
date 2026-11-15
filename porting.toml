@@ -604,6 +604,13 @@ revision = "d4f97b86b7bcf239f03ab9fe34bfb1f295901400"
 command = "prepare-sheng-gpu-lab.py --preserve-data"
 result = "The selected network archives compile and link with the macOS 27.3 target."
 
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/pull/99"
+revision = "e4b7c7af39124d0e957fa73833ed6c98b361ed8b"
+command = "python3 scripts/run-local-kernel.py --sdk SDK --tools TOOLCHAIN -- build kernel prelink -D ../UniXNU-sheng --os macos-27 --data-ramdisk installed-data.dbr --skip-preflight"
+result = "The macOS 27.3 archive build resolves Ath12kWifi 39cc47b7bd1afef3c03a977c0c06fe475199ac0c with SM8550 2dc650ca and compiles the selected network sources with the exported Xcode 26.6 kernel toolchain."
+
 [[area]]
 id = "audio"
 status = "implemented"
