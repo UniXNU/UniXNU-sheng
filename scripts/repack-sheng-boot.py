@@ -8,6 +8,7 @@ repack-sheng-boot.py INPUT OUTPUT --payload-file ADDON=EFI/UniXNU/Payloads/kerne
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import struct
@@ -58,6 +59,8 @@ def main():
     parser.add_argument('--partition-bytes', type=int)
     parser.add_argument('--payload-mib', type=int, help='FAT payload size for a diagnostic RAM boot')
     parser.add_argument('--payload-file', action='append', default=[], metavar='SOURCE=FAT_PATH')
+    parser.add_argument('--kernel-tree', type=Path, help='Apply the payload entry/panic probes and POST seal from this resolved build tree to the replacement kernel')
+    parser.add_argument('--uefi', type=Path, help='UEFI checkout providing the panic font')
     args = parser.parse_args()
     board = tomllib.loads((Path(__file__).resolve().parents[1] / 'board.toml').read_text())
     core = (Path(__file__).resolve().parents[1] / board['package']['unixnu']).resolve()
@@ -112,6 +115,28 @@ def main():
             if not separator or not Path(source).is_file() or relative.is_absolute() or '..' in relative.parts:
                 parser.error('--payload-file needs an existing source and relative FAT path')
             replacements.append((Path(source), relative))
+        if args.kernel_tree:
+            tree = args.kernel_tree.resolve()
+            destination = Path('EFI/UniXNU/Payloads/kernel.macho')
+            selected = [source for source, relative in replacements if relative == destination]
+            if len(selected) != 1 or not any(relative == destination.with_suffix('.macho.vroot') for _, relative in replacements):
+                parser.error('--kernel-tree requires one kernel.macho and its matching kernel.macho.vroot replacement')
+            candidate = work / 'kernel.macho'
+            candidate.write_bytes(selected[0].read_bytes())
+            env = dict(os.environ)
+            if args.uefi:
+                env['UNIXNU_UEFI'] = str(args.uefi.resolve())
+            if board.get('payload', {}).get('panic_screen'):
+                subprocess.run([sys.executable, str(tree / 'scripts/patch-xnu-entry-probe.py'),
+                                str(candidate), '--panic-screen', '--no-reset'], cwd=tree, env=env, check=True)
+                if b'_source_corecrypto14_bootstrap\0' in candidate.read_bytes():
+                    subtype = struct.unpack_from('<I', candidate.read_bytes(), 8)[0] & 0xff
+                    env['UNIXNU_XNU_ARCH'] = {0: 'arm64', 2: 'arm64e'}[subtype]
+                    line = ' '.join(entry.get('args', '') for entry in tomllib.loads(config.read_text())['entry']
+                                    if entry.get('type') == 'xnu')
+                    subprocess.run([sys.executable, str(tree / 'scripts/seal-source-crypto-kernel.py'),
+                                    str(candidate), '--kernel-args', line], cwd=tree, env=env, check=True)
+            replacements = [(candidate if relative == destination else source, relative) for source, relative in replacements]
         payload = original
         if payload_bytes != original_size:
             files = work / 'files'
