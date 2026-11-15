@@ -97,17 +97,6 @@ CI_ENABLE_METAL_GPU = "0"
 "packed_data_ramdisk" = true
 "persistent_data" = true
 "unique_chip_id" = "required"
-# Firmware ownership from stock reserved-memory and the pinned sheng/SM8550 device trees.
-"owned_memory_outside_reserved" = [
-  "0x8a800000:0x10800000", # mpss
-  "0xd0000000:0x10000",   # audio DSP buffer
-  "0xd4d00000:0x3300000", # mpss_dsm
-  "0xd8000000:0xb940000", # TZ, XBL, CPuCP, QTEE and trusted applications
-  "0xe6720000:0xd0e0000", # firmware region above the hardware fence buffer
-  "0xf3800000:0x9000000", # trusted UI and OEM VM memory
-  "0xfc800000:0x3000000", # firmware region below LLCC
-  "0xff800000:0x600000",  # llcc_lpi
-]
 
 
 
@@ -270,8 +259,10 @@ ramdisk_max_bytes = 199229440
 # DarwinBoot lists the free memory outside the window (the low DRAM bank, about 867 MiB by the firmware's map): the kernel
 # adopts it as ordinary VM memory, page by page after a probe load (window-outside-memory-adoption.patch);
 # memory-outside=0 on the command line leaves it alone. The GPU pool over the same memory is off (gpu-pool=0): the kernel
-# owns that memory. The shared firmware reservation table bounds both allocation paths.
-"owned_memory_outside_ranges" = 64
+# owns that memory. The audio driver's DSP buffer sits in it at a fixed 32-bit address (package/AudioProbe.cpp kLowBuffer,
+# 64 KiB), so it is kept out.
+"owned_memory_outside_ranges" = 8
+"owned_memory_outside_reserved" = ["0xd0000000:0x10000"]
 
 ["os_overrides"."macos-27.3-26C5035r"."payload"."runtime"]
 "target" = "macos27"

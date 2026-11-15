@@ -13,16 +13,26 @@ extern "C" IOReturn native_adreno_pool_add(uint64_t physical, uint64_t bytes) __
 // For the boot log: [0] runs in the table, [1] runs the driver took, [2] KiB the driver took, [3] the last refusal.
 extern "C" {volatile uint32_t native_gpu_pool_board[4];}
 
-// The ADT supplies the same firmware ownership ranges to this pool and XNU VM adoption.
-static struct {uint64_t base, end;} reservedRanges[64];
-static unsigned reservedCount;
+// Memory the stock firmware keeps from the HLOS although the mainline board tree lists none of it: the modem's DSM region and the
+// trusted UI and OEM virtual machines with their rings and bounce buffers (stock vendor_boot reserved-memory, no-map; the OEM VM's
+// size is Kalama's), and the run above the hardware fence buffer up to the LLCC region, where a store faulted on the first page
+// (run73: 0xe6720000). A CPU store into such memory is a synchronous external abort (the pool's zero fill panicked with "Unhandled
+// implementation specific error"), so these parts of the runs never reach the driver.
+static const struct {uint64_t base, end;} kStockReserved[] = {
+    {0x8a800000ull, 0x9b000000ull},   // mpss
+    {0xd4d00000ull, 0xd8000000ull},   // mpss_dsm
+    {0xd8000000ull, 0xe3940000ull},   // tz reserved, xbl_sc, cpucp, qtee, ta, tz tags
+    {0xe6720000ull, 0xf3800000ull},   // after the hardware fence buffer: run73 faulted on its first page (0xe6720000) in the pool's fill
+    {0xf3800000ull, 0xfc800000ull},   // trust_ui_vm (dump, qrtr, vblk rings, swiotlb), oem_vm rings, swiotlb and region
+    {0xfc800000ull, 0xff800000ull},   // up to llcc_lpi: the rest of the same firmware-held run (run73), never shown accessible
+    {0xff800000ull, 0xffe00000ull},   // llcc_lpi
+};
 // KiB of the runs left out as stock reserved memory, for the boot log.
 extern "C" {volatile uint32_t native_gpu_pool_reserved_kib;}
 
 static void addRun(uint64_t base, uint64_t end, IOReturn *last)
 {
-    for (unsigned i = 0; i < reservedCount; ++i) {
-        const auto &r = reservedRanges[i];
+    for (const auto &r : kStockReserved) {
         if (end <= r.base || base >= r.end) continue;
         native_gpu_pool_reserved_kib = native_gpu_pool_reserved_kib + (uint32_t)(((end < r.end ? end : r.end) - (base > r.base ? base : r.base)) >> 10);
         if (base < r.base) addRun(base, r.base, last);
@@ -52,26 +62,6 @@ extern "C" void sheng_gpu_pool_probe(void)
     if (&ml_outside_memory_pages && ml_outside_memory_pages) return;
     IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
     if (!chosen) return;
-    OSData *kept = OSDynamicCast(OSData, chosen->getProperty("darwinboot-memory-outside-kept"));
-    if (!kept || !kept->getLength() || kept->getLength() % 16 || kept->getLength() / 16 > 64) {
-        native_gpu_pool_board[3] = kIOReturnBadArgument;
-        IOLog("sheng gpu pool: require a firmware reservation table\n");
-        chosen->release();
-        return;
-    }
-    reservedCount = kept->getLength() / 16;
-    const uint8_t *reservations = static_cast<const uint8_t *>(kept->getBytesNoCopy());
-    for (unsigned i = 0; i < reservedCount; ++i) {
-        uint64_t size;
-        memcpy(&reservedRanges[i].base, reservations + i * 16, 8);
-        memcpy(&size, reservations + i * 16 + 8, 8);
-        reservedRanges[i].end = reservedRanges[i].base + size;
-        if (!size || reservedRanges[i].end < reservedRanges[i].base) {
-            native_gpu_pool_board[3] = kIOReturnBadArgument;
-            chosen->release();
-            return;
-        }
-    }
     OSData *table = OSDynamicCast(OSData, chosen->getProperty("darwinboot-memory-outside"));
     if (table && table->getLength() >= 16) {
         const uint8_t *bytes = static_cast<const uint8_t *>(table->getBytesNoCopy());
