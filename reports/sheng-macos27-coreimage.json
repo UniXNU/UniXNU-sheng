@@ -1,0 +1,40 @@
+{
+  "capture": "s1a1c2-f99e11247",
+  "boot_session": "A1EDD444-5287-4F76-B9EC-9030AFCBF676",
+  "cycle": {
+    "image": "sheng-macos27-all-pr-coreimage.img",
+    "reader": "sheng-linux-log.img",
+    "boot_acknowledged": true,
+    "expected_tag": "s1a1c2",
+    "fresh_log": true,
+    "header_fresh": true,
+    "checkpoint_fresh": false,
+    "test_seconds": 628.221,
+    "reader_acknowledged": true,
+    "reader_seconds": 22.842,
+    "reader_exit": 0,
+    "final_fastboot": true
+  },
+  "observations": {
+    "windowserver_abnormal_exit": false,
+    "iconservicesagent_fresh_crash": false,
+    "apfs_hash_mismatches": 0,
+    "gpu_hangs": 0,
+    "gpu_restarts": 0,
+    "coreimage_blur_mps_0": "passed",
+    "coreimage_blur_mps_1": "passed",
+    "icon_requests": 64,
+    "icon_sheet": "missing icons and invalid colors",
+    "hevc_hardware_create": -12909,
+    "hevc_configuration_atom_bytes": 2451,
+    "hevc_configuration_annexb_bytes": 2416,
+    "hevc_sei_bytes": 2328,
+    "physical_memory_bytes": 7389036544,
+    "app_cryptex": "mounted"
+  },
+  "qualification": {
+    "graphics": false,
+    "video": false,
+    "reason": "Icon pixels and hardware HEVC decoding require fixes."
+  }
+}
