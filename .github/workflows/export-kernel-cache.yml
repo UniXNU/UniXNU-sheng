@@ -44,6 +44,7 @@ jobs:
           import shutil
           tools = Path('export/toolchain/bin')
           tools.mkdir(parents=True)
+          pending = []
           for name in ('clang', 'clang++', 'ld', 'ar', 'ranlib', 'libtool', 'nm', 'strip', 'dsymutil',
                        'migcom', 'iig', 'tightbeamc', 'ctfconvert', 'ctfmerge'):
               found = subprocess.run(['xcrun', '--find', name], capture_output=True, text=True)
@@ -51,7 +52,9 @@ jobs:
                   if name in ('clang', 'clang++', 'ld', 'migcom', 'iig'):
                       raise SystemExit('Required kernel tool missing: ' + name)
                   continue
-              shutil.copy2(found.stdout.strip(), tools / name)
+              original = Path(found.stdout.strip())
+              shutil.copy2(original, tools / name)
+              pending.append(original)
               print(subprocess.check_output(['otool', '-L', str(tools / name)], text=True))
           compiler = Path(subprocess.check_output(['xcrun', '--find', 'clang'], text=True).strip())
           libraries = tools.parent / 'lib'
@@ -60,8 +63,41 @@ jobs:
               source = compiler.parent.parent / 'lib' / name
               if source.exists():
                   shutil.copy2(source, libraries / name)
+                  pending.append(source)
+          # Follow each tool's non-system dylib dependencies before packaging.
+          copied = []
+          scanned = set()
+          while pending:
+              source = pending.pop().resolve()
+              if source in scanned:
+                  continue
+              scanned.add(source)
+              for line in subprocess.check_output(['otool', '-L', str(source)], text=True).splitlines():
+                  dependency = line.strip().split(' (compatibility version ', 1)[0]
+                  if dependency.startswith(('/System/', '/usr/lib/')) or not dependency.startswith(('@', '/')):
+                      continue
+                  if '(architecture ' in dependency or dependency.endswith(':'):
+                      continue
+                  name = Path(dependency).name
+                  if name == source.name:
+                      continue
+                  candidates = [Path(dependency), source.parent / dependency.removeprefix('@loader_path/'),
+                                compiler.parent.parent / 'lib' / name,
+                                compiler.parent.parent / 'lib/swift/host' / name]
+                  original = next((path for path in candidates if path.is_file()), None)
+                  if original is None:
+                      raise SystemExit('Unresolved toolchain dependency: ' + dependency)
+                  destination = libraries / name
+                  if not destination.exists():
+                      shutil.copy2(original, destination)
+                      copied.append(name)
+                  pending.append(original)
+          subprocess.run(['tar', '-C', str(libraries), '-cf', 'export/toolchain-library-deps.tar', *copied], check=True)
+          subprocess.run(['zstd', '-T2', '-3', '--rm', 'export/toolchain-library-deps.tar'], check=True)
           resource = Path(subprocess.check_output([str(compiler), '-print-resource-dir'], text=True).strip())
           shutil.copytree(resource, libraries / 'clang' / resource.name, symlinks=False)
+          for name, option in (('clang', '--version'), ('iig', '--version'), ('ld', '-version_details')):
+              subprocess.run([str((tools / name).resolve()), option], check=True)
           Path('export/build-paths.json').write_text(json.dumps(dict(
               tree=str(Path(sys.argv[1]).resolve()), sdk=sys.argv[2],
               toolchain=str(compiler.parent.parent),
