@@ -108,6 +108,8 @@ extern volatile int native_staged_union_status __attribute__((weak_import));
 extern volatile int native_gpu_addon5_status __attribute__((weak_import));
 extern volatile int native_gpu_addon3_status __attribute__((weak_import));
 extern volatile int native_cryptex_os_stage __attribute__((weak_import));
+extern volatile int native_owner_app_cryptex_stage __attribute__((weak_import));
+extern volatile int native_owner_app_cryptex_status __attribute__((weak_import));
 extern volatile int native_cryptex_os_status __attribute__((weak_import));
 extern volatile int native_gestalt_cache_status __attribute__((weak_import));
 extern volatile int native_ls_store_status __attribute__((weak_import));
@@ -175,6 +177,7 @@ extern volatile uint32_t native_bluetooth_boot_tail_length __attribute__((weak_i
 extern volatile uint32_t native_bluetooth_boot_state[12] __attribute__((weak_import));
 extern volatile uint32_t native_bluetooth_processes[4] __attribute__((weak_import));
 extern volatile uint64_t native_bluetooth_ibs[8] __attribute__((weak_import));
+extern volatile uint32_t native_bluetooth_discovery[18] __attribute__((weak_import));
 extern char *volatile native_bluetooth_boot_text __attribute__((weak_import));
 extern volatile uint32_t native_bluetooth_boot_text_length __attribute__((weak_import));
 extern volatile uint32_t qbt_transport_activity[4] __attribute__((weak_import));
@@ -686,6 +689,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     snprintf(row, sizeof row, "[cryptex os] stage=%d status=%d gestalt-cache=%d ls-store=%d", native_cryptex_os_stage, native_cryptex_os_status,
              native_gestalt_cache_status, &native_ls_store_status ? native_ls_store_status : -9);
     at = put(out, at, cap, row, sizeof row);
+  }
+  if (&native_owner_app_cryptex_stage && &native_owner_app_cryptex_status) {
+    char row[80];
+    snprintf(row,sizeof row,"[cryptex app] stage=%d status=%d", native_owner_app_cryptex_stage, native_owner_app_cryptex_status);
+    at=put(out,at,cap,row,sizeof row);
   }
   // The one-time copy of the OS volume's staged system apps into Data (kern_exec.c native_staged_apps_prepare): stage (2 copied, 3 copied
   // before, -1 no source), directories, files, MiB, failures and the last error.
@@ -1598,6 +1606,12 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       snprintf(row,sizeof row,"[bluetooth ibs] wake_ind=%llu wake_ack=%llu sleep_ind=%llu reverts=%llu refused=%llu unarmed=%llu cancel_timeouts=%llu wakes=%llu",
           (unsigned long long)w[0],(unsigned long long)w[1],(unsigned long long)w[2],(unsigned long long)w[3],(unsigned long long)w[4],
           (unsigned long long)w[5],(unsigned long long)w[6],(unsigned long long)w[7]);
+      at=put(out,at,cap,row,sizeof row);
+    }
+    if(&native_bluetooth_discovery) {
+      const volatile uint32_t *d=native_bluetooth_discovery;
+      snprintf(row,sizeof row,"[bluetooth scan] sent/reply/status inquiry=%u/%u/%u legacy-param=%u/%u/%u legacy-enable=%u/%u/%u ext-param=%u/%u/%u ext-enable=%u/%u/%u reports=%u/%u/%u",
+          d[0],d[1],d[2],d[3],d[4],d[5],d[6],d[7],d[8],d[9],d[10],d[11],d[12],d[13],d[14],d[15],d[16],d[17]);
       at=put(out,at,cap,row,sizeof row);
     }
     if(&native_bluetooth_processes) {
