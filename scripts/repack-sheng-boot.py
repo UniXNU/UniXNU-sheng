@@ -121,8 +121,18 @@ def main():
             selected = [source for source, relative in replacements if relative == destination]
             if len(selected) != 1 or not any(relative == destination.with_suffix('.macho.vroot') for _, relative in replacements):
                 parser.error('--kernel-tree requires one kernel.macho and its matching kernel.macho.vroot replacement')
+            from unixnu.runtime import seed_uuid
+            kernel_bytes = selected[0].read_bytes()
+            initrds = {entry.get('initrd') for entry in tomllib.loads(config.read_text())['entry']
+                       if entry.get('type') == 'xnu' and entry.get('initrd')}
+            for index, initrd in enumerate(sorted(initrds)):
+                seed = work / f'data-{index}.dbr'
+                run('mcopy', '-i', original, '::/' + initrd.lstrip('/'), seed)
+                identity = seed_uuid(tree, seed)
+                if identity.encode() + b'\0' not in kernel_bytes:
+                    parser.error(f'replacement kernel does not contain payload Data UUID {identity}; rebuild with --data-ramdisk SEED')
             candidate = work / 'kernel.macho'
-            candidate.write_bytes(selected[0].read_bytes())
+            candidate.write_bytes(kernel_bytes)
             env = dict(os.environ)
             if args.uefi:
                 env['UNIXNU_UEFI'] = str(args.uefi.resolve())
