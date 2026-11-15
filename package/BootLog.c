@@ -17,6 +17,7 @@
 #include "BootTime.h"
 #include <kern/thread.h>
 #include <kern/clock.h>
+#include <mach/mach_time.h>
 #include <string.h>
 #include <pexpert/pexpert.h>
 #include <kern/misc_protos.h>
@@ -427,6 +428,9 @@ volatile uint32_t boot_log_state, boot_log_rounds, boot_log_errors;
 const char *volatile boot_log_open_refusal;
 volatile uint64_t boot_log_first_lba;
 static int boot_log_started;
+static char boot_log_tag[32];
+extern uint32_t ml_timebase_scale_num __attribute__((weak_import));
+extern uint32_t ml_timebase_scale_den __attribute__((weak_import));
 static uint8_t *boot_log_buffer;   // LogMsgBlocks blocks: the message buffer, then reused for a slot and the header
 static uint8_t *boot_log_panic_buffer;   // LogMsgBlocks blocks for boot_log_panic_flush, which must not touch the writer's buffer
 static uint8_t *boot_log_msg_ring;   // LogMsgBlocks blocks: the medium's message area as the writer last left it (stream ring)
@@ -583,9 +587,20 @@ static const char *log_step_max_where = "";
 static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   size_t at = 0;
   char head[128];
-  const int n = snprintf(head, sizeof head, "#slot %u t=%us tag=%s", slot, now, &boot_progress_tag ? boot_progress_tag() : "");
+  const int n = snprintf(head, sizeof head, "#slot %u t=%us tag=%s", slot, now, boot_log_tag);
   if (log_diag_on && n > 0 && (size_t)n < sizeof head) snprintf(head + n, sizeof head - (size_t)n, " diag=1 export-at=%us", log_diag_export_at);
   at = put(out, at, cap, head, sizeof head);
+  {
+    uint64_t frequency, virtual_counter, second = 0;
+    __asm__ volatile("mrs %0,cntfrq_el0\n\tmrs %1,cntvct_el0" : "=r"(frequency), "=r"(virtual_counter));
+    nanoseconds_to_absolutetime(1000000000ULL, &second);
+    char row[256];
+    snprintf(row, sizeof row, "[timebase] frequency=%llu physical=%llu virtual=%llu absolute=%llu second=%llu scale=%u/%u",
+             (unsigned long long)frequency, (unsigned long long)log_ticks(), (unsigned long long)virtual_counter,
+             (unsigned long long)mach_absolute_time(), (unsigned long long)second,
+             &ml_timebase_scale_num ? ml_timebase_scale_num : 0, &ml_timebase_scale_den ? ml_timebase_scale_den : 0);
+    at = put(out, at, cap, row, sizeof row);
+  }
   if (&boot_progress_page_text) {
     at = put(out, at, cap, "[page]", 8);
     for (unsigned i = 0; i < 48; ++i) if (boot_progress_page_text[i][0]) at = put(out, at, cap, boot_progress_page_text[i], 120);
@@ -2689,7 +2704,10 @@ static void writer(void *arg, wait_result_t result) {
   h.export_blocks = export_region; h.export_below = export_region; h.boot_id = log_ticks(); h.first_lba = first; h.window_blocks = (uint32_t)blocks;
   h.msg_first = LogMsgFirst; h.msg_blocks = LogMsgBlocks; h.slot_first = LogSlotFirst; h.slot_blocks = LogSlotBlocks; h.slot_count = slot_count;
   h.gpt_open = h.gpt_last = &native_ufs_store_gpt_check ? native_ufs_store_gpt_check() : 0xff;
-  if (&boot_progress_tag) strlcpy(h.tag, boot_progress_tag(), sizeof h.tag);
+  if (!PE_parse_boot_argn("build-tag", boot_log_tag, sizeof boot_log_tag) && &boot_progress_tag)
+    strlcpy(boot_log_tag, boot_progress_tag(), sizeof boot_log_tag);
+  boot_log_tag[sizeof boot_log_tag - 1] = 0;
+  strlcpy(h.tag, boot_log_tag, sizeof h.tag);
   uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
   const uint64_t start = log_ticks();
   // The reboot-into-fastboot path, read only: PSCI features and the PMIC cell. autoreset=<seconds of log time> then writes the cell and

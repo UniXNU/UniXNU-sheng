@@ -118,7 +118,7 @@ wait_fastboot(330)
 fresh = any(('tag=' + tag) in path.read_text(errors='replace').splitlines() for path in output.glob('*/header.txt'))
 if result == 0 and not fresh:
     result = 3
-    print(f'{serial}: no log from test tag {tag}; the capture belongs to an earlier boot', flush=True)
+    print(f'{serial}: the capture does not carry test tag {tag}; this boot is unqualified', flush=True)
 (output / 'cycle.json').write_text(json.dumps(dict(
     image=image.name, reader=reader.name, boot_acknowledged=acknowledged,
     expected_tag=tag, fresh_log=fresh,
