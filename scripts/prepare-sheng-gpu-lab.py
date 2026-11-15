@@ -179,7 +179,7 @@ def main():
             spec['kernel_args'] = [item for item in spec['kernel_args'] if item.split('=', 1)[0] not in removed]
             options.kernel_arg = [f'autoreset={args.autoreset}', f'diag-export={args.autoreset-60}',
                 'uefi-watchdog=1', 'diag=1', 'gpu-trace=1', 'gpu-perf=1', 'log-gpu=1',
-                'log-video=1', 'build-tag=s00000', 'ci-mps=0']
+                'log-video=1', 'log-bluetooth=3', 'build-tag=s00000', 'ci-mps=0']
             fd = firmware.fd_path(ctx, ctx.uefi, 'DEBUG')
             # The template carries every firmware module built for this candidate.
             # Its ramdisk is empty; the account and OS remain private payload inputs.
@@ -213,9 +213,9 @@ def main():
                    '--payload-file', str(addon) + '=' + prefix + 'gpuaddon',
                    '--payload-file', str(trust) + '=' + prefix + 'trustcache',
                    '--remove-arg', 'exec-log', '--remove-arg', 'vc-text', '--remove-arg', 'storage-probe']
-        for value in ('autoreset=7200', 'uefi-watchdog=1', 'diag=1', 'diag-export=6900',
+        for value in (f'autoreset={args.autoreset}', 'uefi-watchdog=1', 'diag=1', f'diag-export={args.autoreset-60}',
                       'gpu-trace=1', 'gpu-perf=1', 'log-gpu=1', 'log-power=1', 'log-sys=1', 'log-display=1',
-                      'log-video=1', 'build-tag=s00000'):
+                      'log-video=1', 'log-bluetooth=3', 'build-tag=s00000'):
             command += ['--kernel-arg', value]
         if args.preserve_data:
             command += ['--remove-arg', 'data-reset']
