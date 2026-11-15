@@ -9,6 +9,8 @@ snapshot() {
     /usr/bin/sw_vers
     /usr/bin/id unixnu
     /usr/sbin/sysctl hw.memsize hw.ncpu vm.swapusage kern.boot_payload_memory
+    /usr/sbin/sysctl machdep.timebase_traps
+    /private/var/ngpu/test/bin/clock-probe
     /usr/bin/vm_stat
     /sbin/mount
     /bin/ls -ld /private/var/vm

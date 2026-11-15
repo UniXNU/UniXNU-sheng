@@ -71,6 +71,10 @@ def main():
             '-framework', 'QuartzCore', ROOT / 'scripts/macos-lab/scene.m',
             '-Wl,-segalign,0x4000', '-o', files / 'bin/gpu-scene')
         run('codesign', '--force', '--sign', '-', '--timestamp=none', '--pagesize', '4096', files / 'bin/gpu-scene')
+        run('xcrun', 'clang', '-target', 'arm64e-apple-macos27.0', '-isysroot', sdk,
+            '-O2', '-Wall', '-Wextra', '-Werror', ROOT / 'scripts/macos-lab/clock-probe.c',
+            '-Wl,-segalign,0x4000', '-o', files / 'bin/clock-probe')
+        run('codesign', '--force', '--sign', '-', '--timestamp=none', '--pagesize', '4096', files / 'bin/clock-probe')
         for name in ('bin/gpu-acceptance', 'lib/libvulkan.1.dylib', 'lib/libVkLayer_khronos_validation.dylib'):
             if not (files / name).is_file():
                 parser.error('missing diagnostic input: ' + name)
