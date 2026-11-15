@@ -8,6 +8,7 @@ import os
 import json
 from pathlib import Path
 import re
+import secrets
 import struct
 import subprocess
 import sys
@@ -72,7 +73,11 @@ def boot(path):
     return True
 
 output.mkdir(parents=True, exist_ok=True)
-tag = 's' + format(time.time_ns(), 'x')[-15:]
+previous_tags = {line[4:] for path in output.glob('*/header.txt')
+                 for line in path.read_text(errors='replace').splitlines() if line.startswith('tag=')}
+tag = 's' + secrets.token_hex(4)
+while tag in previous_tags:
+    tag = 's' + secrets.token_hex(4)
 tagged_directory = tempfile.TemporaryDirectory(prefix='sheng-timed-boot-')
 tagged = Path(tagged_directory.name) / image.name
 subprocess.run([sys.executable, str(root / 'scripts/repack-sheng-boot.py'), str(image), str(tagged),

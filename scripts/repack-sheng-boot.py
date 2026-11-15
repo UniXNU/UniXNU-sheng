@@ -37,7 +37,7 @@ def change_arguments(text, added, removed):
         values += added
         line = ' '.join(values)
         if len(line.encode()) >= 1000:
-            raise ValueError('XNU arguments reach the 1000-byte limit')
+            raise ValueError(f'XNU arguments use {len(line.encode())} bytes; the maximum is 999')
         block, count = re.subn(r'(?m)^args[ \t]*=[ \t]*"(?:\\.|[^"\\])*"[ \t]*$',
                                lambda _: 'args = ' + json.dumps(line), block)
         if count != 1:
