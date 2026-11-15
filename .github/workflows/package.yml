@@ -79,6 +79,9 @@ jobs:
           # The macOS root hash tables (~150 MiB) live in userdata as NAME.vroot, not the boot image;
           # the boot image carries only the 544-byte signed headers (manifest.header.bin).
           XNU_SOURCE_STORAGE_TABLES: userdata
+          # main's ipsw prefetch defaults to 64 parallel range connections, which exhausts the runner's
+          # socket buffers (Errno 55 ENOBUFS). Cap the concurrency so the root-image fetch completes.
+          UNIXNU_IPSW_JOBS: "8"
         run: |
           set -euo pipefail
           DEVICE="$GITHUB_WORKSPACE/device"
