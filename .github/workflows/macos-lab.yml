@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: rponeawa/UniXNU
-          ref: 96808720826b7e36a136014df36a8645aa40cf86
+          ref: e3e2e5c032a6482756b189b0149e855b86f2b4a5
           path: UniXNU
           submodules: recursive
       - name: Check out firmware sources
@@ -94,6 +94,26 @@ jobs:
           rustup toolchain install 1.98.0 --profile minimal --component rust-src
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
+      - name: Identify kernel SDK cache
+        id: kernel-sdk
+        run: |
+          python3 - <<'PYTHON'
+          import hashlib, os, subprocess
+          from pathlib import Path
+          version = subprocess.check_output(['xcodebuild', '-version']) + subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-version'])
+          key = 'sheng-macos27-kernel-v1-' + hashlib.sha256(version).hexdigest()[:16]
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
+              output.write('key=' + key + '\n')
+          PYTHON
+      - name: Restore kernel compile records
+        id: kernel-cache
+        uses: actions/cache/restore@v4
+        with:
+          key: ${{ steps.kernel-sdk.outputs.key }}-${{ github.run_id }}
+          restore-keys: ${{ steps.kernel-sdk.outputs.key }}-
+          path: |
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/xnu-work
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/xnu
       - name: Fetch the source-matched Metal bridge
         run: |
           mkdir metal-bridge
@@ -161,6 +181,8 @@ jobs:
             UniXNU/out/sheng/*/*/logs/*.log
             UniXNU/out/sheng/*/*/tree/build/adreno-metal-bridge/build-*.log
             UniXNU/out/sheng/*/*/tree/build/prime-list.*
+            UniXNU/out/sheng/*/*/tree/build/sheng-source-storage/*.log
+            UniXNU/out/sheng/*/*/tree/build/sheng-source-storage/*.command.json
           retention-days: 1
       - name: Save build inputs
         if: always() && steps.build-cache.outputs.cache-hit != 'true'
@@ -177,3 +199,11 @@ jobs:
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/runtime/data.dbr
             device/drivers/Ath12kWifi/deps
             device/.cache/firmware
+      - name: Save kernel compile records
+        if: always() && steps.kernel-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          key: ${{ steps.kernel-sdk.outputs.key }}-${{ github.run_id }}
+          path: |
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/xnu-work
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/xnu
