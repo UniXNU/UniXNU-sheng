@@ -403,6 +403,8 @@ extern struct boot_log_msgbuf *msgbufp;
 
 enum {LogBlock = 4096, LogMsgFirst = 1, LogMsgBlocks = 32, LogSlotFirst = 33, LogSlotBlocks = 16, LogPeriodMs = 2000, LogMaxErrors = 3,
       LogExportStage = 64};   // export bytes staged per write: 256 KiB
+
+
 struct boot_log_header {
   char magic[8];                 // "SHLOG001"
   uint32_t version, header_bytes;
@@ -435,6 +437,38 @@ static uint8_t *boot_log_buffer;   // LogMsgBlocks blocks: the message buffer, t
 static uint8_t *boot_log_panic_buffer;   // LogMsgBlocks blocks for boot_log_panic_flush, which must not touch the writer's buffer
 static uint8_t *boot_log_msg_ring;   // LogMsgBlocks blocks: the medium's message area as the writer last left it (stream ring)
 static struct boot_log_header *volatile boot_log_live;   // the writer's header once its window is open
+
+void boot_log_checkpoint(const char *stage) {
+  uint32_t enabled = 0;
+  if (!PE_parse_boot_argn("storage-probe", &enabled, sizeof enabled) || enabled != 1 || !&native_ufs_log_write) return;
+  const struct boot_log_header *live = boot_log_live;
+  if (!live) {printf("[startup checkpoint] %s: log window pending\n", stage); return;}
+  const uint64_t blocks = live->window_blocks;
+  if (blocks <= LogSlotFirst ||
+      LogSlotFirst + (blocks - LogSlotFirst) / LogSlotBlocks * LogSlotBlocks == blocks) return;
+  static char *checkpoint;
+  if (!checkpoint) checkpoint = IOMallocAligned(LogBlock, LogBlock);
+  if (!checkpoint) return;
+  uint64_t physical, virtual_count, frequency, control, deadline, daif, pending;
+  __asm__ volatile("mrs %0, cntpct_el0" : "=r"(physical));
+  __asm__ volatile("mrs %0, cntvct_el0" : "=r"(virtual_count));
+  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
+  __asm__ volatile("mrs %0, cntv_ctl_el0" : "=r"(control));
+  __asm__ volatile("mrs %0, cntv_cval_el0" : "=r"(deadline));
+  __asm__ volatile("mrs %0, daif" : "=r"(daif));
+  __asm__ volatile("mrs %0, icc_hppir1_el1" : "=r"(pending));
+  char tag[32] = "";
+  PE_parse_boot_argn("build-tag", tag, sizeof tag);
+  memset(checkpoint, 0, LogBlock);
+  snprintf(checkpoint, LogBlock,
+           "SHSTG001\ntag=%s\nstage=%s\nphysical=%llu\nvirtual=%llu\nabsolute=%llu\nfrequency=%llu\ntimer_ctl=%llx\ntimer_deadline=%llu\ndaif=%llx\npending=%llx\ncaller=%llx\n",
+           tag, stage, (unsigned long long)physical, (unsigned long long)virtual_count,
+           (unsigned long long)mach_absolute_time(), (unsigned long long)frequency,
+           (unsigned long long)control, (unsigned long long)deadline, (unsigned long long)daif,
+           (unsigned long long)pending, (unsigned long long)(uintptr_t)__builtin_return_address(0));
+  if (native_ufs_log_write(blocks - 1, 1, checkpoint) && &native_ufs_log_sync) native_ufs_log_sync();
+}
+
 static volatile int boot_log_panicked;   // set by boot_log_panic_flush: the writer no longer writes
 
 // The export: boot_log_export_put takes the blob's pieces in order (any thread) and writes them through a staging buffer straight into

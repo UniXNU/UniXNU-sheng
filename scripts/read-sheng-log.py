@@ -137,6 +137,10 @@ def decode(blob, out):
             value = value.split('\0')[0]
         lines.append(f'{key}={value}')
     (run / 'header.txt').write_text('\n'.join(lines) + '\n')
+    checkpoint = blob[-BLOCK:].split(b'\0', 1)[0]
+    if checkpoint.startswith(b'SHSTG001\n'):
+        (run / 'startup-checkpoint.txt').write_bytes(checkpoint + b'\n')
+        print(checkpoint.decode(errors='replace'))
     msg = messages(blob, h)
     (run / 'msgbuf.txt').write_bytes(msg)
     count, written = h['slot_count'], h['slots_written']

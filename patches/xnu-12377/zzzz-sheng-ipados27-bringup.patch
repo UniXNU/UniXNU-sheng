@@ -2,10 +2,13 @@ diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 index 87ca424..2156540 100644
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -800,6 +800,16 @@ bsd_init(void)
+@@ -800,6 +800,23 @@ bsd_init(void)
  		native_source_storage_start();
  #if DEVELOPMENT || DEBUG
++	extern void boot_log_checkpoint(const char *) __attribute__((weak_import));
++	if (&boot_log_checkpoint) boot_log_checkpoint("bsd-apfs-load");
  	native_apfs_load_probe();
++	if (&boot_log_checkpoint) boot_log_checkpoint("bsd-apfs-ready");
 +	{
 +		/* With log=1, let the UFS log writer start first, so a failure in the display path below is logged. */
 +		extern volatile uint32_t boot_log_rounds __attribute__((weak_import));
@@ -16,8 +19,12 @@ index 87ca424..2156540 100644
 +			}
 +		}
 +	}
++	if (&boot_log_checkpoint) boot_log_checkpoint("bsd-mobile-graphics-load");
  	native_mobile_graphics_load_probe();
++	if (&boot_log_checkpoint) boot_log_checkpoint("bsd-mobile-graphics-ready");
++	if (&boot_log_checkpoint) boot_log_checkpoint("bsd-iogpu-load");
  	native_iogpu_load_probe();
++	if (&boot_log_checkpoint) boot_log_checkpoint("bsd-iogpu-ready");
  #if defined(XNU_ADRENO_FIRMWARE_PROBE) && XNU_ADRENO_FIRMWARE_PROBE
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 index a4f494d..52c1448 100644

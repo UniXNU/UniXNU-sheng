@@ -120,13 +120,15 @@ except subprocess.TimeoutExpired:
     result = 124
     print('log retrieval exceeded 270s; waiting for the reader return timer', flush=True)
 wait_fastboot(330)
-fresh = any(('tag=' + tag) in path.read_text(errors='replace').splitlines() for path in output.glob('*/header.txt'))
+header_fresh = any(('tag=' + tag) in path.read_text(errors='replace').splitlines() for path in output.glob('*/header.txt'))
+checkpoint_fresh = any(('tag=' + tag) in path.read_text(errors='replace').splitlines() for path in output.glob('*/startup-checkpoint.txt'))
+fresh = header_fresh or checkpoint_fresh
 if result == 0 and not fresh:
     result = 3
     print(f'{serial}: the capture does not carry test tag {tag}; this boot is unqualified', flush=True)
 (output / 'cycle.json').write_text(json.dumps(dict(
     image=image.name, reader=reader.name, boot_acknowledged=acknowledged,
-    expected_tag=tag, fresh_log=fresh,
+    expected_tag=tag, fresh_log=fresh, header_fresh=header_fresh, checkpoint_fresh=checkpoint_fresh,
     test_seconds=round(test_seconds, 3), reader_acknowledged=reader_acknowledged,
     reader_seconds=round(time.monotonic() - reader_started, 3),
     reader_exit=result, final_fastboot=True), indent=2) + '\n')

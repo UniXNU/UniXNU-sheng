@@ -10,10 +10,6 @@
 #include <pexpert/pexpert.h>
 #include <IOKit/IOLib.h>
 #include <kern/thread.h>
-#include <kern/processor.h>
-#include <kern/sched.h>
-#include <machine/machine_routines.h>
-#include <machine/cpu_number.h>
 #include "BootTime.h"
 
 extern kmod_info_t g_kernel_kmod_info;
@@ -32,77 +28,23 @@ extern "C" const char *volatile native_ufs_root_failure;
 extern "C" __attribute__((weak)) void boot_progress_poll(void) {}
 // Starts the log writer (BootLog.c); the board page calls it when that page is built in.
 extern "C" void boot_log_tick(unsigned now);
-extern "C" void boot_log_panic_flush(void);
-extern "C" int boot_kthread_report(const char *, char *, unsigned) __attribute__((weak_import));
-extern "C" processor_t thread_bind(processor_t);
-extern "C" kern_return_t kernel_thread_start_priority(thread_continue_t, void *, integer_t, thread_t *);
+extern "C" void boot_log_checkpoint(const char *);
 extern "C" volatile uint32_t boot_log_state, boot_log_rounds, boot_log_errors;
 extern "C" const char *volatile boot_log_open_refusal;
-
-static uint32_t startup_probe_seconds;
-static const char *startup_stage = "entry";
+static uint32_t startup_probe_enabled;
 
 static void startup_mark(const char *stage)
 {
-    __atomic_store_n(&startup_stage, stage, __ATOMIC_RELEASE);
-    if (startup_probe_seconds) printf("SourceStorage: startup %s\n", stage);
-}
-
-static uint64_t startup_counter()
-{
-    uint64_t value;
-    __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(value));
-    return value;
-}
-
-static void startup_probe(void *, wait_result_t)
-{
-    thread_set_thread_name(current_thread(), "storage_probe");
-    thread_bind(cpu_to_processor(7));
-    thread_block(THREAD_CONTINUE_NULL);
-    uint64_t frequency, virtual_count, timer_control, timer_deadline, daif, pmr, group, pending;
-    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
-    const uint64_t began = startup_counter();
-    while (startup_counter() - began < frequency * startup_probe_seconds)
-        __asm__ volatile("yield");
-    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(virtual_count));
-    __asm__ volatile("mrs %0, cntv_ctl_el0" : "=r"(timer_control));
-    __asm__ volatile("mrs %0, cntv_cval_el0" : "=r"(timer_deadline));
-    __asm__ volatile("mrs %0, daif" : "=r"(daif));
-    __asm__ volatile("mrs %0, icc_pmr_el1" : "=r"(pmr));
-    __asm__ volatile("mrs %0, icc_igrpen1_el1" : "=r"(group));
-    __asm__ volatile("mrs %0, icc_hppir1_el1" : "=r"(pending));
-    printf("[startup probe] stage=%s cpu=%d physical=%llu virtual=%llu frequency=%llu timer_ctl=%llx timer_deadline=%llu daif=%llx pmr=%llx group=%llx pending=%llx\n",
-           __atomic_load_n(&startup_stage, __ATOMIC_ACQUIRE), cpu_number(),
-           (unsigned long long)startup_counter(), (unsigned long long)virtual_count,
-           (unsigned long long)frequency, (unsigned long long)timer_control,
-           (unsigned long long)timer_deadline, (unsigned long long)daif,
-           (unsigned long long)pmr, (unsigned long long)group, (unsigned long long)pending);
-    if (&boot_kthread_report) {
-        const char *names[] = {"sheng_startup", "boot_log", "boot_log_watch", "boot_watchdog"};
-        for (const char *name : names) {
-            char row[512] = {};
-            const int result = boot_kthread_report(name, row, sizeof row);
-            printf("[startup probe] thread=%s result=%d %s\n", name, result, row);
-        }
-    }
-    ml_set_interrupts_enabled(false);
-    boot_log_panic_flush();
-    panic("SourceStorage: requested startup probe completed");
+    if (!startup_probe_enabled) return;
+    printf("SourceStorage: startup %s\n", stage);
+    boot_log_checkpoint(stage);
 }
 
 static void startup_probe_start()
 {
-    if (!PE_parse_boot_argn("storage-probe", &startup_probe_seconds, sizeof startup_probe_seconds) ||
-        startup_probe_seconds < 5 || startup_probe_seconds > 25) {
-        startup_probe_seconds = 0;
-        return;
-    }
-    thread_set_thread_name(current_thread(), "sheng_startup");
-    thread_t thread;
-    if (kernel_thread_start_priority(startup_probe, nullptr, MAXPRI_KERNEL, &thread) != KERN_SUCCESS)
-        panic("SourceStorage: cannot start requested startup probe");
-    thread_deallocate(thread);
+    PE_parse_boot_argn("storage-probe", &startup_probe_enabled, sizeof startup_probe_enabled);
+    if (startup_probe_enabled != 1) startup_probe_enabled = 0;
+    if (startup_probe_enabled) thread_set_thread_name(current_thread(), "sheng_startup");
 }
 
 // Without the board page nothing shows the writer's state, so a log that cannot be written stops the boot
