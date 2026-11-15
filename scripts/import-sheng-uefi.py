@@ -143,7 +143,10 @@ if stock_config.exists():
 uefi = Path(os.environ.get('UNIXNU_UEFI') or ROOT / 'uefi-sheng')
 guard_header = uefi / 'Platforms/Xiaomi/shengPkg/Include/BootResetCore.h'
 guard_header.parent.mkdir(parents=True, exist_ok=True)
-shutil.copyfile(ROOT / 'package/BootResetCore.h', guard_header)
+source_header = ROOT / 'kits/sheng/BootResetCore.h'
+if not source_header.is_file():
+    source_header = ROOT / 'package/BootResetCore.h'
+shutil.copyfile(source_header, guard_header)
 link = uefi / 'Binaries/sheng'
 generated = (output / 'manifest.json')
 if link.is_dir() and (link / 'manifest.json').is_file() and (link / 'manifest.json').read_bytes() == generated.read_bytes():
