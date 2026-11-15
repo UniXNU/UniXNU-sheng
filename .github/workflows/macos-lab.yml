@@ -39,7 +39,7 @@ jobs:
           repository: UniXNU/uefi-sheng
           ref: 511add6c9a5a948e67b9013869a5edab8daa0a97
           path: uefi-sheng
-          submodules: recursive
+          submodules: false
       - name: Restore build inputs
         id: build-cache
         uses: actions/cache/restore@v4
@@ -99,6 +99,14 @@ jobs:
           ./unixnu defconfig sheng_macos_defconfig -D ../device --os macos-27
           ./unixnu fetch --os macos-27
           python3 ../device/scripts/prepare-macos-install.py
+      - name: Build images
+        working-directory: device
+        run: >-
+          scripts/package.sh --os macos-27 --uefi ../uefi-sheng
+          --kernel-arg autoreset=7200 --kernel-arg data-reset=1
+          --kernel-arg gpu-trace=1 --kernel-arg gpu-perf=1
+          --kernel-arg diag-export=6900 --kernel-arg diag=1
+          --kernel-arg log-gpu=1 --kernel-arg log-power=1
       - name: Publish shader inventory
         if: always()
         uses: actions/upload-artifact@v4
@@ -108,14 +116,6 @@ jobs:
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/prime-list.txt
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/prime-list.json
           retention-days: 1
-      - name: Build images
-        working-directory: device
-        run: >-
-          scripts/package.sh --os macos-27 --uefi ../uefi-sheng
-          --kernel-arg autoreset=7200 --kernel-arg data-reset=1
-          --kernel-arg gpu-trace=1 --kernel-arg gpu-perf=1
-          --kernel-arg diag-export=6900 --kernel-arg diag=1
-          --kernel-arg log-gpu=1 --kernel-arg log-power=1
       - name: Build root storage
         working-directory: UniXNU
         run: |
