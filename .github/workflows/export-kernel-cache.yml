@@ -1,6 +1,11 @@
 name: Export local kernel build inputs
 
 on:
+  workflow_call:
+    inputs:
+      cache_key:
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
       cache_key:

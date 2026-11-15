@@ -7,6 +7,14 @@ on:
         description: Build the userdata root image
         type: boolean
         default: true
+      export_build_inputs:
+        description: Export cached XNU objects and the SDK for a local build
+        type: boolean
+        default: false
+      kernel_cache_key:
+        description: Kernel cache to export
+        type: string
+        default: sheng-macos27-kernel-v1-d509f7e4757a27f5-43684813634
 
 permissions:
   contents: read
@@ -16,7 +24,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  local-inputs:
+    if: inputs.export_build_inputs
+    uses: ./.github/workflows/export-kernel-cache.yml
+    with:
+      cache_key: ${{ inputs.kernel_cache_key }}
   images:
+    if: ${{ !inputs.export_build_inputs }}
     runs-on: macos-26
     timeout-minutes: 360
     env:
