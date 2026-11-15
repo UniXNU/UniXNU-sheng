@@ -8,8 +8,13 @@ repository's scripts/policies/<profile> (so every later tree assembly copies a c
 block hash tables stay in <tree>/build/verified-root-<NAME>/hashes.bin for the userdata --object inputs.
 """
 import hashlib
+import os
 import subprocess
 import sys
+
+# Import the framework's unixnu package, not the copy assembled into the build tree: the copy's
+# ROOT resolves to the tree (no profiles/os). UNIXNU_ROOT is the framework checkout.
+sys.path.insert(0, os.path.join(os.environ['UNIXNU_ROOT'], 'scripts'))
 
 from unixnu.cli import parser
 from unixnu.config import Context
