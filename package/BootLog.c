@@ -21,6 +21,7 @@
 #include <machine/machine_routines.h>
 #include <string.h>
 #include <stdarg.h>
+extern int vsnprintf(char *, size_t, const char *, va_list);
 #include <pexpert/pexpert.h>
 #include <kern/misc_protos.h>
 #include <IOKit/IOLib.h>
