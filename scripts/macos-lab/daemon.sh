@@ -6,9 +6,13 @@ set -u
 /bin/rm -f /Users/Shared/unixnu-test/benchmark.done /Users/Shared/unixnu-test/reboot-requested
 snapshot() {
     /bin/date -u
+    /usr/bin/sw_vers
+    /usr/bin/id unixnu
     /usr/sbin/sysctl hw.memsize hw.ncpu vm.swapusage kern.boot_payload_memory
     /usr/bin/vm_stat
     /sbin/mount
+    /bin/ls -ld /private/var/vm
+    /bin/ls -lh /private/var/vm
     /usr/sbin/ioreg -r -c IOPMPowerSource -l
     /bin/ps -axo pid,pcpu,rss,comm
 }

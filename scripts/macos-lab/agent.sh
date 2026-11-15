@@ -76,6 +76,7 @@ for (var index = 0; index < 20; index++) {
     motion.fromValue = $(0);
     motion.toValue = $(260);
     motion.duration = 2;
+    motion.preferredFrameRateRange = $.CAFrameRateRangeMake(120, 120, 120);
     motion.autoreverses = true;
     motion.repeatCount = 1000;
     layer.addAnimationForKey(motion, 'translation');
