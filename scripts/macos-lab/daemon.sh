@@ -76,6 +76,9 @@ graphics_state() {
         /bin/echo "boot=$boot"
         /bin/ps -axo pid,ppid,etime,pcpu,rss,comm | /usr/bin/awk 'NR == 1 || /WindowServer|loginwindow|Wallpaper|iconservices|icon-probe|video-probe|VTDecoder|KeyboardSetupAssistant/'
         /usr/sbin/ioreg -r -c AppleVideoToolboxParavirtualizationDriver -l
+        /usr/sbin/ioreg -r -c NativeUfsBlock -l -d 1
+        /sbin/mount | /usr/bin/awk '/Cryptexes\/App|AppCryptex/'
+        /bin/ls -ld /Applications/Safari.app /System/Applications/Safari.app /System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app
         /bin/launchctl print gui/501/org.unixnu.test.agent
         /bin/ls -lt /Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports/Retired
     } >> "$session/graphics-state.log" 2>&1
@@ -90,6 +93,7 @@ graphics_state() {
 }
 snapshot() {
     /bin/date -u
+    /bin/echo "snapshot boot=$boot"
     /usr/bin/sw_vers
     /usr/bin/id unixnu
     /usr/sbin/sysctl hw.memsize hw.ncpu vm.swapusage kern.boot_payload_memory
