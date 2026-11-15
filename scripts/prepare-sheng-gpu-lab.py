@@ -197,6 +197,8 @@ def main():
             spec = ctx.board['payload']
             spec['size_mib'], spec['timeout'] = args.payload_mib, 1
             removed = {'exec-log', 'vc-text', 'storage-probe', 'data-reset', 'icon-cb'}
+            if args.graphics_comparison or args.graphics_view:
+                removed.update(('log-video', 'log-bluetooth'))
             if args.icon_dump_cb:
                 removed.add('gpu-perf')
             spec['kernel_args'] = [item for item in spec['kernel_args'] if item.split('=', 1)[0] not in removed]
@@ -206,6 +208,8 @@ def main():
             capture = args.icon_dump_cb + (':' + args.icon_skip_draws if args.icon_skip_draws else '') if args.icon_dump_cb else None
             options.kernel_arg += ['icon-cb='+capture] if capture else ['gpu-perf=1']
             if args.graphics_comparison or args.graphics_view:
+                options.kernel_arg = [value for value in options.kernel_arg
+                                      if value.split('=', 1)[0] not in ('log-video', 'log-bluetooth')]
                 options.kernel_arg += ['gpu-prime=0']
             options.kernel_arg += args.kernel_arg
             fd = firmware.fd_path(ctx, ctx.uefi, 'DEBUG')
@@ -245,6 +249,8 @@ def main():
         for value in (f'autoreset={args.autoreset}', 'uefi-watchdog=1', 'diag=1', f'diag-export={args.autoreset-60}',
                       'gpu-trace=1', 'log-gpu=1', 'log-video=1', 'log-bluetooth=3',
                       'build-tag=s00000', 'ci-mps=0'):
+            if (args.graphics_comparison or args.graphics_view) and value.split('=', 1)[0] in ('log-video', 'log-bluetooth'):
+                continue
             command += ['--kernel-arg', value]
         if args.icon_dump_cb:
             capture = args.icon_dump_cb + (':' + args.icon_skip_draws if args.icon_skip_draws else '')
@@ -253,7 +259,7 @@ def main():
             command += ['--kernel-arg', 'gpu-perf=1']
         command += ['--remove-arg', 'gpu-prime']
         if args.graphics_comparison or args.graphics_view:
-            command += ['--kernel-arg', 'gpu-prime=0']
+            command += ['--remove-arg', 'log-video', '--remove-arg', 'log-bluetooth', '--kernel-arg', 'gpu-prime=0']
         for value in args.kernel_arg:
             command += ['--kernel-arg', value]
         if args.preserve_data:
