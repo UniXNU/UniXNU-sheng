@@ -63,6 +63,9 @@ class ChargeTest:
     def connect(self, end):
         last = 'no USB serial port'
         while time.monotonic() < end:
+            if self.report.get('job_pid') and self.present():
+                self.report['fastboot'] = True
+                raise RuntimeError('reader returned to fastboot before charge log collection')
             ports = [self.args.port] if self.args.port else sorted(glob.glob('/dev/cu.usbmodem*'))
             ports = [port for port in ports if os.path.exists(port)]
             if len(ports) > 1:
