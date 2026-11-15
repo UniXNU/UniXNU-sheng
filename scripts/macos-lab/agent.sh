@@ -13,6 +13,7 @@ set -u
 /usr/bin/defaults -currentHost write com.apple.loginwindow TALLogoutSavesState -bool false
 /usr/bin/defaults write com.apple.finder ApplePersistenceIgnoreState -bool true
 /usr/bin/defaults write com.apple.systempreferences ApplePersistenceIgnoreState -bool true
+/usr/bin/pkill -u "$(/usr/bin/id -u)" -x KeyboardSetupAssistant 2>/dev/null || :
 /usr/bin/pkill -u "$(/usr/bin/id -u)" -x 'System Settings' 2>/dev/null || :
 /usr/bin/pkill -u "$(/usr/bin/id -u)" -x Finder 2>/dev/null || :
 /bin/rm -rf '/Users/unixnu/Library/Saved Application State/com.apple.finder.savedState' \

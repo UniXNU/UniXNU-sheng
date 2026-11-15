@@ -42,6 +42,7 @@ static inline unsigned bl_macos_file_limit(const char *path) {
   if(!strcmp(name,"daemon.log") || !strcmp(name,"agent.log"))return 256*1024;
   if(!strcmp(name,"graphics-events.log") || !strcmp(name,"graphics-events-previous.log"))return 2*1024*1024;
   if(!strcmp(name,"graphics-state.log"))return 512*1024;
+  if(!strcmp(name,"video-probe.log"))return 128*1024;
   if(!strcmp(name,"desktop-180.png") || !strcmp(name,"desktop-270.png"))return 2*1024*1024;
  }
  return 0;

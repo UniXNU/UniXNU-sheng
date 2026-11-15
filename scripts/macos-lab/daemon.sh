@@ -5,11 +5,16 @@ set -u
 /bin/chmod 1777 /Users/Shared/unixnu-test
 /bin/rm -f /Users/Shared/unixnu-test/benchmark.done /Users/Shared/unixnu-test/reboot-requested
 session=/Users/Shared/unixnu-test
+keyboard=/Library/Preferences/com.apple.keyboardtype.plist
+/usr/libexec/PlistBuddy -c 'Add :keyboardtype dict' "$keyboard" 2>/dev/null || :
+/usr/libexec/PlistBuddy -c 'Set :keyboardtype:163-5593-0 40' "$keyboard" 2>/dev/null ||
+    /usr/libexec/PlistBuddy -c 'Add :keyboardtype:163-5593-0 integer 40' "$keyboard"
 boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)
 /bin/echo "graphics capture boot=$boot" > "$session/graphics-events.log"
 /bin/rm -f "$session/graphics-events-previous.log"
 /bin/echo "graphics state boot=$boot" > "$session/graphics-state.log"
-predicate='process == "WindowServer" OR process == "loginwindow" OR process BEGINSWITH "Wallpaper" OR process == "VTDecoderXPCService" OR subsystem CONTAINS[c] "VideoToolbox" OR subsystem CONTAINS[c] "CoreMedia"'
+/bin/echo "video probe boot=$boot" > "$session/video-probe.log"
+predicate='process == "WindowServer" OR process == "loginwindow" OR process BEGINSWITH "Wallpaper" OR process == "VTDecoderXPCService" OR process == "video-probe" OR subsystem CONTAINS[c] "VideoToolbox"'
 /usr/bin/log stream --style compact --level info --timeout 120m --predicate "$predicate" >> "$session/graphics-events.log" 2>&1 &
 graphics_log=$!
 trap '/bin/kill "$graphics_log" 2>/dev/null || :' EXIT
@@ -17,23 +22,24 @@ video_probe() {
     /bin/sleep 90
     tool=/private/var/ngpu/test
     [ -x "$tool/bin/video-probe" ] || return
-    /bin/echo "video probe boot=$boot" >> "$session/graphics-state.log"
-    "$tool/bin/video-probe" "$tool/share/video-probe.mp4" --require-hardware >> "$session/graphics-state.log" 2>&1 &
+    /bin/date -u >> "$session/video-probe.log"
+    "$tool/bin/video-probe" "$tool/share/video-probe.mp4" --require-hardware >> "$session/video-probe.log" 2>&1 &
     probe=$!
     ( /bin/sleep 30; /bin/kill -KILL "$probe" 2>/dev/null ) &
     alarm=$!
     wait "$probe"
     result=$?
     /bin/kill "$alarm" 2>/dev/null || :
-    /bin/echo "video probe exit=$result" >> "$session/graphics-state.log"
+    /bin/echo "video probe exit=$result" >> "$session/video-probe.log"
 }
 video_probe &
 graphics_state() {
     {
         /bin/date -u
         /bin/echo "boot=$boot"
-        /bin/ps -axo pid,ppid,etime,pcpu,rss,comm
+        /bin/ps -axo pid,ppid,etime,pcpu,rss,comm | /usr/bin/awk 'NR == 1 || /WindowServer|loginwindow|Wallpaper|video-probe|VTDecoder|KeyboardSetupAssistant/'
         /usr/sbin/ioreg -r -c AppleVideoToolboxParavirtualizationDriver -l
+        /bin/launchctl print gui/501/org.unixnu.test.agent
         /bin/ls -lt /Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports/Retired
     } >> "$session/graphics-state.log" 2>&1
     if [ "$(/usr/bin/stat -f %z "$session/graphics-state.log")" -gt 524288 ]; then
