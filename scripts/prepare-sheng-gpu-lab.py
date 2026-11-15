@@ -114,7 +114,11 @@ def main():
         command = [sys.executable, ROOT / 'scripts/repack-sheng-boot.py', args.input, args.output,
                    '--payload-mib', args.payload_mib,
                    '--payload-file', str(addon) + '=' + prefix + 'gpuaddon',
-                   '--payload-file', str(trust) + '=' + prefix + 'trustcache']
+                   '--payload-file', str(trust) + '=' + prefix + 'trustcache',
+                   '--remove-arg', 'exec-log', '--remove-arg', 'vc-text']
+        for value in ('autoreset=7200', 'uefi-watchdog=1', 'diag=1', 'diag-export=6900',
+                      'gpu-trace=1', 'gpu-perf=1', 'log-gpu=1', 'log-power=1', 'log-sys=1', 'log-display=1'):
+            command += ['--kernel-arg', value]
         if args.preserve_data:
             command += ['--remove-arg', 'data-reset']
         run(*command)
