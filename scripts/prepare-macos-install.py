@@ -16,6 +16,8 @@ from unixnu.userdata import disk_blocks, image_size
 
 def main():
     subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] /
+                                      'scripts/extract-files.py')], check=True)
+    subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] /
                                       'drivers/Ath12kWifi/tools/fetch-sources.py')], check=True)
     ctx = Context(parser().parse_args(['build', 'kernel', '-D', str(Path(__file__).resolve().parents[1]),
                                       '--os', 'macos-27']))
