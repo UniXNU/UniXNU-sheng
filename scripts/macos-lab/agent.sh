@@ -61,6 +61,11 @@ set -u
     /bin/kill "$alarm" 2>/dev/null || :
     /usr/bin/open -a 'System Settings'
 ) &
+icons=$!
+if [ -s /private/var/ngpu/test/share/icon-probe-path ]; then
+    wait "$icons"
+    exit $?
+fi
 cache=/private/var/tmp/NativeAdrenoMetal.cache/prime.log
 boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)
 ready=0
