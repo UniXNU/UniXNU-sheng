@@ -75,6 +75,9 @@ jobs:
           UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
           GITHUB_TOKEN: ${{ github.token }}
           OS_PROFILE: ${{ inputs.os }}
+          # The macOS root hash tables (~150 MiB) live in userdata as NAME.vroot, not the boot image;
+          # the boot image carries only the 544-byte signed headers (manifest.header.bin).
+          XNU_SOURCE_STORAGE_TABLES: userdata
         run: |
           set -euo pipefail
           DEVICE="$GITHUB_WORKSPACE/device"
@@ -89,12 +92,12 @@ jobs:
           OUT=$(./unixnu status --json -D "$DEVICE" --os "$OS_PROFILE" | python3 -c 'import sys,json;print(json.load(sys.stdin)["output"])')
           TREE="$OUT/tree"
           echo "output: $OUT"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          echo "TREE=$TREE" >> "$GITHUB_ENV"
           # Sign the root windows with a fresh owner key; headers go to the device repo, tables to the tree.
           python3 "$TREE/scripts/ci-macos-policies.py" -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI"
           ./unixnu build kernel package firmware payload -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI" --init-data
           ./unixnu bootimg -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI"
-          echo "OUT=$OUT" >> "$GITHUB_ENV"
-          echo "TREE=$TREE" >> "$GITHUB_ENV"
       - name: collect root inputs
         if: always()
         run: |
