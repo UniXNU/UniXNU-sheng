@@ -74,7 +74,7 @@ result = "The timed macOS 27.3 lab preserves Data and successful shader checkpoi
 kind = "host"
 reference = "https://github.com/UniXNU/UniXNU-sheng/pull/99"
 revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
-command = "unixnu build kernel prelink firmware --os macos-27 with the exported kernel toolchain and installed Data seed"
+command = "python3 scripts/run-local-kernel.py --sdk SDK --tools TOOLCHAIN -- build kernel prelink -D ../UniXNU-sheng --os macos-27 --data-ramdisk installed-data.dbr --skip-preflight"
 result = "The macOS integration resolves the SM8550 GENI UART and video interfaces from the selected platform source."
 
 [[area]]
@@ -241,8 +241,8 @@ result = "On sheng, macOS 27.3 mounted Data as writable APFS. The captured swap 
 kind = "host"
 reference = "https://github.com/UniXNU/UniXNU-sheng/pull/99"
 revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
-command = "unixnu build kernel prelink firmware --os macos-27 with the exported kernel toolchain and installed Data seed"
-result = "The selected ShengUfs b6c41b69 source compiles and links in the macOS 27.3 kernel; the validated integration mounts its sealed root and persistent Data volumes."
+command = "python3 scripts/run-local-kernel.py --sdk SDK --tools TOOLCHAIN -- build kernel prelink -D ../UniXNU-sheng --os macos-27 --data-ramdisk installed-data.dbr --skip-preflight"
+result = "The selected ShengUfs b6fe07b307eeddc5e258c9d5d4387b968a55e4e9 source compiles and links in the macOS 27.3 kernel; the validated integration mounts its sealed root and persistent Data volumes."
 
 [[area]]
 id = "display"
@@ -337,8 +337,8 @@ result = "The selected input archives compile and link into the macOS 27.3 kerne
 kind = "host"
 reference = "https://github.com/UniXNU/UniXNU-sheng/pull/99"
 revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
-command = "unixnu build kernel prelink firmware --os macos-27 with the exported kernel toolchain and installed Data seed"
-result = "ShengNovatekTouch 69fddf30 compiles and links against the selected SM8550 interfaces in the macOS 27.3 integration."
+command = "python3 scripts/run-local-kernel.py --sdk SDK --tools TOOLCHAIN -- build kernel prelink -D ../UniXNU-sheng --os macos-27 --data-ramdisk installed-data.dbr --skip-preflight"
+result = "ShengNovatekTouch 69fdd6223ed2572aa8bd8351e77c53a238276130 compiles and links against the selected SM8550 interfaces in the macOS 27.3 integration."
 
 [[area]]
 id = "keyboard"
@@ -851,7 +851,7 @@ result = "The macOS lab restores cached XNU compile records, builds the source-m
 kind = "host"
 reference = "https://github.com/UniXNU/UniXNU-sheng/pull/99"
 revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
-command = "unixnu build kernel prelink firmware --os macos-27 with the exported kernel toolchain and installed Data seed"
+command = "python3 scripts/run-local-kernel.py --sdk SDK --tools TOOLCHAIN -- build kernel prelink -D ../UniXNU-sheng --os macos-27 --data-ramdisk installed-data.dbr --skip-preflight"
 result = "Probe packaging resolves the LLVM tools through the shared host lookup used by the matching firmware build."
 
 [[area]]
@@ -924,7 +924,7 @@ result = "With Xcode 26.6 tools, all three source-built kernels reached Data dis
 kind = "host"
 reference = "https://github.com/UniXNU/UniXNU-sheng/pull/99"
 revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
-command = "unixnu build kernel prelink firmware --os macos-27 with the exported kernel toolchain and installed Data seed"
+command = "python3 scripts/run-local-kernel.py --sdk SDK --tools TOOLCHAIN -- build kernel prelink -D ../UniXNU-sheng --os macos-27 --data-ramdisk installed-data.dbr --skip-preflight"
 result = "The entry-probe build uses the shared LLVM lookup; the selected component lock resolves in the local macOS kernel and firmware builds."
 
 [[area]]
