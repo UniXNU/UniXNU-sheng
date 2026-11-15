@@ -5,6 +5,26 @@ set -u
 /bin/chmod 1777 /Users/Shared/unixnu-test
 /bin/rm -f /Users/Shared/unixnu-test/benchmark.done /Users/Shared/unixnu-test/reboot-requested
 session=/Users/Shared/unixnu-test
+build=/Library/GPUBundles/NativeAdrenoMetal.bundle/Contents/Resources/gpu-build.json
+state=/private/var/db/unixnu-lab
+/bin/mkdir -p "$state"
+/bin/chmod 700 "$state"
+if [ -r "$build" ]; then
+    identity=$(/usr/bin/shasum -a 256 "$build" | /usr/bin/awk '{print $1}')
+    previous=$(/bin/cat "$state/icon-cache-build" 2>/dev/null || :)
+    if [ "$identity" != "$previous" ]; then
+        cache=$(/usr/bin/sudo -u unixnu /usr/bin/getconf DARWIN_USER_CACHE_DIR)
+        case "$cache" in
+            /var/folders/*/C/|/private/var/folders/*/C/)
+                /bin/rm -rf "$cache/com.apple.iconservices" "$cache/com.apple.iconservices.store" ;;
+        esac
+        /bin/rm -rf /Library/Caches/com.apple.iconservices.store
+        /usr/bin/pkill -TERM -x iconservicesagent 2>/dev/null || :
+        /usr/bin/pkill -TERM -x iconservicesd 2>/dev/null || :
+        /bin/echo "$identity" > "$state/icon-cache-build"
+        /bin/echo "Icon cache generation=$identity"
+    fi
+fi
 keyboard=/Library/Preferences/com.apple.keyboardtype.plist
 /usr/libexec/PlistBuddy -c 'Add :keyboardtype dict' "$keyboard" 2>/dev/null || :
 /usr/libexec/PlistBuddy -c 'Set :keyboardtype:163-5593-0 40' "$keyboard" 2>/dev/null ||
