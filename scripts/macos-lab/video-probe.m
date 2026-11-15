@@ -5,16 +5,38 @@
 #include <stdio.h>
 #include <string.h>
 
-struct Results { atomic_uint decoded, dropped, errors; };
+struct Results { atomic_uint decoded, dropped, errors; int width, height; };
+
+static void samplePixels(CVImageBufferRef image,CMTime pts,const struct Results *results) {
+    OSType format=CVPixelBufferGetPixelFormatType(image);
+    printf("video-probe pixels format=0x%08x size=%zux%zu coded=%dx%d pts=%.6f\n",(unsigned)format,
+           CVPixelBufferGetWidth(image),CVPixelBufferGetHeight(image),results->width,results->height,CMTimeGetSeconds(pts));
+    if(format!=kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange && format!=kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)return;
+    if(CVPixelBufferLockBaseAddress(image,kCVPixelBufferLock_ReadOnly))return;
+    for(size_t plane=0;plane<2;++plane) {
+        const uint8_t *base=CVPixelBufferGetBaseAddressOfPlane(image,plane);
+        size_t stride=CVPixelBufferGetBytesPerRowOfPlane(image,plane);
+        size_t height=MIN(CVPixelBufferGetHeightOfPlane(image,plane),(size_t)results->height/(plane?2:1));
+        size_t width=MIN(CVPixelBufferGetWidthOfPlane(image,plane)*(plane?2:1),(size_t)results->width);
+        for(size_t y=0;base && y<height;y+=16) {
+            printf("video-probe grid plane=%zu row=%zu step=16 hex=",plane,y);
+            for(size_t x=0;x<width;x+=16){printf("%02x",base[y*stride+x]);if(plane && x+1<width)printf("%02x",base[y*stride+x+1]);}
+            putchar('\n');
+        }
+    }
+    CVPixelBufferUnlockBaseAddress(image,kCVPixelBufferLock_ReadOnly);
+}
 
 static void decoded(void *context, void *frame, OSStatus status, VTDecodeInfoFlags flags,
                     CVImageBufferRef image, CMTime pts, CMTime duration) {
-    (void)frame; (void)pts; (void)duration;
+    (void)frame; (void)duration;
     struct Results *results = context;
     if (status) {
         atomic_fetch_add(&results->errors, 1);
         printf("video-probe callback status=%d flags=%u\n", (int)status, (unsigned)flags);
-    } else if (image) atomic_fetch_add(&results->decoded, 1);
+    } else if (image) {
+        if(!atomic_fetch_add(&results->decoded,1))samplePixels(image,pts,results);
+    }
     else atomic_fetch_add(&results->dropped, 1);
 }
 
@@ -65,6 +87,7 @@ int main(int argc, const char **argv) {
                     (long)CMSampleBufferGetNumSamples(sample), CMSampleBufferGetTotalSampleSize(sample), format);
                 if (!format) format = (__bridge CMVideoFormatDescriptionRef)track.formatDescriptions.firstObject;
                 CMVideoDimensions size = CMVideoFormatDescriptionGetDimensions(format);
+                results.width=size.width; results.height=size.height;
                 FourCharCode codec = CMFormatDescriptionGetMediaSubType(format);
                 NSDictionary *spec = required ? @{(__bridge NSString *)kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: @YES}
                     : @{(__bridge NSString *)kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: @(!software)};

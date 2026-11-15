@@ -23,6 +23,13 @@ set -u
     tool=/private/var/ngpu/test/bin/icon-probe
     log=/Users/Shared/unixnu-test/icon-probe.log
     /bin/echo "icon probe boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)" > "$log"
+    /private/var/ngpu/test/bin/gpu-correctness-probe /private/var/ngpu/test/share/half-compound.air >> "$log" 2>&1 &
+    probe=$!
+    ( /bin/sleep 90; /bin/kill -KILL "$probe" 2>/dev/null ) &
+    alarm=$!
+    wait "$probe"
+    /bin/echo "correctness exit=$?" >> "$log"
+    /bin/kill "$alarm" 2>/dev/null || :
     for mps in 1 0; do
         CI_ENABLE_MPS="$mps" "$tool" >> "$log" 2>&1 &
         probe=$!

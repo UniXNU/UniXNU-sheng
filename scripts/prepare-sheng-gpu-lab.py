@@ -88,6 +88,16 @@ def main():
             '-framework', 'CoreImage', '-framework', 'Metal', ROOT / 'scripts/macos-lab/icon-probe.m',
             '-Wl,-segalign,0x4000', '-o', files / 'bin/icon-probe')
         run('codesign', '--force', '--sign', '-', '--timestamp=none', '--pagesize', '4096', files / 'bin/icon-probe')
+        run('xcrun', 'clang', '-target', 'arm64e-apple-macos27.0', '-isysroot', sdk,
+            '-O2', '-Wall', '-Wextra', '-Werror', '-fobjc-arc', '-framework', 'Foundation',
+            '-framework', 'Metal', '-framework', 'IOSurface', ROOT / 'scripts/macos-lab/gpu-correctness-probe.m',
+            '-Wl,-segalign,0x4000', '-o', files / 'bin/gpu-correctness-probe')
+        run('codesign', '--force', '--sign', '-', '--timestamp=none', '--pagesize', '4096', files / 'bin/gpu-correctness-probe')
+        (files / 'share').mkdir(exist_ok=True)
+        llvm_as = shutil.which('llvm-as') or '/opt/homebrew/opt/llvm/bin/llvm-as'
+        if not Path(llvm_as).is_file():
+            parser.error('llvm-as is required for the authored half arithmetic probe')
+        run(llvm_as, ROOT / 'scripts/macos-lab/half-compound.ll', '-o', files / 'share/half-compound.air')
         if args.video_fixture:
             run('xcrun', 'clang', '-target', 'arm64e-apple-macos27.0', '-isysroot', sdk,
                 '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-deprecated-declarations', '-fobjc-arc',
