@@ -63,13 +63,14 @@ int main(int argc, const char **argv) {
   NSUInteger count=MIN(paths.count,64),width=8*128,height=MAX((count+7)/8,1)*128;
   NSBitmapImageRep *sheet=[[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:width pixelsHigh:height bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
   NSGraphicsContext *graphics=[NSGraphicsContext graphicsContextWithBitmapImageRep:sheet];
+  NSMutableArray<NSImage *> *icons=[NSMutableArray array];
   [NSGraphicsContext saveGraphicsState];[NSGraphicsContext setCurrentContext:graphics];
   [[NSColor colorWithWhite:0.8 alpha:1] setFill];NSRectFill(NSMakeRect(0,0,width,height));
   for(NSUInteger i=0;i<count;++i) {
    @autoreleasepool {
     NSTimeInterval began=NSDate.timeIntervalSinceReferenceDate;
     NSImage *icon=[NSWorkspace.sharedWorkspace iconForFile:paths[i]];
-    sourcePixels(icon,i);
+    [icons addObject:icon];
     [icon drawInRect:NSMakeRect((i%8)*128,(i/8)*128,128,128) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1];
     printf("icon index=%lu ms=%.3f representations=%lu path=%s\n",(unsigned long)i,1000*(NSDate.timeIntervalSinceReferenceDate-began),(unsigned long)icon.representations.count,paths[i].UTF8String);
    }
@@ -77,6 +78,7 @@ int main(int argc, const char **argv) {
   [NSGraphicsContext restoreGraphicsState];
   NSData *png=[sheet representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
   BOOL saved=[png writeToFile:@(argv[1]) atomically:YES];
+  for(NSUInteger i=0;i<icons.count;++i)sourcePixels(icons[i],i);
   printf("icon pass count=%lu saved=%d\n",(unsigned long)count,saved);
   return saved ? 0 : 4;
  }
