@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Run one timed image, retrieve its Linux log and confirm the final fastboot state.
-# Usage: SERIAL=<serial> READER=<reader.img> [OUT=<directory>] run-sheng-unattended.sh IMAGE [wait_seconds=600]
+# Usage: SERIAL=<serial> READER=<reader.img> [USERDATA=<full.sparse>] [OUT=<directory>] run-sheng-unattended.sh IMAGE [wait_seconds=600]
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 exec python3 - "$ROOT" "$@" <<'PY'
 import os
 from pathlib import Path
+import re
+import struct
 import subprocess
 import sys
 import time
@@ -18,8 +20,11 @@ limit = int(sys.argv[3]) if len(sys.argv) == 4 else 600
 serial = os.environ.get('SERIAL')
 reader = Path(os.environ.get('READER', root / 'out/sheng/boot/sheng-linux-log.img')).resolve()
 output = Path(os.environ.get('OUT', root / 'build/sheng-logs')).resolve()
+userdata = Path(os.environ['USERDATA']).resolve() if os.environ.get('USERDATA') else None
 if not image.is_file() or not reader.is_file() or limit <= 0:
     sys.exit('require existing test and reader images and a positive timeout')
+if userdata is not None and not userdata.is_file():
+    sys.exit('USERDATA must name the full-partition sparse image')
 if sys.platform == 'darwin':
     subprocess.Popen(['/usr/bin/caffeinate', '-is', '-w', str(os.getpid())])
 
@@ -46,6 +51,26 @@ def boot(path):
 
 output.mkdir(parents=True, exist_ok=True)
 wait_fastboot(30)
+if userdata is not None:
+    def variable(name):
+        result = subprocess.run(['fastboot', '-s', serial, 'getvar', name],
+                                capture_output=True, text=True, check=True, timeout=15)
+        match = re.search(r'^' + re.escape(name) + r':\s*(\S+)', result.stdout + result.stderr, re.M)
+        if not match:
+            raise SystemExit('fastboot did not report ' + name)
+        return match[1]
+    if variable('product') != 'sheng':
+        sys.exit('USERDATA requires the sheng product')
+    partition = int(variable('partition-size:userdata'), 0)
+    with userdata.open('rb') as source:
+        header = source.read(28)
+    if len(header) != 28:
+        sys.exit('USERDATA has no Android sparse header')
+    magic, major, _, _, _, block, blocks, _, _ = struct.unpack('<I4H4I', header)
+    if magic != 0xed26ff3a or major != 1 or block * blocks != partition:
+        sys.exit('USERDATA must cover the complete reported userdata partition')
+    print(f'{serial}: writing the complete {partition}-byte userdata partition', flush=True)
+    subprocess.run(['fastboot', '-s', serial, 'flash', 'userdata', str(userdata)], check=True, timeout=3600)
 boot(image)
 time.sleep(2)
 wait_fastboot(limit)
