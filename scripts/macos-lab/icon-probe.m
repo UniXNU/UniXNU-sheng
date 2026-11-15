@@ -41,6 +41,19 @@ static BOOL sourcePixels(NSImage *icon, NSUInteger index) {
  return data && !invalid;
 }
 
+static BOOL symbolPixels(NSImage *image, NSString *name) {
+ NSBitmapImageRep *bitmap=[[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:128 pixelsHigh:128 bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+ memset(bitmap.bitmapData,0,bitmap.bytesPerRow*128);
+ [NSGraphicsContext saveGraphicsState];
+ [NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap]];
+ [image drawInRect:NSMakeRect(0,0,128,128) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1];
+ [NSGraphicsContext restoreGraphicsState];
+ NSUInteger visible=0;
+ for(NSUInteger y=0;y<128;++y)for(NSUInteger x=0;x<128;++x)visible+=bitmap.bitmapData[y*bitmap.bytesPerRow+x*4+3]!=0;
+ printf("symbol name=%s visible=%lu\n",name.UTF8String,(unsigned long)visible);
+ return visible>0;
+}
+
 int main(int argc, const char **argv) {
  @autoreleasepool {
   setvbuf(stdout, NULL, _IOLBF, 0);
@@ -66,7 +79,8 @@ int main(int argc, const char **argv) {
   printf("CoreImage half blur pixels=%u range=%u..%u nonfinite=%u\n",opaque,low,high,halfInvalid);
   if(!opaque || high<=low || halfInvalid)return 3;
   if(argc<2)return 0;
-  BOOL single=argc==4 && !strcmp(argv[1],"--icon");
+  BOOL symbols=argc==4 && !strcmp(argv[1],"--icon-symbols");
+  BOOL single=argc==4 && (!strcmp(argv[1],"--icon") || symbols);
   if(argc!=2 && !single)return 2;
   const char *destination=single?argv[3]:argv[1];
   NSMutableArray<NSString *> *paths=[NSMutableArray array];
@@ -77,16 +91,20 @@ int main(int argc, const char **argv) {
     if([@[@"app",@"prefPane"] containsObject:name.pathExtension])[paths addObject:[root stringByAppendingPathComponent:name]];
    }
   }
+  if(symbols)[paths addObjectsFromArray:@[@"wifi",@"gearshape",@"network",@"display",@"keyboard",@"battery.100percent",@"speaker.wave.2",@"hand.raised",@"person.crop.circle",@"accessibility"]];
   NSUInteger count=MIN(paths.count,64),width=MAX(MIN(count,8),1)*128,height=MAX((count+7)/8,1)*128;
   NSBitmapImageRep *sheet=[[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:width pixelsHigh:height bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
   NSGraphicsContext *graphics=[NSGraphicsContext graphicsContextWithBitmapImageRep:sheet];
   NSMutableArray<NSImage *> *icons=[NSMutableArray array];
+  BOOL available=YES;
   [NSGraphicsContext saveGraphicsState];[NSGraphicsContext setCurrentContext:graphics];
   [[NSColor colorWithWhite:0.8 alpha:1] setFill];NSRectFill(NSMakeRect(0,0,width,height));
   for(NSUInteger i=0;i<count;++i) {
    @autoreleasepool {
     NSTimeInterval began=NSDate.timeIntervalSinceReferenceDate;
-    NSImage *icon=[NSWorkspace.sharedWorkspace iconForFile:paths[i]];
+    NSImage *icon=symbols && i>0?[NSImage imageWithSystemSymbolName:paths[i] accessibilityDescription:nil]:[NSWorkspace.sharedWorkspace iconForFile:paths[i]];
+    if(!icon){printf("icon index=%lu unavailable path=%s\n",(unsigned long)i,paths[i].UTF8String);available=NO;continue;}
+    if(symbols && i>0)available=symbolPixels(icon,paths[i]) && available;
     [icons addObject:icon];
     [icon drawInRect:NSMakeRect((i%8)*128,(i/8)*128,128,128) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1];
     printf("icon index=%lu ms=%.3f representations=%lu path=%s\n",(unsigned long)i,1000*(NSDate.timeIntervalSinceReferenceDate-began),(unsigned long)icon.representations.count,paths[i].UTF8String);
@@ -95,7 +113,7 @@ int main(int argc, const char **argv) {
   [NSGraphicsContext restoreGraphicsState];
   NSData *png=[sheet representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
   BOOL saved=[png writeToFile:@(destination) atomically:YES];
-  BOOL finite=YES;
+  BOOL finite=available;
   for(NSUInteger i=0;i<icons.count;++i)finite=sourcePixels(icons[i],i) && finite;
   printf("icon pass count=%lu saved=%d finite=%d\n",(unsigned long)count,saved,finite);
   return !saved ? 4 : finite ? 0 : 5;
