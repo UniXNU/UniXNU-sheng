@@ -40,10 +40,6 @@ set -u
         /bin/kill "$alarm" 2>/dev/null || :
     done
     if [ -s /private/var/ngpu/test/share/icon-probe-path ]; then
-        /bin/launchctl setenv NATIVE_METAL_DUMP_DRAWS 1:64 >> "$log" 2>&1
-        /bin/echo "icon draw capture environment exit=$?" >> "$log"
-        /bin/launchctl setenv NATIVE_METAL_DUMP_WORDS 32 >> "$log" 2>&1
-        /bin/echo "icon buffer capture environment exit=$?" >> "$log"
         owner=$(/usr/bin/id -u)
         /bin/echo "icon service restart old=$(/usr/bin/pgrep -u "$owner" -x iconservicesagent | /usr/bin/tr '\n' ',')" >> "$log"
         /usr/bin/pkill -KILL -u "$owner" -x iconservicesagent 2>/dev/null || :
@@ -59,8 +55,6 @@ set -u
     wait "$probe"
     /bin/echo "icons exit=$?" >> "$log"
     /bin/echo "icon service current=$(/usr/bin/pgrep -u "$(/usr/bin/id -u)" -x iconservicesagent | /usr/bin/tr '\n' ',')" >> "$log"
-    /bin/launchctl unsetenv NATIVE_METAL_DUMP_DRAWS >> "$log" 2>&1
-    /bin/launchctl unsetenv NATIVE_METAL_DUMP_WORDS >> "$log" 2>&1
     /bin/kill "$alarm" 2>/dev/null || :
     /usr/bin/open -a 'System Settings'
 ) &
