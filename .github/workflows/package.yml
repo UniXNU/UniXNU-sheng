@@ -69,6 +69,33 @@ jobs:
             echo 'Set the repository secret UNIXNU_UNIQUE_CHIP_ID: the platform seed of the device, 8 hex digits.' >&2
             exit 1
           fi
+      - name: wifi firmware
+        working-directory: device
+        # WCN7850 firmware is not committed (proprietary inputs stay local). Fetch the exact
+        # linux-firmware blobs the manifest pins and verify each before the build reads them.
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, urllib.request
+          from pathlib import Path
+          base = 'https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/ath12k/WCN7850/hw2.0/'
+          src = Path('firmware/wcn7850')
+          manifest = json.loads((src / 'manifest.json').read_text())['files']
+          for name, exp in manifest.items():
+              if name not in ('amss.bin', 'm3.bin', 'board-2.bin'):
+                  continue
+              dest = src / name
+              if dest.exists() and dest.stat().st_size == exp['bytes'] and hashlib.sha256(dest.read_bytes()).hexdigest() == exp['sha256']:
+                  print(f'{name}: already present and verified', flush=True)
+                  continue
+              print(f'fetching {name} from linux-firmware …', flush=True)
+              req = urllib.request.Request(base + name, headers={'User-Agent': 'unixnu-ci'})
+              data = urllib.request.urlopen(req, timeout=180).read()
+              if len(data) != exp['bytes'] or hashlib.sha256(data).hexdigest() != exp['sha256']:
+                  raise SystemExit(f'{name} does not match the manifest')
+              dest.write_bytes(data)
+              print(f'{name}: {len(data)} bytes verified', flush=True)
+          PY
       - name: build
         working-directory: UniXNU
         env:
