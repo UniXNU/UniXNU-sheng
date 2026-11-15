@@ -19,6 +19,7 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
       UNIXNU_LAB_PASSWORD: ${{ secrets.UNIXNU_LAB_PASSWORD }}
+      NMB_PREBUILT_BRIDGE: ${{ github.workspace }}/metal-bridge/libadreno_metal_bridge.a.json
       UNIXNU_MACOS_TEST: ${{ github.workspace }}/device/scripts/macos-lab
     steps:
       - name: Check out device sources
@@ -30,14 +31,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: rponeawa/UniXNU
-          ref: 927c783408dc2ff8e14aee36dda77ad998a837f9
+          ref: 96808720826b7e36a136014df36a8645aa40cf86
           path: UniXNU
           submodules: recursive
       - name: Check out firmware sources
         uses: actions/checkout@v4
         with:
           repository: UniXNU/uefi-sheng
-          ref: 511add6c9a5a948e67b9013869a5edab8daa0a97
+          ref: fb2b2ae1d2f8c855cc76bb24ee3bcd28e3ecacbb
           path: uefi-sheng
           submodules: false
       - name: Restore build inputs
@@ -93,6 +94,13 @@ jobs:
           rustup toolchain install 1.98.0 --profile minimal --component rust-src
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
+      - name: Fetch the source-matched Metal bridge
+        run: |
+          mkdir metal-bridge
+          GH_TOKEN="$GITHUB_TOKEN" gh release download sheng-metal-bridge-7496958 --repo rponeawa/UniXNU \
+            --pattern metal-bridge-macos27-7496958.tar.zst --dir metal-bridge
+          zstd -dc metal-bridge/metal-bridge-macos27-7496958.tar.zst | tar -xf - -C metal-bridge
+          rm -rf UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/m2v-target
       - name: Prepare installation
         working-directory: UniXNU
         run: |
@@ -149,7 +157,10 @@ jobs:
         if: failure()
         with:
           name: build-logs
-          path: UniXNU/out/sheng/*/*/logs/*.log
+          path: |
+            UniXNU/out/sheng/*/*/logs/*.log
+            UniXNU/out/sheng/*/*/tree/build/adreno-metal-bridge/build-*.log
+            UniXNU/out/sheng/*/*/tree/build/prime-list.*
           retention-days: 1
       - name: Save build inputs
         if: always() && steps.build-cache.outputs.cache-hit != 'true'
