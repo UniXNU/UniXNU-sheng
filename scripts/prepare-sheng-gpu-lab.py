@@ -58,6 +58,12 @@ def main():
         files = work / 'files'
         for tools in args.tools:
             shutil.copytree(tools, files, dirs_exist_ok=True)
+        sdk = subprocess.check_output(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], text=True).strip()
+        run('xcrun', 'clang', '-target', 'arm64e-apple-macos27.0', '-isysroot', sdk,
+            '-O2', '-Wall', '-Wextra', '-Werror', '-fobjc-arc', '-framework', 'AppKit',
+            '-framework', 'QuartzCore', ROOT / 'scripts/macos-lab/scene.m',
+            '-Wl,-segalign,0x4000', '-o', files / 'bin/gpu-scene')
+        run('codesign', '--force', '--sign', '-', '--timestamp=none', '--pagesize', '4096', files / 'bin/gpu-scene')
         for name in ('bin/gpu-acceptance', 'lib/libvulkan.1.dylib', 'lib/libVkLayer_khronos_validation.dylib'):
             if not (files / name).is_file():
                 parser.error('missing diagnostic input: ' + name)

@@ -57,35 +57,7 @@ fi
 /usr/bin/open -a Finder /Users/unixnu
 /bin/sleep 15
 /usr/bin/open -a 'System Settings'
-/usr/bin/osascript -l JavaScript <<'JXA' &
-ObjC.import('Cocoa');
-ObjC.import('QuartzCore');
-var app = $.NSApplication.sharedApplication;
-app.setActivationPolicy(0);
-var window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(80, 80, 1050, 700), 15, 2, false);
-window.title = 'UniXNU GPU frame workload';
-window.contentView.wantsLayer = true;
-var root = window.contentView.layer;
-root.backgroundColor = $.NSColor.colorWithCalibratedRedGreenBlueAlpha(0.08, 0.10, 0.14, 1).CGColor;
-for (var index = 0; index < 20; index++) {
-    var layer = $.CALayer.layer;
-    layer.frame = $.NSMakeRect(30 + (index % 5) * 130, 35 + Math.floor(index / 5) * 145, 100, 100);
-    layer.backgroundColor = $.NSColor.colorWithCalibratedRedGreenBlueAlpha(0.15 + index * 0.025, 0.55, 0.75, 0.8).CGColor;
-    root.addSublayer(layer);
-    var motion = $.CABasicAnimation.animationWithKeyPath('transform.translation.x');
-    motion.fromValue = $(0);
-    motion.toValue = $(260);
-    motion.duration = 2;
-    motion.preferredFrameRateRange = $.CAFrameRateRangeMake(120, 120, 120);
-    motion.autoreverses = true;
-    motion.repeatCount = 1000;
-    layer.addAnimationForKey(motion, 'translation');
-}
-window.makeKeyAndOrderFront(null);
-app.activateIgnoringOtherApps(true);
-$.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(180));
-window.close;
-JXA
+"$tool/bin/gpu-scene" &
 animation=$!
 /bin/sleep 45
 /usr/sbin/screencapture -x -t png /Users/Shared/unixnu-test/desktop-180.png
