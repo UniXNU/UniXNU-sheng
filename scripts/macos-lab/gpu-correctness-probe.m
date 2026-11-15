@@ -59,6 +59,11 @@ static BOOL compounds(id<MTLDevice> device,NSString *path) {
     dispatch_data_t data=dispatch_data_create(bytes.bytes,bytes.length,NULL,DISPATCH_DATA_DESTRUCTOR_DEFAULT);
     NSError *error=nil;
     id<MTLLibrary> library=[device newLibraryWithData:data error:&error];
+    if(!library){printf("correctness half library error=%s\n",error.description.UTF8String);return NO;}
+    NSError *missing=nil;
+    id<MTLFunction> absent=[library newFunctionWithName:@"unixnu_absent_function" constantValues:[MTLFunctionConstantValues new] error:&missing];
+    BOOL lookup=!absent && [missing.domain isEqualToString:MTLLibraryErrorDomain] && missing.code==MTLLibraryErrorFunctionNotFound;
+    printf("correctness missing-function domain=%s code=%ld result=%s\n",missing.domain.UTF8String,(long)missing.code,lookup?"pass":"FAIL");
     id<MTLFunction> function=[library newFunctionWithName:@"compound"];
     id<MTLComputePipelineState> pipeline=function?[device newComputePipelineStateWithFunction:function error:&error]:nil;
     if(!pipeline){printf("correctness half pipeline error=%s\n",error.description.UTF8String);return NO;}
@@ -76,7 +81,28 @@ static BOOL compounds(id<MTLDevice> device,NSString *path) {
     BOOL ok=completed(command);
     const float *answer=output.contents;
     printf("correctness half-compound mix=%g dot=%g expected=0,32 commands=%s\n",answer[0],answer[1],ok?"pass":"FAIL");
-    return ok && isfinite(answer[0]) && isfinite(answer[1]) && answer[0]==0 && answer[1]==32;
+    return ok && lookup && isfinite(answer[0]) && isfinite(answer[1]) && answer[0]==0 && answer[1]==32;
+}
+
+static BOOL heaps(id<MTLDevice> device) {
+    BOOL ok=YES;
+    for(unsigned optimized=0;optimized<2;++optimized) {
+        MTLTextureDescriptor *layout=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float width:242 height:242 mipmapped:NO];
+        layout.storageMode=MTLStorageModePrivate;layout.usage=MTLTextureUsageShaderRead|MTLTextureUsagePixelFormatView;
+        layout.allowGPUOptimizedContents=optimized;
+        MTLSizeAndAlign footprint=[device heapTextureSizeAndAlignWithDescriptor:layout];
+        MTLHeapDescriptor *descriptor=[MTLHeapDescriptor new];
+        descriptor.type=MTLHeapTypePlacement;descriptor.storageMode=layout.storageMode;descriptor.size=footprint.size;
+        id<MTLHeap> heap=[device newHeapWithDescriptor:descriptor];
+        id<MTLTexture> texture=[heap newTextureWithDescriptor:layout offset:0];
+        id<MTLTexture> view=[texture newTextureViewWithPixelFormat:texture.pixelFormat];
+        BOOL placed=footprint.size && footprint.align && texture && texture.heap==heap && texture.allocatedSize<=heap.size
+            && texture.allowGPUOptimizedContents==(BOOL)optimized && view && view.allowGPUOptimizedContents==(BOOL)optimized;
+        printf("correctness exact-heap optimized=%u bytes=%lu align=%lu result=%s\n",optimized,
+               (unsigned long)footprint.size,(unsigned long)footprint.align,placed?"pass":"FAIL");
+        ok=placed && ok;
+    }
+    return ok;
 }
 
 int main(int argc,const char **argv) {
@@ -87,6 +113,7 @@ int main(int argc,const char **argv) {
         if(!device)return 2;
         printf("correctness device=%s\n",device.name.UTF8String);
         BOOL ok=imports(device);
+        ok=heaps(device) && ok;
         if(strcmp(argv[1],"--cache-only"))ok=compounds(device,@(argv[1])) && ok;
         return ok?0:1;
     }
