@@ -2,6 +2,36 @@
 #import <CoreImage/CoreImage.h>
 #import <Metal/Metal.h>
 
+static void sourcePixels(NSImage *icon, NSUInteger index) {
+ NSRect bounds=NSMakeRect(0,0,128,128);
+ CGImageRef image=[icon CGImageForProposedRect:&bounds context:nil hints:nil];
+ if(!image){printf("icon source index=%lu unavailable\n",(unsigned long)index);return;}
+ unsigned bpc=(unsigned)CGImageGetBitsPerComponent(image),bpp=(unsigned)CGImageGetBitsPerPixel(image);
+ CGBitmapInfo info=CGImageGetBitmapInfo(image);
+ CFDataRef data=CGDataProviderCopyData(CGImageGetDataProvider(image));
+ unsigned invalid=0;
+ size_t stride=CGImageGetBytesPerRow(image),width=CGImageGetWidth(image),height=CGImageGetHeight(image);
+ if(data && (info&kCGBitmapFloatComponents) && (bpc==16 || bpc==32)) {
+  const uint8_t *bytes=CFDataGetBytePtr(data);
+  size_t length=(size_t)CFDataGetLength(data),step=bpc/8;
+  for(size_t y=0;y<height && y*stride+stride<=length;++y) {
+   for(size_t x=0;x<width*bpp/8;x+=step) {
+    if(bpc==16) {
+     uint16_t bits;memcpy(&bits,bytes+y*stride+x,2);
+     if((info&kCGBitmapByteOrderMask)==kCGBitmapByteOrder16Big)bits=__builtin_bswap16(bits);
+     invalid+=(bits&0x7c00)==0x7c00;
+    } else {
+     uint32_t bits;memcpy(&bits,bytes+y*stride+x,4);
+     if((info&kCGBitmapByteOrderMask)==kCGBitmapByteOrder32Big)bits=__builtin_bswap32(bits);
+     invalid+=(bits&0x7f800000)==0x7f800000;
+    }
+   }
+  }
+ }
+ printf("icon source index=%lu size=%zux%zu bpc=%u bpp=%u bitmap=%#x nonfinite=%u\n",(unsigned long)index,width,height,bpc,bpp,(unsigned)info,invalid);
+ if(data)CFRelease(data);
+}
+
 int main(int argc, const char **argv) {
  @autoreleasepool {
   setvbuf(stdout, NULL, _IOLBF, 0);
@@ -39,6 +69,7 @@ int main(int argc, const char **argv) {
    @autoreleasepool {
     NSTimeInterval began=NSDate.timeIntervalSinceReferenceDate;
     NSImage *icon=[NSWorkspace.sharedWorkspace iconForFile:paths[i]];
+    sourcePixels(icon,i);
     [icon drawInRect:NSMakeRect((i%8)*128,(i/8)*128,128,128) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1];
     printf("icon index=%lu ms=%.3f representations=%lu path=%s\n",(unsigned long)i,1000*(NSDate.timeIntervalSinceReferenceDate-began),(unsigned long)icon.representations.count,paths[i].UTF8String);
    }
