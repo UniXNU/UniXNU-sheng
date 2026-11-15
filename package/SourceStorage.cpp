@@ -10,6 +10,10 @@
 #include <pexpert/pexpert.h>
 #include <IOKit/IOLib.h>
 #include <kern/thread.h>
+#include <kern/processor.h>
+#include <kern/sched.h>
+#include <machine/machine_routines.h>
+#include <machine/cpu_number.h>
 #include "BootTime.h"
 
 extern kmod_info_t g_kernel_kmod_info;
@@ -28,8 +32,76 @@ extern "C" const char *volatile native_ufs_root_failure;
 extern "C" __attribute__((weak)) void boot_progress_poll(void) {}
 // Starts the log writer (BootLog.c); the board page calls it when that page is built in.
 extern "C" void boot_log_tick(unsigned now);
+extern "C" void boot_log_panic_flush(void);
+extern "C" int boot_kthread_report(const char *, char *, unsigned) __attribute__((weak_import));
 extern "C" volatile uint32_t boot_log_state, boot_log_rounds, boot_log_errors;
 extern "C" const char *volatile boot_log_open_refusal;
+
+static uint32_t startup_probe_seconds;
+static const char *startup_stage = "entry";
+
+static void startup_mark(const char *stage)
+{
+    __atomic_store_n(&startup_stage, stage, __ATOMIC_RELEASE);
+    if (startup_probe_seconds) printf("SourceStorage: startup %s\n", stage);
+}
+
+static uint64_t startup_counter()
+{
+    uint64_t value;
+    __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(value));
+    return value;
+}
+
+static void startup_probe(void *, wait_result_t)
+{
+    thread_set_thread_name(current_thread(), "storage_probe");
+    thread_bind(cpu_to_processor(7));
+    thread_block(THREAD_CONTINUE_NULL);
+    uint64_t frequency, virtual_count, timer_control, timer_deadline, daif, pmr, group, pending;
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
+    const uint64_t began = startup_counter();
+    while (startup_counter() - began < frequency * startup_probe_seconds)
+        __asm__ volatile("yield");
+    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(virtual_count));
+    __asm__ volatile("mrs %0, cntv_ctl_el0" : "=r"(timer_control));
+    __asm__ volatile("mrs %0, cntv_cval_el0" : "=r"(timer_deadline));
+    __asm__ volatile("mrs %0, daif" : "=r"(daif));
+    __asm__ volatile("mrs %0, icc_pmr_el1" : "=r"(pmr));
+    __asm__ volatile("mrs %0, icc_igrpen1_el1" : "=r"(group));
+    __asm__ volatile("mrs %0, icc_hppir1_el1" : "=r"(pending));
+    printf("[startup probe] stage=%s cpu=%d physical=%llu virtual=%llu frequency=%llu timer_ctl=%llx timer_deadline=%llu daif=%llx pmr=%llx group=%llx pending=%llx\n",
+           __atomic_load_n(&startup_stage, __ATOMIC_ACQUIRE), cpu_number(),
+           (unsigned long long)startup_counter(), (unsigned long long)virtual_count,
+           (unsigned long long)frequency, (unsigned long long)timer_control,
+           (unsigned long long)timer_deadline, (unsigned long long)daif,
+           (unsigned long long)pmr, (unsigned long long)group, (unsigned long long)pending);
+    if (&boot_kthread_report) {
+        const char *names[] = {"sheng_startup", "boot_log", "boot_log_watch", "boot_watchdog"};
+        for (const char *name : names) {
+            char row[512] = {};
+            const int result = boot_kthread_report(name, row, sizeof row);
+            printf("[startup probe] thread=%s result=%d %s\n", name, result, row);
+        }
+    }
+    ml_set_interrupts_enabled(false);
+    boot_log_panic_flush();
+    panic("SourceStorage: requested startup probe completed");
+}
+
+static void startup_probe_start()
+{
+    if (!PE_parse_boot_argn("storage-probe", &startup_probe_seconds, sizeof startup_probe_seconds) ||
+        startup_probe_seconds < 5 || startup_probe_seconds > 25) {
+        startup_probe_seconds = 0;
+        return;
+    }
+    thread_set_thread_name(current_thread(), "sheng_startup");
+    thread_t thread;
+    if (kernel_thread_start_priority(startup_probe, nullptr, MAXPRI_KERNEL, &thread) != KERN_SUCCESS)
+        panic("SourceStorage: cannot start requested startup probe");
+    thread_deallocate(thread);
+}
 
 // Without the board page nothing shows the writer's state, so a log that cannot be written stops the boot
 // with the reason on the panic screen instead of leaving an unattended run without a log.
@@ -270,6 +342,8 @@ extern "C" void native_source_storage_start(void)
     if (!PE_parse_boot_argn("native-source-storage", &enabled, sizeof(enabled)) || enabled != 1 || attempted)
         return;
     attempted = true;
+    startup_probe_start();
+    startup_mark("storage-family");
     OSReturn status = OSKextLoadKextWithIdentifier("com.apple.iokit.IOStorageFamily");
     if (status != kOSReturnSuccess)
         panic("SourceStorage: IOStorageFamily load failed %x", status);
@@ -282,11 +356,14 @@ extern "C" void native_source_storage_start(void)
 
     // Authenticate policies before registering hardware-facing classes. The
     // firmware hands off the envelope; the trusted anchor is compiled in.
+    startup_mark("root-policies");
     if (!native_source_root_policies_load())
         panic("SourceStorage: root policy handoff or authentication failed");
+    startup_mark("apfs-family");
     status = OSKextLoadKextWithIdentifier("com.apple.filesystems.apfs");
     if (status != kOSReturnSuccess)
         panic("SourceStorage: APFS load failed %x", status);
+    startup_mark("storage-classes");
     void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
     if (!handle) panic("SourceStorage: cannot begin class registration");
     source_storage_base_init();
@@ -296,9 +373,11 @@ extern "C" void native_source_storage_start(void)
     if (status != kOSReturnSuccess)
         panic("SourceStorage: class registration failed %x", status);
 
+    startup_mark("platform-provider");
     OSDictionary *matching = IOService::serviceMatching("IOPlatformExpertDevice");
     IOService *provider = matching ? IOService::waitForMatchingService(matching, 5000000000ULL) : nullptr;
     if (!provider) panic("SourceStorage: platform root unavailable");
+    startup_mark("ufs-start");
     storageDriver = native_ufs_source_create();
     if (!storageDriver) panic("SourceStorage: cannot allocate UFS service");
     const char *step = !storageDriver->init() ? "init" : !storageDriver->attach(provider) ? "attach" :
@@ -307,13 +386,18 @@ extern "C" void native_source_storage_start(void)
         panic("SourceStorage: UFS %s failed (root step %u: %s)", step, native_ufs_root_step,
               native_ufs_root_failure ? native_ufs_root_failure : "no reason recorded");
     printf("SourceStorage: UFS started through public IOStorageFamily interface\n");
+    startup_mark("data-start");
     start_data_disk(provider);
     // The UFS log area exists from here on; the writer only runs with log=1.
+    startup_mark("log-start");
     boot_log_tick(0);
+    startup_mark("log-check");
     unsigned log = 0;
     thread_t check;
     if (PE_parse_boot_argn("log", &log, sizeof(log)) && log == 1 &&
         kernel_thread_start(boot_log_check, nullptr, &check) == KERN_SUCCESS)
         thread_deallocate(check);
+    startup_mark("storage-benchmark");
     ufsBench();
+    startup_mark("storage-return");
 }

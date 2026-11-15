@@ -113,6 +113,7 @@ static uint64_t watchdog_ticks(void) {
 }
 static void wdt_thread(void *arg, wait_result_t wr) {
   (void)arg; (void)wr;
+  thread_set_thread_name(current_thread(), "boot_watchdog");
   uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
   const uint64_t start = watchdog_ticks();
   while (!wdt_deadline || (watchdog_ticks() - start) / f < wdt_deadline) {
