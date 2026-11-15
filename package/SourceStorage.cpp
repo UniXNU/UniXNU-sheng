@@ -20,6 +20,9 @@ extern "C" bool native_source_root_policies_load(void);
 // NativeUfs records how far root start got and the last soft-failure reason.
 extern "C" volatile uint32_t native_ufs_root_step;
 extern "C" const char *volatile native_ufs_root_failure;
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+extern "C" void boot_reset_install_platform(void);
+#endif
 
 // NativeUfs polls the optional board diagnostic during window reads. The
 // minimal kernel does not include it; a weak definition keeps the archive
@@ -267,6 +270,9 @@ extern "C" void native_source_storage_start(void)
     if (!PE_parse_boot_argn("native-source-storage", &enabled, sizeof(enabled)) || enabled != 1 || attempted)
         return;
     attempted = true;
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+    boot_reset_install_platform();
+#endif
     OSReturn status = OSKextLoadKextWithIdentifier("com.apple.iokit.IOStorageFamily");
     if (status != kOSReturnSuccess)
         panic("SourceStorage: IOStorageFamily load failed %x", status);
