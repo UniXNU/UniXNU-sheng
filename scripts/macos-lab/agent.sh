@@ -56,7 +56,11 @@ set -u
         /usr/bin/pkill -KILL -u "$owner" -x iconservicesagent 2>/dev/null || :
         /bin/sleep 1
         single=$(/bin/cat /private/var/ngpu/test/share/icon-probe-path)
-        CI_ENABLE_MPS=0 "$tool" --icon-symbols "$single" /Users/Shared/unixnu-test/icons.png >> "$log" 2>&1 &
+        if [ "$single" = settings ]; then
+            CI_ENABLE_MPS=0 "$tool" --settings-icons /Users/Shared/unixnu-test/icons.png >> "$log" 2>&1 &
+        else
+            CI_ENABLE_MPS=0 "$tool" --icon-symbols "$single" /Users/Shared/unixnu-test/icons.png >> "$log" 2>&1 &
+        fi
     else
         CI_ENABLE_MPS=0 "$tool" /Users/Shared/unixnu-test/icons.png >> "$log" 2>&1 &
     fi

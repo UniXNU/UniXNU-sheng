@@ -29,7 +29,7 @@ def main():
     parser.add_argument('--payload-mib', type=int, default=256, help='decoded FAT volume size in MiB')
     parser.add_argument('--video-fixture', type=Path, help='HEVC MP4 for the timed VideoToolbox decode probe')
     parser.add_argument('--video-fixture-10bit', type=Path, help='additional 10-bit HEVC MP4 for pixel and frame checks')
-    parser.add_argument('--icon-path', help='one guest application or preference pane for icon isolation')
+    parser.add_argument('--icon-path', help='one guest application or preference pane, or settings for the configured sidebar icons')
     parser.add_argument('--icon-dump-cb', help='bounded FIRST:COUNT command-buffer dump for the isolated icon service')
     parser.add_argument('--icon-skip-draws', help='omit PASS:FIRST:LAST draws in the isolated icon service')
     parser.add_argument('--preserve-data', action='store_true')

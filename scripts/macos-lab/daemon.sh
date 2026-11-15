@@ -44,7 +44,7 @@ boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)
 /bin/rm -f "$session/graphics-events-previous.log"
 /bin/echo "graphics state boot=$boot" > "$session/graphics-state.log"
 /bin/echo "video probe boot=$boot" > "$session/video-probe.log"
-predicate='process == "WindowServer" OR process == "loginwindow" OR process BEGINSWITH "Wallpaper" OR process CONTAINS[c] "iconservices" OR process == "icon-probe" OR process == "VTDecoderXPCService" OR process == "video-probe" OR subsystem CONTAINS[c] "VideoToolbox" OR subsystem CONTAINS[c] "CoreImage"'
+predicate='process == "WindowServer" OR process == "System Settings" OR process == "loginwindow" OR process BEGINSWITH "Wallpaper" OR process CONTAINS[c] "iconservices" OR process == "icon-probe" OR process == "VTDecoderXPCService" OR process == "video-probe" OR subsystem CONTAINS[c] "VideoToolbox" OR subsystem CONTAINS[c] "CoreImage"'
 /usr/bin/log stream --style compact --level info --timeout 120m --predicate "$predicate" >> "$session/graphics-events.log" 2>&1 &
 graphics_log=$!
 trap '/bin/kill "$graphics_log" 2>/dev/null || :' EXIT
@@ -85,6 +85,7 @@ graphics_state() {
         /sbin/mount | /usr/bin/awk '/Cryptexes\/App|AppCryptex/'
         /bin/ls -ld /Applications/Safari.app /System/Applications/Safari.app /System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app
         /bin/launchctl print gui/501/org.unixnu.test.agent
+        /bin/launchctl print gui/501/com.apple.iconservices.iconservicesagent
         /bin/ls -lt /Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports/Retired
     } >> "$session/graphics-state.log" 2>&1
     if [ "$(/usr/bin/stat -f %z "$session/graphics-state.log")" -gt 524288 ]; then

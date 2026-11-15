@@ -2,8 +2,8 @@
 #import <CoreImage/CoreImage.h>
 #import <Metal/Metal.h>
 
-static BOOL sourcePixels(NSImage *icon, NSUInteger index) {
- NSRect bounds=NSMakeRect(0,0,128,128);
+static BOOL sourcePixels(NSImage *icon, NSUInteger index, NSUInteger size) {
+ NSRect bounds=NSMakeRect(0,0,size,size);
  CGImageRef image=[icon CGImageForProposedRect:&bounds context:nil hints:nil];
  if(!image){printf("icon source index=%lu unavailable\n",(unsigned long)index);return NO;}
  unsigned bpc=(unsigned)CGImageGetBitsPerComponent(image),bpp=(unsigned)CGImageGetBitsPerPixel(image);
@@ -34,11 +34,30 @@ static BOOL sourcePixels(NSImage *icon, NSUInteger index) {
    }
   }
  }
- printf("icon source index=%lu size=%zux%zu bpc=%u bpp=%u bitmap=%#x nonfinite=%u\n",(unsigned long)index,width,height,bpc,bpp,(unsigned)info,invalid);
+ printf("icon source index=%lu requested=%lu size=%zux%zu bpc=%u bpp=%u bitmap=%#x nonfinite=%u\n",(unsigned long)index,(unsigned long)size,width,height,bpc,bpp,(unsigned)info,invalid);
  if(invalid)printf("icon nonfinite index=%lu nan=%u,%u,%u,%u inf=%u,%u,%u,%u\n",(unsigned long)index,
   nans[0],nans[1],nans[2],nans[3],infinities[0],infinities[1],infinities[2],infinities[3]);
  if(data)CFRelease(data);
  return data && !invalid;
+}
+
+static NSArray<NSString *> *settingsIconPaths(void) {
+ NSString *root=@"/System/Library/ExtensionKit/Extensions";
+ NSMutableDictionary<NSString *,NSString *> *bundles=[NSMutableDictionary dictionary];
+ for(NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:root error:nil]) {
+  NSString *path=[root stringByAppendingPathComponent:name];
+  NSDictionary *info=[NSDictionary dictionaryWithContentsOfFile:[path stringByAppendingPathComponent:@"Contents/Info.plist"]];
+  NSString *identifier=info[@"CFBundleIdentifier"];
+  if(identifier && info[@"CFBundleIcons"])bundles[identifier]=path;
+ }
+ NSArray *sidebar=[NSArray arrayWithContentsOfFile:@"/System/Applications/System Settings.app/Contents/Resources/Sidebar124.plist"];
+ NSMutableArray<NSString *> *paths=[NSMutableArray array];
+ for(NSDictionary *group in sidebar)for(NSString *key in @[@"ordered_content",@"sortable_content"])
+  for(NSString *identifier in group[key]) {
+   NSString *path=bundles[identifier];
+   if(path && ![paths containsObject:path])[paths addObject:path];
+  }
+ return paths;
 }
 
 static BOOL symbolPixels(NSImage *image, NSString *name) {
@@ -79,13 +98,15 @@ int main(int argc, const char **argv) {
   printf("CoreImage half blur pixels=%u range=%u..%u nonfinite=%u\n",opaque,low,high,halfInvalid);
   if(!opaque || high<=low || halfInvalid)return 3;
   if(argc<2)return 0;
+  BOOL settings=argc==3 && !strcmp(argv[1],"--settings-icons");
   BOOL symbols=argc==4 && !strcmp(argv[1],"--icon-symbols");
   BOOL single=argc==4 && (!strcmp(argv[1],"--icon") || symbols);
-  if(argc!=2 && !single)return 2;
-  const char *destination=single?argv[3]:argv[1];
+  if(argc!=2 && !single && !settings)return 2;
+  const char *destination=single?argv[3]:settings?argv[2]:argv[1];
   NSMutableArray<NSString *> *paths=[NSMutableArray array];
   NSFileManager *files=NSFileManager.defaultManager;
-  if(single)[paths addObject:@(argv[2])];
+  if(settings)[paths addObjectsFromArray:settingsIconPaths()];
+  else if(single)[paths addObject:@(argv[2])];
   else for(NSString *root in @[@"/System/Applications",@"/System/Library/PreferencePanes"]) {
    for(NSString *name in [[files contentsOfDirectoryAtPath:root error:nil] sortedArrayUsingSelector:@selector(compare:)]) {
     if([@[@"app",@"prefPane"] containsObject:name.pathExtension])[paths addObject:[root stringByAppendingPathComponent:name]];
@@ -96,7 +117,7 @@ int main(int argc, const char **argv) {
   NSBitmapImageRep *sheet=[[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:width pixelsHigh:height bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
   NSGraphicsContext *graphics=[NSGraphicsContext graphicsContextWithBitmapImageRep:sheet];
   NSMutableArray<NSImage *> *icons=[NSMutableArray array];
-  BOOL available=YES;
+  BOOL available=count>0;
   [NSGraphicsContext saveGraphicsState];[NSGraphicsContext setCurrentContext:graphics];
   [[NSColor colorWithWhite:0.8 alpha:1] setFill];NSRectFill(NSMakeRect(0,0,width,height));
   for(NSUInteger i=0;i<count;++i) {
@@ -104,7 +125,12 @@ int main(int argc, const char **argv) {
     NSTimeInterval began=NSDate.timeIntervalSinceReferenceDate;
     NSImage *icon=symbols && i>0?[NSImage imageWithSystemSymbolName:paths[i] accessibilityDescription:nil]:[NSWorkspace.sharedWorkspace iconForFile:paths[i]];
     if(!icon){printf("icon index=%lu unavailable path=%s\n",(unsigned long)i,paths[i].UTF8String);available=NO;continue;}
-    if(symbols && i>0)available=symbolPixels(icon,paths[i]) && available;
+    if(settings || (symbols && i>0))available=symbolPixels(icon,paths[i]) && available;
+    if(settings) {
+     NSDictionary *info=[NSDictionary dictionaryWithContentsOfFile:[paths[i] stringByAppendingPathComponent:@"Contents/Info.plist"]];
+     printf("settings icon index=%lu configuration=%s\n",(unsigned long)i,[info[@"CFBundleIcons"] description].UTF8String);
+     available=sourcePixels(icon,i,24) && available;
+    }
     [icons addObject:icon];
     [icon drawInRect:NSMakeRect((i%8)*128,(i/8)*128,128,128) fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1];
     printf("icon index=%lu ms=%.3f representations=%lu path=%s\n",(unsigned long)i,1000*(NSDate.timeIntervalSinceReferenceDate-began),(unsigned long)icon.representations.count,paths[i].UTF8String);
@@ -114,7 +140,7 @@ int main(int argc, const char **argv) {
   NSData *png=[sheet representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
   BOOL saved=[png writeToFile:@(destination) atomically:YES];
   BOOL finite=available;
-  for(NSUInteger i=0;i<icons.count;++i)finite=sourcePixels(icons[i],i) && finite;
+  for(NSUInteger i=0;i<icons.count;++i)finite=sourcePixels(icons[i],i,128) && finite;
   printf("icon pass count=%lu saved=%d finite=%d\n",(unsigned long)count,saved,finite);
   return !saved ? 4 : finite ? 0 : 5;
  }
