@@ -208,7 +208,7 @@ def main():
         finally:
             if hold_awake is not None:
                 hold_awake.terminate()
-    print(f'{args.out}: auth exit={task.report["auth_exit"]}, fastboot={task.report["fastboot"]}', flush=True)
+    print(f'{args.out}: capture exit={task.report["auth_exit"]}, fastboot={task.report["fastboot"]}', flush=True)
     if task.report.get('error'):
         print(task.report['error'], file=sys.stderr)
     if not task.report['fastboot']:

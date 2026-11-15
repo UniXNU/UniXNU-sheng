@@ -319,6 +319,16 @@ extern "C" int charge_main(long argc, char **argv) {
         if (now_ms() >= end) {emit("[charge error] Xiaomi battery sysfs absent; load qcom_battmgr and ADSP dependencies/firmware\n"); return 2;}
         sleep_ms(100);
     }
+    char ready[32];
+    for (;;) {
+        const int result = read_node(root,"authentic",ready,sizeof ready);
+        if (result >= 0) break;
+        if (now_ms() >= end) {
+            emit("[charge error] battery-manager service unavailable: "); integer(result); emit("\n");
+            return 2;
+        }
+        sleep_ms(100);
+    }
     emit("[charge sysfs] "); emit(root); emit("\n"); telemetry(root);
     if (run && wait_pd) {
         emit("[charge auth] waiting for PD source\n");
