@@ -6,6 +6,19 @@
 
 int main(int argc, const char **argv) {
     @autoreleasepool {
+        if (argc == 2 && strcmp(argv[1], "--reset-session") == 0) {
+            NSMutableArray<NSRunningApplication *> *closing = [NSMutableArray array];
+            for (NSRunningApplication *application in NSWorkspace.sharedWorkspace.runningApplications) {
+                if (application.activationPolicy != NSApplicationActivationPolicyRegular ||
+                    application.processIdentifier == NSProcessInfo.processInfo.processIdentifier ||
+                    [application.bundleIdentifier isEqualToString:@"com.apple.loginwindow"]) continue;
+                printf("session closing pid=%d bundle=%s\n", application.processIdentifier, application.bundleIdentifier.UTF8String ?: "unknown");
+                [application terminate];[closing addObject:application];
+            }
+            [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:2]];
+            for (NSRunningApplication *application in closing) if (!application.terminated) [application forceTerminate];
+            return 0;
+        }
         CAFrameRateRange rate = CAFrameRateRangeMake(120, 120, 120);
         if (argc == 2 && strcmp(argv[1], "--describe") == 0) {
             CABasicAnimation *animation = [CABasicAnimation animationWithKeyPath:@"transform.translation.x"];

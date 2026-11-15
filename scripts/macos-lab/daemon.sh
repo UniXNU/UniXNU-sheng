@@ -75,6 +75,19 @@ video_probe() {
     done
 }
 video_probe &
+if [ -s /private/var/ngpu/test/share/graphics-comparison ]; then
+    (
+        for delay in 120 90; do
+            /bin/sleep "$delay"
+            pid=$(/usr/bin/pgrep -x WindowServer | /usr/bin/head -1)
+            [ -n "$pid" ] || continue
+            /bin/echo "comparison sample boot=$boot pid=$pid time=$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$session/graphics-state.log"
+            /usr/bin/sample "$pid" 2 10 -file "$session/windowserver-sample.tmp" >/dev/null 2>&1
+            /bin/cat "$session/windowserver-sample.tmp" >> "$session/graphics-state.log"
+            /bin/rm -f "$session/windowserver-sample.tmp"
+        done
+    ) &
+fi
 graphics_state() {
     {
         /bin/date -u

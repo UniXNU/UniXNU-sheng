@@ -18,6 +18,25 @@ set -u
 /usr/bin/pkill -u "$(/usr/bin/id -u)" -x Finder 2>/dev/null || :
 /bin/rm -rf '/Users/unixnu/Library/Saved Application State/com.apple.finder.savedState' \
     '/Users/unixnu/Library/Saved Application State/com.apple.systempreferences.savedState'
+if [ -s /private/var/ngpu/test/share/graphics-comparison ]; then
+    /private/var/ngpu/test/bin/gpu-scene --reset-session
+    /bin/sleep 15
+    /private/var/ngpu/test/bin/gpu-scene &
+    animation=$!
+    /bin/echo "comparison start boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)"
+    for round in 1 2; do
+        for pane in com.apple.systempreferences.GeneralSettings com.apple.Network-Settings.extension com.apple.Displays-Settings.extension com.apple.systempreferences.GeneralSettings; do
+            /bin/echo "comparison round=$round pane=$pane time=$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            /usr/bin/open "x-apple.systempreferences:$pane"
+            /bin/sleep 20
+        done
+    done
+    /bin/sleep 30
+    /bin/kill -TERM "$animation" 2>/dev/null || :
+    /bin/echo "comparison complete time=$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    /usr/bin/touch /Users/Shared/unixnu-test/benchmark.done
+    exit 0
+fi
 (
     /bin/sleep 30
     tool=/private/var/ngpu/test/bin/icon-probe

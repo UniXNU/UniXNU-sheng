@@ -32,6 +32,7 @@ def main():
     parser.add_argument('--icon-path', help='one guest application or preference pane, or settings for the configured sidebar icons')
     parser.add_argument('--icon-dump-cb', help='bounded FIRST:COUNT command-buffer dump for the isolated icon service')
     parser.add_argument('--icon-skip-draws', help='omit PASS:FIRST:LAST draws in the isolated icon service')
+    parser.add_argument('--graphics-comparison', action='store_true', help='run the fixed desktop interaction capture with background priming paused')
     parser.add_argument('--preserve-data', action='store_true')
     parser.add_argument('--bluetooth-runtime', type=Path, help='signed runtime report from build-bluetooth-userspace.py')
     parser.add_argument('--refresh-payload', action='store_true', help='build the current board menu, ADT and firmware transport')
@@ -52,6 +53,8 @@ def main():
         _, first, last = map(int, args.icon_skip_draws.split(':'))
         if first > last:
             parser.error('--icon-skip-draws requires FIRST <= LAST')
+    if args.graphics_comparison and args.icon_dump_cb:
+        parser.error('--graphics-comparison uses the frame trace without detailed attachment readbacks')
     core = (ROOT / tomllib.loads((ROOT / 'board.toml').read_text())['package']['unixnu']).resolve()
     sys.path.insert(0, str(core / 'scripts'))
     from unixnu import ramdisk as codec
@@ -108,6 +111,7 @@ def main():
         run('codesign', '--force', '--sign', '-', '--timestamp=none', '--pagesize', '4096', files / 'bin/gpu-correctness-probe')
         (files / 'share').mkdir(exist_ok=True)
         (files / 'share/icon-probe-path').write_text(args.icon_path+'\n' if args.icon_path else '')
+        (files / 'share/graphics-comparison').write_text('1\n' if args.graphics_comparison else '')
         for name in ('video-probe.mp4', 'video-probe-10bit.mp4'):
             (files / 'share' / name).write_bytes(b'')
         if args.video_fixture:
@@ -198,6 +202,8 @@ def main():
                 'log-video=1', 'log-bluetooth=3', 'build-tag=s00000', 'ci-mps=0']
             capture = args.icon_dump_cb + (':' + args.icon_skip_draws if args.icon_skip_draws else '') if args.icon_dump_cb else None
             options.kernel_arg += ['icon-cb='+capture] if capture else ['gpu-perf=1']
+            if args.graphics_comparison:
+                options.kernel_arg += ['gpu-prime=0']
             fd = firmware.fd_path(ctx, ctx.uefi, 'DEBUG')
             # The template carries every firmware module built for this candidate.
             # Its ramdisk is empty; the account and OS remain private payload inputs.
@@ -241,6 +247,9 @@ def main():
             command += ['--remove-arg', 'gpu-perf', '--kernel-arg', 'icon-cb='+capture]
         else:
             command += ['--kernel-arg', 'gpu-perf=1']
+        command += ['--remove-arg', 'gpu-prime']
+        if args.graphics_comparison:
+            command += ['--kernel-arg', 'gpu-prime=0']
         if args.preserve_data:
             command += ['--remove-arg', 'data-reset']
         run(*command)
