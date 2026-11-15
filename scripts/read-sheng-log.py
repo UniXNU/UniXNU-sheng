@@ -16,6 +16,7 @@ import json
 import os
 import re
 import select
+import shlex
 import struct
 import sys
 import termios
@@ -157,20 +158,28 @@ def decode(blob, out):
 
 
 class Port:
-    def __init__(self, path):
+    def __init__(self, path, deadline=None):
+        self.deadline = deadline
         self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY)
         tty.setraw(self.fd)
         attrs = termios.tcgetattr(self.fd)
         attrs[2] |= termios.CLOCAL | termios.CREAD
         termios.tcsetattr(self.fd, termios.TCSANOW, attrs)
 
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
     def send(self, text):
         os.write(self.fd, text.encode())
 
     def read_until(self, marker, timeout):
-        data, end = bytearray(), time.time() + timeout
+        data, end = bytearray(), time.monotonic() + timeout
+        if self.deadline is not None:
+            end = min(end, self.deadline)
         while marker not in data:
-            if time.time() > end:
+            if time.monotonic() > end:
                 raise SystemExit(f'timed out waiting for {marker!r}; last output: {bytes(data[-300:])!r}')
             ready, _, _ = select.select([self.fd], [], [], 0.5)
             if ready:
@@ -191,29 +200,37 @@ def find_port(wait):
     raise SystemExit('no /dev/cu.usbmodem* port: is the log reader booted?')
 
 
-def fetch(port_path, out, reboot, retries=6):
-    port = Port(port_path)
-    time.sleep(0.5)
-    port.send('\n')
-    time.sleep(0.5)
-    port.send('stty -echo 2>/dev/null; echo R$((40+2))R\n')
-    port.read_until(b'R42R', 30)
+class Shell:
+    def __init__(self, port_path, deadline=None):
+        self.port = Port(port_path, deadline)
+        try:
+            time.sleep(0.5)
+            self.port.send('\n')
+            time.sleep(0.5)
+            self.port.send('stty -echo 2>/dev/null; echo R$((40+2))R\n')
+            self.port.read_until(b'R42R', 30)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        self.port.close()
 
     # The markers are computed by the shell, so the echoed command (if echo is still on) never contains them. '@' is not a base64 character.
-    def run(command, timeout=120):
-        port.send('echo @@B$((40+2))@@; ' + command + '; echo @@E$((40+2))@@\n')
-        data = port.read_until(b'@@E42@@', timeout)
+    def run(self, command, timeout=120):
+        self.port.send('echo @@B$((40+2))@@; ' + command + '; echo @@E$((40+2))@@\n')
+        data = self.port.read_until(b'@@E42@@', timeout)
         return data[data.rindex(b'@@B42@@') + 7:data.rindex(b'@@E42@@')].strip()
 
-    # One gzip of a file on the reader, then 64 KiB pieces, each with its own MD5 and retried alone: a single 1.7 MB base64 stream lost or
-    # gained characters on the serial line often enough that int-146's four whole-stream attempts all failed.
-    def pull(path, timeout=120):
-        summary = run(f'gzip -c {path} > /run/l.gz; wc -c < /run/l.gz; md5sum /run/l.gz', timeout).split()
+    # Transfer one gzip in 64 KiB pieces, each retried separately after checking its MD5.
+    def pull(self, path, timeout=120, retries=6):
+        path = shlex.quote(path)
+        summary = self.run(f'gzip -c {path} > /run/l.gz; wc -c < /run/l.gz; md5sum /run/l.gz', timeout).split()
         total, want = int(summary[0]), summary[1].decode()
         piece, data = 65536, bytearray()
         for n in range((total + piece - 1) // piece):
             for attempt in range(retries):
-                body = run(f'dd if=/run/l.gz bs={piece} skip={n} count=1 2>/dev/null | md5sum; dd if=/run/l.gz bs={piece} skip={n} count=1 2>/dev/null | base64', 60)
+                body = self.run(f'dd if=/run/l.gz bs={piece} skip={n} count=1 2>/dev/null | md5sum; dd if=/run/l.gz bs={piece} skip={n} count=1 2>/dev/null | base64', 60)
                 first, _, rest = body.partition(b'\n')
                 try:
                     chunk = base64.b64decode(re.sub(rb'[^A-Za-z0-9+/=]', b'', rest))
@@ -228,6 +245,13 @@ def fetch(port_path, out, reboot, retries=6):
         if len(data) != total or hashlib.md5(data).hexdigest() != want:
             raise SystemExit('transfer does not match the reader\'s MD5')
         return bytes(data)
+
+
+def fetch(port_path, out, reboot, retries=6):
+    shell = Shell(port_path)
+    run = shell.run
+    def pull(path, timeout=120):
+        return shell.pull(path, timeout, retries)
 
     data = pull('/run/log.bin')
     (out / 'last-raw.gz').parent.mkdir(parents=True, exist_ok=True)
@@ -254,9 +278,12 @@ def fetch(port_path, out, reboot, retries=6):
         if h.get('diag_bytes') and h.get('export_below'):
             region(h['diag_first'], h['diag_bytes'], 'diag')
     finally:
-        if reboot:
-            port.send('/bin/rebootbl\n')
-            print('sent rebootbl: the tablet should come back in fastboot')
+        try:
+            if reboot:
+                shell.port.send('/bin/rebootbl\n')
+                print('sent rebootbl: the tablet should come back in fastboot')
+        finally:
+            shell.close()
     return run_dir
 
 
