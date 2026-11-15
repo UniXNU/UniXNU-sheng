@@ -40,7 +40,9 @@ set -u
         /bin/kill "$alarm" 2>/dev/null || :
     done
     if [ -s /private/var/ngpu/test/share/icon-probe-path ]; then
-        /usr/bin/pkill -TERM -u "$(/usr/bin/id -u)" -x iconservicesagent 2>/dev/null || :
+        owner=$(/usr/bin/id -u)
+        /bin/echo "icon service restart old=$(/usr/bin/pgrep -u "$owner" -x iconservicesagent | /usr/bin/tr '\n' ',')" >> "$log"
+        /usr/bin/pkill -KILL -u "$owner" -x iconservicesagent 2>/dev/null || :
         /bin/sleep 1
         single=$(/bin/cat /private/var/ngpu/test/share/icon-probe-path)
         CI_ENABLE_MPS=0 "$tool" --icon "$single" /Users/Shared/unixnu-test/icons.png >> "$log" 2>&1 &
@@ -52,6 +54,7 @@ set -u
     alarm=$!
     wait "$probe"
     /bin/echo "icons exit=$?" >> "$log"
+    /bin/echo "icon service current=$(/usr/bin/pgrep -u "$(/usr/bin/id -u)" -x iconservicesagent | /usr/bin/tr '\n' ',')" >> "$log"
     /bin/kill "$alarm" 2>/dev/null || :
     /usr/bin/open -a 'System Settings'
 ) &
