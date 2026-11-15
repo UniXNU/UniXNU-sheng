@@ -127,7 +127,9 @@ def main():
                        if entry.get('type') == 'xnu' and entry.get('initrd')}
             for index, initrd in enumerate(sorted(initrds)):
                 seed = work / f'data-{index}.dbr'
-                run('mcopy', '-i', original, '::/' + initrd.lstrip('/'), seed)
+                path = Path(initrd.replace('\\', '/'))
+                path = Path(str(path).lstrip('/')) if path.is_absolute() else Path('EFI/UniXNU') / path
+                run('mcopy', '-i', original, '::/' + path.as_posix(), seed)
                 identity = seed_uuid(tree, seed)
                 if identity.encode() + b'\0' not in kernel_bytes:
                     parser.error(f'replacement kernel does not contain payload Data UUID {identity}; rebuild with --data-ramdisk SEED')
