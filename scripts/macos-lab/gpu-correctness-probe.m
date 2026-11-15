@@ -53,12 +53,16 @@ static BOOL imports(id<MTLDevice> device) {
     return ok && !cpuToGpu && !gpuToCpu;
 }
 
-static BOOL compounds(id<MTLDevice> device,NSString *path) {
-    NSData *bytes=[NSData dataWithContentsOfFile:path];
-    if(!bytes){printf("correctness half input missing=%s\n",path.UTF8String);return NO;}
-    dispatch_data_t data=dispatch_data_create(bytes.bytes,bytes.length,NULL,DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+static BOOL compounds(id<MTLDevice> device) {
+    NSString *source=@"#include <metal_stdlib>\nusing namespace metal;\n"
+        "kernel void compound(device const float4 *in [[buffer(0)]],device float *out [[buffer(1)]]) {"
+        "half4 a=half4(in[0]); half4 b=half4(in[1]);"
+        "out[0]=float(mix(a.x,a.y,a.z)); out[1]=float(dot(b.xy,b.zw)); }";
+    MTLCompileOptions *options=[MTLCompileOptions new];
+    options.mathMode=MTLMathModeSafe;
+    options.mathFloatingPointFunctions=MTLMathFloatingPointFunctionsPrecise;
     NSError *error=nil;
-    id<MTLLibrary> library=[device newLibraryWithData:data error:&error];
+    id<MTLLibrary> library=[device newLibraryWithSource:source options:options error:&error];
     if(!library){printf("correctness half library error=%s\n",error.description.UTF8String);return NO;}
     NSError *missing=nil;
     id<MTLFunction> absent=[library newFunctionWithName:@"unixnu_absent_function" constantValues:[MTLFunctionConstantValues new] error:&missing];
@@ -114,7 +118,8 @@ int main(int argc,const char **argv) {
         printf("correctness device=%s\n",device.name.UTF8String);
         BOOL ok=imports(device);
         ok=heaps(device) && ok;
-        if(strcmp(argv[1],"--cache-only"))ok=compounds(device,@(argv[1])) && ok;
+        if(strcmp(argv[1],"--cache-only") && strcmp(argv[1],"--all"))return 2;
+        if(!strcmp(argv[1],"--all"))ok=compounds(device) && ok;
         return ok?0:1;
     }
 }

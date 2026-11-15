@@ -50,15 +50,19 @@ video_probe() {
     /bin/sleep 90
     tool=/private/var/ngpu/test
     [ -x "$tool/bin/video-probe" ] || return
-    /bin/date -u >> "$session/video-probe.log"
-    "$tool/bin/video-probe" "$tool/share/video-probe.mp4" --require-hardware >> "$session/video-probe.log" 2>&1 &
-    probe=$!
-    ( /bin/sleep 30; /bin/kill -KILL "$probe" 2>/dev/null ) &
-    alarm=$!
-    wait "$probe"
-    result=$?
-    /bin/kill "$alarm" 2>/dev/null || :
-    /bin/echo "video probe exit=$result" >> "$session/video-probe.log"
+    for fixture in "$tool/share/video-probe.mp4" "$tool/share/video-probe-10bit.mp4"; do
+        [ -s "$fixture" ] || continue
+        /bin/date -u >> "$session/video-probe.log"
+        /bin/echo "video fixture=$fixture" >> "$session/video-probe.log"
+        "$tool/bin/video-probe" "$fixture" --require-hardware >> "$session/video-probe.log" 2>&1 &
+        probe=$!
+        ( /bin/sleep 30; /bin/kill -KILL "$probe" 2>/dev/null ) &
+        alarm=$!
+        wait "$probe"
+        result=$?
+        /bin/kill "$alarm" 2>/dev/null || :
+        /bin/echo "video probe exit=$result" >> "$session/video-probe.log"
+    done
 }
 video_probe &
 graphics_state() {

@@ -23,7 +23,7 @@ set -u
     tool=/private/var/ngpu/test/bin/icon-probe
     log=/Users/Shared/unixnu-test/icon-probe.log
     /bin/echo "icon probe boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)" > "$log"
-    /private/var/ngpu/test/bin/gpu-correctness-probe /private/var/ngpu/test/share/half-compound.air >> "$log" 2>&1 &
+    /private/var/ngpu/test/bin/gpu-correctness-probe --all >> "$log" 2>&1 &
     probe=$!
     ( /bin/sleep 90; /bin/kill -KILL "$probe" 2>/dev/null ) &
     alarm=$!

@@ -11,16 +11,23 @@ static void samplePixels(CVImageBufferRef image,CMTime pts,const struct Results 
     OSType format=CVPixelBufferGetPixelFormatType(image);
     printf("video-probe pixels format=0x%08x size=%zux%zu coded=%dx%d pts=%.6f\n",(unsigned)format,
            CVPixelBufferGetWidth(image),CVPixelBufferGetHeight(image),results->width,results->height,CMTimeGetSeconds(pts));
-    if(format!=kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange && format!=kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)return;
+    BOOL ten=format==kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange || format==kCVPixelFormatType_420YpCbCr10BiPlanarFullRange;
+    if(!ten && format!=kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange && format!=kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)return;
     if(CVPixelBufferLockBaseAddress(image,kCVPixelBufferLock_ReadOnly))return;
     for(size_t plane=0;plane<2;++plane) {
         const uint8_t *base=CVPixelBufferGetBaseAddressOfPlane(image,plane);
         size_t stride=CVPixelBufferGetBytesPerRowOfPlane(image,plane);
         size_t height=MIN(CVPixelBufferGetHeightOfPlane(image,plane),(size_t)results->height/(plane?2:1));
         size_t width=MIN(CVPixelBufferGetWidthOfPlane(image,plane)*(plane?2:1),(size_t)results->width);
-        for(size_t y=0;base && y<height;y+=16) {
-            printf("video-probe grid plane=%zu row=%zu step=16 hex=",plane,y);
-            for(size_t x=0;x<width;x+=16){printf("%02x",base[y*stride+x]);if(plane && x+1<width)printf("%02x",base[y*stride+x+1]);}
+        size_t xStep=MAX((size_t)16,((width+39)/40+1)&~(size_t)1);
+        size_t yStep=MAX((size_t)16,((size_t)results->height+23)/24);
+        for(size_t y=0;base && y<height;y+=yStep) {
+            printf("video-probe grid plane=%zu row=%zu step=%zu hex=",plane,y,xStep);
+            for(size_t x=0;x<width;x+=xStep)for(size_t channel=0;channel<(plane?2:1) && x+channel<width;++channel) {
+                const uint8_t *at=base+y*stride+(x+channel)*(ten?2:1);
+                if(ten){uint16_t value;memcpy(&value,at,2);printf("%04x",value>>6);}
+                else printf("%02x",*at);
+            }
             putchar('\n');
         }
     }
@@ -89,10 +96,17 @@ int main(int argc, const char **argv) {
                 CMVideoDimensions size = CMVideoFormatDescriptionGetDimensions(format);
                 results.width=size.width; results.height=size.height;
                 FourCharCode codec = CMFormatDescriptionGetMediaSubType(format);
+                NSDictionary *extensions=(__bridge NSDictionary *)CMFormatDescriptionGetExtensions(format);
+                NSDictionary *atoms=extensions[(__bridge NSString *)kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms];
+                NSData *configuration=atoms[@"hvcC"];
+                BOOL ten=configuration.length>18 && ((((const uint8_t *)configuration.bytes)[17]&7)!=0);
+                NSDictionary *attributes=@{(__bridge NSString *)kCVPixelBufferPixelFormatTypeKey:
+                    @(ten?kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+                    (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey:@{}};
                 NSDictionary *spec = required ? @{(__bridge NSString *)kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: @YES}
                     : @{(__bridge NSString *)kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: @(!software)};
                 status = VTDecompressionSessionCreate(kCFAllocatorDefault, format, (__bridge CFDictionaryRef)spec,
-                    NULL, &callback, &session);
+                    (__bridge CFDictionaryRef)attributes, &callback, &session);
                 printf("video-probe codec=0x%08x size=%dx%d mode=%s create=%d\n", (unsigned)codec,
                     (int)size.width, (int)size.height, required ? "required" : software ? "software" : "enabled", (int)status);
                 if (status) { CFRelease(sample); break; }
