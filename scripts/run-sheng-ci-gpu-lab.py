@@ -19,7 +19,7 @@ def run(*command, **kwargs):
     return subprocess.run([str(value) for value in command], check=True, **kwargs)
 
 
-def extract_kernel(image, output, work):
+def extract_kernel(image, output, work, policy=None):
     sys.path.insert(0, str(CORE / 'scripts'))
     from unixnu import ramdisk
     with image.open('rb') as source:
@@ -44,6 +44,8 @@ def extract_kernel(image, output, work):
         ramdisk.decode(payload, decoded, CORE)
         payload = decoded
     run('mcopy', '-i', payload, '::/EFI/UniXNU/Payloads/kernel.macho', output)
+    if policy is not None:
+        run('mcopy', '-i', payload, '::/EFI/UniXNU/Payloads/kernel.macho.vroot', policy)
 
 
 def main():
@@ -88,9 +90,11 @@ def main():
         with tempfile.TemporaryDirectory(prefix='kernel-', dir=args.output) as directory:
             work = Path(directory)
             kernel = work / 'kernel.macho'
-            extract_kernel(inputs / 'boot.img', kernel, work)
+            policy = work / 'root-policies.bin'
+            extract_kernel(inputs / 'boot.img', kernel, work, policy)
             run(sys.executable, DEVICE / 'scripts/repack-sheng-boot.py', args.base, image,
-                '--payload-file', str(kernel) + '=EFI/UniXNU/Payloads/kernel.macho', '--remove-arg', 'data-reset')
+                '--payload-file', str(kernel) + '=EFI/UniXNU/Payloads/kernel.macho',
+                '--payload-file', str(policy) + '=EFI/UniXNU/Payloads/kernel.macho.vroot', '--remove-arg', 'data-reset')
     (args.output / 'sources.json').write_text(json.dumps(dict(repository=args.repository, run=args.run,
         device_commit=status['headSha'], gpu_base=str(args.base.resolve()), preserve_data=True), indent=2) + '\n')
     environment = dict(os.environ, READER=str(args.reader.resolve()), OUT=str((args.output / 'logs').resolve()))
