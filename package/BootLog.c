@@ -58,6 +58,7 @@ extern volatile int native_hid_input_results[8] __attribute__((weak_import));
 extern char native_hid_input_registry[2048] __attribute__((weak_import));
 extern char native_hid_input_props[1024] __attribute__((weak_import));
 extern int native_ufs_log_panic(void) __attribute__((weak_import));
+extern void boot_reset_watchdog_stop(void) __attribute__((weak_import));
 extern unsigned native_ufs_store_gpt_check(void) __attribute__((weak_import));
 extern uint32_t cs_text_fixup_parsed __attribute__((weak_import));
 extern uint32_t cs_text_fixup_applied __attribute__((weak_import));
@@ -2917,6 +2918,7 @@ static void writer(void *arg, wait_result_t result) {
 // other CPUs still running: the message buffer with the panic text appended, then a header (state 5) that makes it visible, written
 // through NativeUfs's panic path. Only the first call writes; a panic before the writer opened its window writes nothing.
 void boot_log_panic_flush(void) {
+  if (&boot_reset_watchdog_stop) boot_reset_watchdog_stop();
   static volatile int done;
   struct boot_log_header *live = boot_log_live;
   if (done || !live || !boot_log_panic_buffer || !&native_ufs_log_panic || !native_ufs_log_panic()) return;
