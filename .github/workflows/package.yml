@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: UniXNU/UniXNU
-          ref: 75f35420137371d10b5c66399a39619991cde077 # macOS 27.3 profile + source-storage integration
+          ref: fd7280a44e60f33191e7714051366734326fecbc # main: macOS GPU/root-storage/APFS/VM fixes the author boots from
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4
@@ -75,6 +75,7 @@ jobs:
           UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
           GITHUB_TOKEN: ${{ github.token }}
           OS_PROFILE: ${{ inputs.os }}
+          UNIXNU_ROOT: ${{ github.workspace }}/UniXNU
           # The macOS root hash tables (~150 MiB) live in userdata as NAME.vroot, not the boot image;
           # the boot image carries only the 544-byte signed headers (manifest.header.bin).
           XNU_SOURCE_STORAGE_TABLES: userdata
@@ -95,7 +96,7 @@ jobs:
           echo "OUT=$OUT" >> "$GITHUB_ENV"
           echo "TREE=$TREE" >> "$GITHUB_ENV"
           # Sign the root windows with a fresh owner key; headers go to the device repo, tables to the tree.
-          python3 "$TREE/scripts/ci-macos-policies.py" -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI"
+          python3 "$DEVICE/scripts/ci-macos-policies.py" -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI"
           ./unixnu build kernel package firmware payload -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI" --init-data
           ./unixnu bootimg -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI"
       - name: collect root inputs
