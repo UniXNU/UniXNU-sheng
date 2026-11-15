@@ -197,10 +197,15 @@ def authenticate(root):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--sysfs', type=Path, default=Path('/sys/class/qcom-battery'))
+    parser.add_argument('--sysfs', type=Path, help='Xiaomi battery attributes (automatically discovered when omitted)')
     parser.add_argument('--authenticate', action='store_true', help='authenticate both gauges and a compatible Xiaomi PD charger')
     parser.add_argument('--out', type=Path, help='save telemetry and the authentication result as JSON')
     args = parser.parse_args()
+    if args.sysfs is None:
+        candidates = [Path('/sys/class/qcom-battery'), *Path('/sys/bus/auxiliary/devices').glob('pmic_glink.power-supply.*/xiaomi')]
+        args.sysfs = next((path for path in candidates if (path / 'request_vdm_cmd').exists()), None)
+        if args.sysfs is None:
+            parser.error('Xiaomi battery sysfs absent; load qcom_battmgr and the ADSP dependencies and firmware')
     result = {'before': telemetry(args.sysfs)}
     if args.authenticate:
         source = result['before'].get('real_type')
