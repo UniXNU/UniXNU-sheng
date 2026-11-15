@@ -22,12 +22,19 @@ for attempt in $(/usr/bin/seq 1 105); do
             END {print state}
         ' "$cache")
         /bin/echo "$state"
-        case "$state" in *' complete=1 '*) ready=1; break ;; esac
+        case "$state" in
+            *' complete=1 '*) ready=1; break ;;
+            *' complete=2 '*)
+                /bin/echo 'Whole-system shader priming finished with failures.'
+                /usr/bin/touch /Users/Shared/unixnu-test/reboot-requested
+                exit 1 ;;
+        esac
     fi
     /bin/sleep 60
 done
 if [ "$ready" != 1 ]; then
     /bin/echo 'Priming is incomplete; the comparison scene remains pending.'
+    /usr/bin/touch /Users/Shared/unixnu-test/reboot-requested
     exit 1
 fi
 /bin/date -u
