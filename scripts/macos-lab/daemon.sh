@@ -12,6 +12,11 @@ for name in icon-probe.log video-probe.log icons.png; do
 done
 build=/Library/GPUBundles/NativeAdrenoMetal.bundle/Contents/Resources/gpu-build.json
 state=/private/var/db/unixnu-lab
+icon_cache=$(/usr/bin/sudo -u unixnu /usr/bin/getconf DARWIN_USER_CACHE_DIR)
+icon_command_log=${icon_cache%/}/com.apple.iconservicesagent/com.apple.metal/m2v/command-buffer.log
+if [ -s /private/var/ngpu/test/share/icon-probe-path ]; then
+    /bin/rm -f "$icon_command_log"
+fi
 /bin/mkdir -p "$state"
 /bin/chmod 700 "$state"
 if [ -r "$build" ]; then
@@ -89,6 +94,9 @@ graphics_state() {
     if [ "$(/usr/bin/stat -f %z "$session/graphics-events.log")" -gt 2097152 ]; then
         /usr/bin/tail -c 2097152 "$session/graphics-events.log" > "$session/graphics-events-previous.log"
         : > "$session/graphics-events.log"
+    fi
+    if [ -s "$icon_command_log" ]; then
+        /bin/cp "$icon_command_log" "$session/graphics-events-previous.log"
     fi
 }
 snapshot() {
