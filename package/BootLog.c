@@ -18,6 +18,7 @@
 #include <kern/thread.h>
 #include <kern/clock.h>
 #include <mach/mach_time.h>
+#include <machine/machine_routines.h>
 #include <string.h>
 #include <pexpert/pexpert.h>
 #include <kern/misc_protos.h>
