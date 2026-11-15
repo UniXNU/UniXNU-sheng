@@ -184,6 +184,7 @@ extern volatile uint32_t native_bluetooth_boot_state[12] __attribute__((weak_imp
 extern volatile uint32_t native_bluetooth_processes[4] __attribute__((weak_import));
 extern volatile uint64_t native_bluetooth_ibs[8] __attribute__((weak_import));
 extern volatile uint32_t native_bluetooth_discovery[18] __attribute__((weak_import));
+extern size_t sheng_bluetooth_hci_dump(char *, size_t, uint64_t *) __attribute__((weak_import));
 extern char *volatile native_bluetooth_boot_text __attribute__((weak_import));
 extern volatile uint32_t native_bluetooth_boot_text_length __attribute__((weak_import));
 extern volatile uint32_t qbt_transport_activity[4] __attribute__((weak_import));
@@ -507,6 +508,7 @@ void boot_log_process_exit(int pid, const char *name, int status, unsigned space
 }
 
 static volatile int boot_log_panicked;   // set by boot_log_panic_flush: the writer no longer writes
+static int boot_log_hci_on;
 
 // The export: boot_log_export_put takes the blob's pieces in order (any thread) and writes them through a staging buffer straight into
 // the half of the export region that does not hold the last complete blob; once the last piece is on the medium that blob becomes the
@@ -2821,6 +2823,11 @@ static void writer(void *arg, wait_result_t result) {
   boot_log_live = &h;
   boot_log_state = 2;
   round_watch_start();
+  uint64_t hci_committed = 0;
+  uint32_t bluetooth_log = 0;
+  PE_parse_boot_argn("log-bluetooth", &bluetooth_log, sizeof bluetooth_log);
+  const size_t hci_reserve = bluetooth_log >= 3 && &sheng_bluetooth_hci_dump ? 16384 : 0;
+  boot_log_hci_on = hci_reserve != 0;
   for (;;) {
     const uint64_t began = log_ticks();
     const unsigned now = (unsigned)((began - start) / f);
@@ -2838,7 +2845,11 @@ static void writer(void *arg, wait_result_t result) {
     memset(boot_log_buffer, 0, LogSlotBlocks * LogBlock);
     // diag=1 writes the normal rows too (the same groups, the same UFS writes per round as without it) plus its own: the head line's
     // diag fields, the [diag] export row and the [diag msgs] lines. Its other material goes to the export region once (diag_thread).
-    size_t text = log_groups_filter((char *)boot_log_buffer, compose((char *)boot_log_buffer, LogSlotBlocks * LogBlock, h.slots_written, now));
+    size_t text = log_groups_filter((char *)boot_log_buffer, compose((char *)boot_log_buffer, LogSlotBlocks * LogBlock - hci_reserve, h.slots_written, now));
+    uint64_t hci_next = hci_committed;
+    if (hci_reserve)
+      text += sheng_bluetooth_hci_dump((char *)boot_log_buffer + text,
+          LogSlotBlocks * LogBlock - text, &hci_next);
     LOG_AT("round rows");
     {
       char row[200];
@@ -2896,6 +2907,7 @@ static void writer(void *arg, wait_result_t result) {
     ok &= native_ufs_log_write(0, 1, boot_log_buffer);
     LOG_AT("ufs sync");
     ok &= native_ufs_log_sync();
+    if (ok) hci_committed = hci_next;
     LOG_AT("autoreset");
     if (!ok) {boot_log_errors = ++errors;} else errors = 0;
     if (errors >= LogMaxErrors) {boot_log_state = 3; return;}
@@ -2985,6 +2997,16 @@ void boot_log_panic_flush(void) {
     boot_log_panic_buffer[n++] = '\n';
   }
   struct boot_log_header h = *live;
+  if (boot_log_hci_on && &sheng_bluetooth_hci_dump) {
+    const uint32_t reserve = 16384;
+    if (n > cap - reserve) {
+      const uint32_t drop = n - (cap - reserve);
+      memmove(boot_log_panic_buffer, boot_log_panic_buffer + drop, n - drop);
+      n -= drop;
+    }
+    uint64_t cursor = UINT64_MAX;
+    n += (uint32_t)sheng_bluetooth_hci_dump((char *)boot_log_panic_buffer + n, cap - n, &cursor);
+  }
   h.msg_bytes = n; h.msg_mode = 0; h.rounds++; h.state = 5;   // the linear form, whole area
   native_ufs_log_write(LogMsgFirst, LogMsgBlocks, boot_log_panic_buffer);
   memset(boot_log_panic_buffer, 0, LogBlock);
