@@ -77,6 +77,14 @@ revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
 command = "python3 scripts/run-local-kernel.py --sdk SDK --tools TOOLCHAIN -- build kernel prelink -D ../UniXNU-sheng --os macos-27 --data-ramdisk installed-data.dbr --skip-preflight"
 result = "The macOS integration resolves the SM8550 GENI UART and video interfaces from the selected platform source."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9ea98e5b491c96883e5ea55659d8e0b9feb7ab33"
+revision = "9ea98e5b491c96883e5ea55659d8e0b9feb7ab33"
+command = "python3 scripts/run-local-kernel.py --sdk SDK --tools TOOLS -- build kernel prelink -D DEVICE --os macos-27 --data-ramdisk installed-data.dbr --skip-preflight"
+result = "The exported Xcode 26.6 compiler, classic linker, SDK and kernel tools build the macOS arm64e kernel and prelink it locally. The current component selection also builds the signed Metal plugin and guarded 256 MiB lab payload."
+
 [[area]]
 id = "firmware"
 status = "implemented"
@@ -927,6 +935,14 @@ revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
 command = "python3 scripts/run-local-kernel.py --sdk SDK --tools TOOLCHAIN -- build kernel prelink -D ../UniXNU-sheng --os macos-27 --data-ramdisk installed-data.dbr --skip-preflight"
 result = "The entry-probe build uses the shared LLVM lookup; the selected component lock resolves in the local macOS kernel and firmware builds."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9ea98e5b491c96883e5ea55659d8e0b9feb7ab33"
+revision = "9ea98e5b491c96883e5ea55659d8e0b9feb7ab33"
+command = "gpu-correctness-probe --cache-only; video-probe video-probe.mp4 --require-hardware; python3 scripts/compare-video-probe.py video-probe.mp4 video-probe.log"
+result = "On Apple M1 Pro, 16 persistent IOSurface CPU/GPU round trips and both exact-heap layout policies pass. The 120-frame HEVC fixture returns 120 frames with no drops, and all 1880 sampled NV12 bytes match FFmpeg. The ARM64e lab tools and authored half compound AIR assemble and package successfully."
+
 [[area]]
 id = "arm64e-os"
 status = "planned"
@@ -1007,3 +1023,11 @@ reference = "package/BootLog.c"
 command = "fastboot boot boot.img (log-video=1 diag=1); the test agent transcodes a 1280x720 H.264 clip with avconvert"
 revision = "9252d988c0b668bc1f68c3e482951c8b2b33abc1"
 result = "[video] stage 6; [video vt] stage 2, 27 sessions, 60 frames handed over with pictures; [video media] 4808 sessions opened, 1 source change at 1280x720 8-bit, 60 bitstream buffers queued, 60 pictures returned, 4807 sessions failed with 0x01000005 (HEVC). No GPU hang in the run."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9ea98e5b491c96883e5ea55659d8e0b9feb7ab33"
+revision = "9ea98e5b491c96883e5ea55659d8e0b9feb7ab33"
+command = "python3 scripts/check-vt-parameters-host.py video-probe.mp4"
+result = "The production VideoToolbox parameter-set parser accepts the complete 2416-byte HEVC configuration, including its SEI NAL, and rejects a truncated NAL under ASan and UBSan. The full-rate decoder delivery change compiles in the macOS arm64e kernel."
