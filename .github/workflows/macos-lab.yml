@@ -2,11 +2,6 @@ name: sheng macOS lab
 
 on:
   workflow_dispatch:
-  push:
-    branches: [fix/sheng-macos27-bringup]
-    paths:
-      - .github/workflows/macos-lab.yml
-      - scripts/prepare-macos-install.py
 
 permissions:
   contents: read
@@ -35,14 +30,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: rponeawa/UniXNU
-          ref: 260cb6b92e817cdb93d0bc6523d138e7217c5558
+          ref: 927c783408dc2ff8e14aee36dda77ad998a837f9
           path: UniXNU
           submodules: recursive
       - name: Check out firmware sources
         uses: actions/checkout@v4
         with:
           repository: UniXNU/uefi-sheng
-          ref: 66421cb7bb5694843aec8de1ca3d1de4c20cca38
+          ref: 511add6c9a5a948e67b9013869a5edab8daa0a97
           path: uefi-sheng
           submodules: recursive
       - name: Restore build inputs
@@ -59,27 +54,42 @@ jobs:
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/m2v-target
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/mesa-tu-macos27
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/runtime/data.dbr
+            device/drivers/Ath12kWifi/deps
             device/.cache/firmware
       - name: Refresh pinned translator checkout
         run: |
           python3 - <<'PYTHON'
-          import json, shutil, subprocess
+          import hashlib, json, shutil, subprocess
           from pathlib import Path
           core = Path('UniXNU')
           pin = json.loads((core / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']['commit']
           source = core / 'out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/gpu-reference/metal2vulkan'
+          signature = hashlib.sha256((pin + '\n').encode() + (core / 'drivers/AdrenoMetal/bridge/patches/0043-unixnu-runtime-on-development-400efe79.patch').read_bytes()).hexdigest()
+          stamp = source.with_name('unixnu-translator-patch.sha256')
           if source.exists():
               actual = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
-              if actual != pin:
+              if actual != pin or not stamp.exists() or stamp.read_text().strip() != signature:
                   shutil.rmtree(source)
+          stamp.parent.mkdir(parents=True, exist_ok=True)
+          stamp.write_text(signature + '\n')
           PYTHON
       - name: Install build tools
         run: |
-          brew install dtc llvm lld cmake mtools ninja glslang shaderc spirv-tools bison pkgconf rustup unifdef openssl@3 zstd blacktop/tap/ipsw
+          brew install dtc llvm lld llvm@22 lld@22 cmake mtools ninja glslang shaderc spirv-tools bison pkgconf rustup unifdef openssl@3 zstd blacktop/tap/ipsw
           {
             echo "$HOME/.cargo/bin"
             echo "/opt/homebrew/opt/bison/bin"
           } >> "$GITHUB_PATH"
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          toolchain = Path('uefi-toolchain').resolve()
+          toolchain.mkdir()
+          for name in ('clang', 'llvm-lib', 'llvm-rc', 'lld-link'):
+              package = 'lld@22' if name == 'lld-link' else 'llvm@22'
+              (toolchain / name).symlink_to(Path('/opt/homebrew/opt') / package / 'bin' / name)
+          with Path(__import__('os').environ['GITHUB_ENV']).open('a') as output:
+              output.write('CLANG_BIN=' + str(toolchain) + '/\n')
+          PYTHON
           rustup toolchain install 1.98.0 --profile minimal --component rust-src
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
@@ -89,6 +99,15 @@ jobs:
           ./unixnu defconfig sheng_macos_defconfig -D ../device --os macos-27
           ./unixnu fetch --os macos-27
           python3 ../device/scripts/prepare-macos-install.py
+      - name: Publish shader inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shader-inventory
+          path: |
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/prime-list.txt
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/prime-list.json
+          retention-days: 1
       - name: Build images
         working-directory: device
         run: >-
@@ -145,4 +164,5 @@ jobs:
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/m2v-target
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/mesa-tu-macos27
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/runtime/data.dbr
+            device/drivers/Ath12kWifi/deps
             device/.cache/firmware

@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Add signed GPU acceptance tools and current lab scripts to a timed RAM boot."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import tomllib
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def run(*command, **kwargs):
+    subprocess.run([str(value) for value in command], check=True, **kwargs)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('input', type=Path)
+    parser.add_argument('output', type=Path)
+    parser.add_argument('--tools', type=Path, action='append', required=True)
+    parser.add_argument('--plugin', type=Path, required=True, help='current signed macos27 GPU build directory')
+    parser.add_argument('--payload-mib', type=int, default=256)
+    parser.add_argument('--preserve-data', action='store_true')
+    args = parser.parse_args()
+    if args.output.exists() or args.input.resolve() == args.output.resolve():
+        parser.error('choose a new output file')
+    core = (ROOT / tomllib.loads((ROOT / 'board.toml').read_text())['package']['unixnu']).resolve()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='sheng-gpu-lab-', dir=args.output.parent) as directory:
+        work = Path(directory)
+        with args.input.open('rb') as source:
+            header = source.read(4096)
+            if header[:8] != b'ANDROID!':
+                parser.error('require a sheng Android boot image')
+            kernel, _, ramdisk, _, _, _, _, page, version, _ = struct.unpack_from('<10I', header, 8)
+            if version != 0 or page < 2048 or page & (page - 1):
+                parser.error('require the sheng header-v0 layout')
+            source.seek(page + (kernel + page - 1) // page * page)
+            payload = work / 'payload.img'
+            with payload.open('wb') as target:
+                left = ramdisk
+                while left:
+                    data = source.read(min(left, 8 * 1024 * 1024))
+                    if not data:
+                        parser.error('truncated payload')
+                    target.write(data)
+                    left -= len(data)
+        original_addon, original_trust = work / 'original-addon.bin', work / 'original-trust.bundle'
+        prefix = 'EFI/UniXNU/Payloads/kernel.macho.'
+        run('mcopy', '-i', payload, '::/' + prefix + 'gpuaddon', original_addon)
+        run('mcopy', '-i', payload, '::/' + prefix + 'trustcache', original_trust)
+        files = work / 'files'
+        for tools in args.tools:
+            shutil.copytree(tools, files, dirs_exist_ok=True)
+        for name in ('bin/gpu-acceptance', 'lib/libvulkan.1.dylib', 'lib/libVkLayer_khronos_validation.dylib'):
+            if not (files / name).is_file():
+                parser.error('missing diagnostic input: ' + name)
+        icd = files / 'etc/vulkan/icd.d/turnip.json'
+        icd.parent.mkdir(parents=True, exist_ok=True)
+        icd.write_text(json.dumps(dict(file_format_version='1.0.0', ICD=dict(
+            library_path='/Library/GPUBundles/NativeAdrenoMetal.bundle/Contents/MacOS/libvulkan_freedreno.dylib',
+            api_version='1.3.0')), indent=2) + '\n')
+        hashes = []
+        code = args.plugin / 'NativeAdrenoMetal.bundle/Contents/MacOS'
+        for path in sorted(files.rglob('*')) + sorted(code.iterdir()):
+            if not path.is_file():
+                continue
+            with path.open('rb') as source:
+                magic = source.read(4)
+            if magic not in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe'):
+                continue
+            run('codesign', '--verify', '--strict', path)
+            if magic == b'\xcf\xfa\xed\xfe':
+                with path.open('rb') as image:
+                    _, cpu, subtype = struct.unpack('<III', image.read(12))
+                if cpu != 0x100000c or subtype & 0xffffff != 2:
+                    raise SystemExit('require arm64e code: ' + str(path))
+            else:
+                run('lipo', '-verify_arch', 'arm64e', path)
+            detail = subprocess.run(['codesign', '--display', '--verbose=4', str(path)], check=True,
+                                    capture_output=True, text=True).stderr
+            match = re.search(r'^CDHash=([0-9a-f]{40})$', detail, re.M)
+            if not match:
+                raise SystemExit('no signed code identity: ' + str(path))
+            hashes.append(match[1])
+        addon, trust = work / 'lab-addon.bin', work / 'lab-trust.bundle'
+        gpu = work / 'gpu-addon.bin'
+        run(sys.executable, core / 'scripts/make-gpu-addon.py', '--publish', '--no-daemon',
+            '--prefix', 'GPUBundles', '--prime-list', core / 'build/prime-list.txt', gpu,
+            env=dict(os.environ, ADRENO_PLUGIN_DIR=str(args.plugin.resolve())))
+        run(sys.executable, core / 'scripts/addon-add-dir.py', original_addon, addon,
+            '--addon', gpu, 'test', files, 'test', ROOT / 'scripts/macos-lab')
+        run(sys.executable, core / 'scripts/trust-append-module.py', original_trust, trust, *sorted(set(hashes)))
+        command = [sys.executable, ROOT / 'scripts/repack-sheng-boot.py', args.input, args.output,
+                   '--payload-mib', args.payload_mib,
+                   '--payload-file', str(addon) + '=' + prefix + 'gpuaddon',
+                   '--payload-file', str(trust) + '=' + prefix + 'trustcache']
+        if args.preserve_data:
+            command += ['--remove-arg', 'data-reset']
+        run(*command)
+    print(f'GPU lab image: {args.output}; {len(set(hashes))} signed diagnostic images')
+
+
+if __name__ == '__main__':
+    main()

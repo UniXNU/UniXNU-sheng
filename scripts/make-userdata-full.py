@@ -10,6 +10,7 @@ earlier userdata-root.json, and the manifest's against its manifest_sha256.
 
   make-userdata-full.py OS.dmg SYSTEMOS.dmg ROOT.json PARTITION_BYTES OUTPUT [WINDOW.dmg ...] [--object NAME=FILE ...]
   make-userdata-full.py --raw USERDATA_ROOT.img PARTITION_BYTES OUTPUT
+  make-userdata-full.py --zstd USERDATA_ROOT.img.zst PARTITION_BYTES OUTPUT
 """
 import hashlib
 import json
@@ -90,15 +91,32 @@ class Writer:
 
 
 def main():
-    if len(sys.argv) == 5 and sys.argv[1] == '--raw':
+    if len(sys.argv) == 5 and sys.argv[1] in ('--raw', '--zstd'):
         image, partition, output = sys.argv[2], int(sys.argv[3]), sys.argv[4]
-        size = os.path.getsize(image)
-        if size % BLOCK or partition % BLOCK or size > partition or os.path.realpath(image) == os.path.realpath(output):
+        compressed = sys.argv[1] == '--zstd'
+        if partition % BLOCK or os.path.realpath(image) == os.path.realpath(output):
             sys.exit('require separate files and block-aligned sizes within the userdata partition')
         writer = Writer(output, partition // BLOCK)
-        with open(image, 'rb') as source:
+        process = subprocess.Popen(['zstd', '-d', '--stdout', image], stdout=subprocess.PIPE) if compressed else None
+        source = process.stdout if process else open(image, 'rb')
+        size = 0
+        try:
             for data in iter(lambda: source.read(CHUNK), b''):
+                size += len(data)
+                if len(data) % BLOCK or size > partition:
+                    raise ValueError('root image exceeds the partition or ends within a block')
                 writer.data(data)
+            if process and process.wait():
+                raise ValueError('zstd decompression failed')
+        except BaseException:
+            if process and process.poll() is None:
+                process.terminate()
+                process.wait()
+            writer.out.close()
+            os.unlink(output)
+            raise
+        finally:
+            source.close()
         writer.zeros((partition - size) // BLOCK)
         writer.close()
         print(f'{output}: root {size} bytes, partition {partition} bytes, remaining blocks filled with zeros')

@@ -45,6 +45,7 @@
 "MEMORY_PROTECTION" = "TRUE"
 "SHIP_MODE" = "FALSE"
 "BUILDID_STRING" = "sheng-research"
+"SHENG_BOOT_GUARD" = "1"
 
 
 

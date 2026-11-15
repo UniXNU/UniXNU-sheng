@@ -2897,18 +2897,19 @@ void boot_log_panic_flush(void) {
   native_ufs_log_sync();
 }
 
-// autoreset: mark the bootloader cell (any restart is fastboot) and arm the hypervisor's watchdog, once. It runs as the first thing
-// after the scheduler starts (EARLY_BOOT), before the kernel adopts memory or starts IOKit, so a panic from there on brings the tablet
-// back to fastboot; the first tick calls it again in case the startup hook did not run.
+// EARLY_BOOT takes over the firmware watchdog before memory adoption and IOKit startup.
+// autoreset sets a ping deadline; the firmware's bootloader reboot reason persists across the handoff.
 static void boot_reset_arm(void) {
   static int armed;
-  uint32_t autoreset = 0;
+  uint32_t autoreset = 0, inherited = 0;
   if (armed) return;
   armed = 1;
-  if (PE_parse_boot_argn("autoreset", &autoreset, sizeof autoreset) && autoreset && &boot_reset_probe &&
+  PE_parse_boot_argn("autoreset", &autoreset, sizeof autoreset);
+  PE_parse_boot_argn("uefi-watchdog", &inherited, sizeof inherited);
+  if ((autoreset || inherited) && &boot_reset_probe &&
       boot_reset_probe(boot_log_reset_probe_text, sizeof boot_log_reset_probe_text) == 0) {
     if (&boot_reset_mark_bootloader) boot_reset_mark_bootloader(boot_log_reset_mark, sizeof boot_log_reset_mark);
-    if (&boot_reset_watchdog) boot_reset_watchdog(autoreset + 60, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
+    if (&boot_reset_watchdog) boot_reset_watchdog(autoreset ? autoreset + 30 : 0, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
   }
 }
 STARTUP(EARLY_BOOT, STARTUP_RANK_FIRST, boot_reset_arm);
@@ -2918,10 +2919,7 @@ void boot_log_tick(unsigned now) {
   (void)now;
   if (boot_log_started) return;
   boot_log_started = 1;
-  // An unattended run must come back however it ends: on the desktop past its deadline (int-229 first suspected) or in a panic seconds
-  // after the start, before UFS and this log exist (int-229: a duplicate class at PE_lockdown_iokit). So the first tick, independent of
-  // log, marks the cell (any restart is fastboot) and arms the hypervisor's watchdog, which bites a minute after the pings stop:
-  // after the autoreset deadline, or when a panic parks the cores.
+  // The first tick also attempts watchdog setup when the startup hook has not run.
   boot_reset_arm();
   uint32_t mode = 0;
   if (!PE_parse_boot_argn("log", &mode, sizeof mode) || mode != 1) return;
