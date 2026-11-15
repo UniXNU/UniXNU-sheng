@@ -1,28 +1,19 @@
 name: package
 
-# scripts/package.sh of this repository on a macOS runner, with the UniXNU and uefi-sheng
-# checkouts beside it, the layout board.toml names. The platform seed comes from the
-# repository secret UNIXNU_UNIQUE_CHIP_ID and is baked into the images, so the run's
-# artifacts belong to one device alone: download them, then delete the run.
+# Full macOS 27.3 build for sheng on the free macos-26 runner (Xcode 26.6, ~98 GB free disk).
+# Builds kernel + package + firmware + payload + boot image, generates the root-policy signatures
+# and the Data seed in-run. The 16 GB userdata image is assembled locally from the IPSW (block I/O
+# only) using the vroot hash tables this run uploads; it is too large for free artifact storage.
+# Artifacts belong to one device (platform seed secret): download them, then delete the run.
 
 on:
   workflow_dispatch:
     inputs:
       os:
-        description: "OS profile of the images"
+        description: "OS profile"
         type: choice
-        options: ["27", "26", "17"]
-        default: "27"
-      init_data:
-        description: "Create a NEW installation seed if no saved seed exists (iPadOS 27 only)"
-        type: boolean
-        default: false
-      data_seed_url:
-        description: "Optional original data.dbr URL for an existing installation; otherwise use the saved cache"
-        type: string
-      data_seed_sha256:
-        description: "Required SHA-256 when data_seed_url is supplied"
-        type: string
+        options: ["macos-27"]
+        default: "macos-27"
 
 permissions:
   contents: read
@@ -43,7 +34,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: UniXNU/UniXNU
-          ref: 82b847c4ac3f68a57024b3082ffa3a03442defd9 # Wi-Fi runtime and Data firmware integration
+          ref: 75f35420137371d10b5c66399a39619991cde077 # macOS 27.3 profile + source-storage integration
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4
@@ -61,7 +52,6 @@ jobs:
             echo "/opt/homebrew/opt/bison/bin"
           } >> "$GITHUB_PATH"
           rustup toolchain install 1.98.0 --profile minimal --component rust-src
-          # Fail fast, naming the tool, before forty minutes of build.
           ok=1
           for t in clang xcodebuild make git ninja cmake dtc fdtget fdtput aea compression_tool \
                    mformat mcopy ipsw; do
@@ -79,86 +69,67 @@ jobs:
             echo 'Set the repository secret UNIXNU_UNIQUE_CHIP_ID: the platform seed of the device, 8 hex digits.' >&2
             exit 1
           fi
-      - name: seed cache identity
-        id: seed-key
-        env:
-          SEED: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
-        run: |
-          python3 - <<'PY'
-          import hashlib, os
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
-              out.write('key=data-seed-v1-' + hashlib.sha256(os.environ['SEED'].encode()).hexdigest()[:16] + '\n')
-          PY
-      - uses: actions/cache/restore@v4
-        id: data-cache
-        if: inputs.os == '27'
-        with:
-          path: |
-            UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr
-            UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/inputs.json
-          key: ${{ steps.seed-key.outputs.key }}-${{ inputs.os }}
-      - name: prepare preserved Data seed
-        if: inputs.os == '27'
-        env:
-          INIT_DATA: ${{ inputs.init_data }}
-        run: |
-          python3 - <<'PY'
-          import hashlib, json, os, pathlib, urllib.request
-          inputs = json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text())['inputs']
-          path = pathlib.Path('UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr')
-          url, digest = inputs.get('data_seed_url', ''), inputs.get('data_seed_sha256', '').lower()
-          if url:
-              print('::add-mask::' + url)
-              if not url.startswith('https://') or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
-                  raise SystemExit('A seed URL requires HTTPS and its SHA-256')
-              with urllib.request.urlopen(url, timeout=120) as source:
-                  data = source.read(64 * 1024 * 1024 + 1)
-              if len(data) > 64 * 1024 * 1024 or hashlib.sha256(data).hexdigest() != digest:
-                  raise SystemExit('Seed size or SHA-256 mismatch')
-              if path.exists() and path.read_bytes() != data:
-                  raise SystemExit('Saved seed differs; preserve and inspect it instead of replacing this installation')
-              path.parent.mkdir(parents=True, exist_ok=True)
-              path.write_bytes(data)
-          if not path.is_file() and os.environ['INIT_DATA'] != 'true':
-              raise SystemExit('No saved seed. Supply the ORIGINAL seed for an existing installation, or select init_data for a FIRST installation')
-          PY
-      - name: package
-        working-directory: device
+      - name: build
+        working-directory: UniXNU
         env:
           UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
           GITHUB_TOKEN: ${{ github.token }}
-          INIT_DATA: ${{ inputs.init_data }}
           OS_PROFILE: ${{ inputs.os }}
         run: |
-          args=(--os "$OS_PROFILE" --uefi ../uefi-sheng)
-          if [ "$OS_PROFILE" = 27 ] && [ "$INIT_DATA" = true ]; then
-            args+=(--init-data)
+          set -euo pipefail
+          DEVICE="$GITHUB_WORKSPACE/device"
+          UEFI="$GITHUB_WORKSPACE/uefi-sheng"
+          # Authenticate git fetches so the shared runner IP does not exhaust the anonymous API quota.
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+          ./unixnu defconfig sheng_macos_defconfig -D "$DEVICE" --os "$OS_PROFILE"
+          ./unixnu fetch -D "$DEVICE" --os "$OS_PROFILE"
+          ./unixnu tree -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI"
+          ./unixnu ipsw fetch KernelCache DeviceTree StaticTrustCache "Cryptex1,SystemTrustCache" "Cryptex1,AppTrustCache" \
+                   OS "Cryptex1,SystemOS" "Cryptex1,AppOS" -D "$DEVICE" --os "$OS_PROFILE"
+          OUT=$(./unixnu status --json -D "$DEVICE" --os "$OS_PROFILE" | python3 -c 'import sys,json;print(json.load(sys.stdin)["output"])')
+          TREE="$OUT/tree"
+          echo "output: $OUT"
+          # Sign the root windows with a fresh owner key; headers go to the device repo, tables to the tree.
+          python3 "$TREE/scripts/ci-macos-policies.py" -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI"
+          ./unixnu build kernel package firmware payload -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI" --init-data
+          ./unixnu bootimg -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          echo "TREE=$TREE" >> "$GITHUB_ENV"
+      - name: collect root inputs
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p staging/root staging/reports
+          # Public policy headers + anchors + verification, and the vroot hash tables. NEVER the private key.
+          if [ -d "$GITHUB_WORKSPACE/device/scripts/policies" ]; then
+            cp -R "$GITHUB_WORKSPACE/device/scripts/policies" staging/root/policies
           fi
-          scripts/package.sh "${args[@]}"
-      - uses: actions/cache/save@v4
-        if: always() && inputs.os == '27' && steps.data-cache.outputs.cache-hit != 'true' && hashFiles('UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr') != ''
-        with:
-          path: |
-            UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr
-            UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/inputs.json
-          key: ${{ steps.seed-key.outputs.key }}-${{ inputs.os }}
-      - name: installation seed backup
-        if: always() && inputs.os == '27' && hashFiles('UniXNU/out/sheng/ipados-27.0.1-24A446/sheng_ipados27/runtime/data.dbr') != ''
+          for w in OS SystemOS App; do
+            t="$TREE/build/verified-root-$w/hashes.bin"
+            [ -f "$t" ] && cp "$t" "staging/root/$w.vroot"
+          done
+          # Reports of every step that produced one.
+          for j in "$OUT"/boot/boot.json "$OUT"/payload/payload.json "$OUT"/kernel/kernel.macho.json \
+                   "$OUT"/runtime/inputs.json "$OUT"/runtime/generated.json; do
+            [ -f "$j" ] && cp "$j" staging/reports/
+          done
+          [ -d "$OUT/logs" ] && cp -R "$OUT/logs" staging/reports/logs || true
+          du -sh staging/* || true
+      - name: boot image
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: installation-seed-${{ inputs.os }}
-          retention-days: 1
-          path: |
-            UniXNU/out/sheng/*/*/runtime/data.dbr
-            UniXNU/out/sheng/*/*/runtime/inputs.json
-      - name: images
-        uses: actions/upload-artifact@v4
-        with:
-          name: images-${{ inputs.os }}
+          name: boot-${{ inputs.os }}
           retention-days: 1
           if-no-files-found: error
           path: |
-            UniXNU/out/sheng/*/*/boot/boot.img
-            UniXNU/out/sheng/*/*/payload/payload.img
-            UniXNU/out/sheng/*/*/kernel/kernel.macho
-            UniXNU/out/sheng/*/*/package.manifest.json
+            ${{ env.OUT }}/boot/boot.img
+            staging/reports
+      - name: root policies and vroot tables
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: root-${{ inputs.os }}
+          retention-days: 1
+          if-no-files-found: warn
+          path: staging/root
