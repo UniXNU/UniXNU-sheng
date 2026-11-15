@@ -77,7 +77,11 @@ video_probe() {
 video_probe &
 if [ -s /private/var/ngpu/test/share/graphics-comparison ]; then
     (
-        for delay in 120 90; do
+        delays='120 90'
+        if [ "$(/bin/cat /private/var/ngpu/test/share/graphics-comparison)" = view ]; then
+            delays='90 120 120 120'
+        fi
+        for delay in $delays; do
             /bin/sleep "$delay"
             pid=$(/usr/bin/pgrep -x WindowServer | /usr/bin/head -1)
             [ -n "$pid" ] || continue

@@ -19,8 +19,15 @@ set -u
 /bin/rm -rf '/Users/unixnu/Library/Saved Application State/com.apple.finder.savedState' \
     '/Users/unixnu/Library/Saved Application State/com.apple.systempreferences.savedState'
 if [ -s /private/var/ngpu/test/share/graphics-comparison ]; then
+    /usr/bin/caffeinate -du -t 900 &
     /private/var/ngpu/test/bin/gpu-scene --reset-session
     /bin/sleep 15
+    if [ "$(/bin/cat /private/var/ngpu/test/share/graphics-comparison)" = view ]; then
+        /bin/echo "inspection start boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid) time=$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        /usr/bin/open 'x-apple.systempreferences:com.apple.systempreferences.GeneralSettings'
+        /bin/sleep 900
+        exit 0
+    fi
     /private/var/ngpu/test/bin/gpu-scene &
     animation=$!
     /bin/echo "comparison start boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)"
