@@ -66,14 +66,18 @@ int main(int argc, const char **argv) {
   printf("CoreImage half blur pixels=%u range=%u..%u nonfinite=%u\n",opaque,low,high,halfInvalid);
   if(!opaque || high<=low || halfInvalid)return 3;
   if(argc<2)return 0;
+  BOOL single=argc==4 && !strcmp(argv[1],"--icon");
+  if(argc!=2 && !single)return 2;
+  const char *destination=single?argv[3]:argv[1];
   NSMutableArray<NSString *> *paths=[NSMutableArray array];
   NSFileManager *files=NSFileManager.defaultManager;
-  for(NSString *root in @[@"/System/Applications",@"/System/Library/PreferencePanes"]) {
+  if(single)[paths addObject:@(argv[2])];
+  else for(NSString *root in @[@"/System/Applications",@"/System/Library/PreferencePanes"]) {
    for(NSString *name in [[files contentsOfDirectoryAtPath:root error:nil] sortedArrayUsingSelector:@selector(compare:)]) {
     if([@[@"app",@"prefPane"] containsObject:name.pathExtension])[paths addObject:[root stringByAppendingPathComponent:name]];
    }
   }
-  NSUInteger count=MIN(paths.count,64),width=8*128,height=MAX((count+7)/8,1)*128;
+  NSUInteger count=MIN(paths.count,64),width=MAX(MIN(count,8),1)*128,height=MAX((count+7)/8,1)*128;
   NSBitmapImageRep *sheet=[[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:width pixelsHigh:height bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
   NSGraphicsContext *graphics=[NSGraphicsContext graphicsContextWithBitmapImageRep:sheet];
   NSMutableArray<NSImage *> *icons=[NSMutableArray array];
@@ -90,7 +94,7 @@ int main(int argc, const char **argv) {
   }
   [NSGraphicsContext restoreGraphicsState];
   NSData *png=[sheet representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-  BOOL saved=[png writeToFile:@(argv[1]) atomically:YES];
+  BOOL saved=[png writeToFile:@(destination) atomically:YES];
   BOOL finite=YES;
   for(NSUInteger i=0;i<icons.count;++i)finite=sourcePixels(icons[i],i) && finite;
   printf("icon pass count=%lu saved=%d finite=%d\n",(unsigned long)count,saved,finite);

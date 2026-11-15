@@ -39,7 +39,20 @@ set -u
         /bin/echo "blur mps=$mps exit=$?" >> "$log"
         /bin/kill "$alarm" 2>/dev/null || :
     done
-    CI_ENABLE_MPS=0 "$tool" /Users/Shared/unixnu-test/icons.png >> "$log" 2>&1 &
+    if [ -s /private/var/ngpu/test/share/icon-dump-cb ]; then
+        /usr/bin/touch /Users/Shared/unixnu-test/icon-dump-requested
+        for attempt in $(/usr/bin/seq 1 45); do
+            [ -f /Users/Shared/unixnu-test/icon-dump-ready ] && break
+            /bin/sleep 1
+        done
+        /bin/echo "icon service dump status=$(/bin/cat /Users/Shared/unixnu-test/icon-dump-ready 2>/dev/null)" >> "$log"
+    fi
+    if [ -s /private/var/ngpu/test/share/icon-probe-path ]; then
+        single=$(/bin/cat /private/var/ngpu/test/share/icon-probe-path)
+        CI_ENABLE_MPS=0 "$tool" --icon "$single" /Users/Shared/unixnu-test/icons.png >> "$log" 2>&1 &
+    else
+        CI_ENABLE_MPS=0 "$tool" /Users/Shared/unixnu-test/icons.png >> "$log" 2>&1 &
+    fi
     probe=$!
     ( /bin/sleep 120; /bin/kill -KILL "$probe" 2>/dev/null ) &
     alarm=$!

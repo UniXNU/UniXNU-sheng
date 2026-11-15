@@ -29,6 +29,8 @@ def main():
     parser.add_argument('--payload-mib', type=int, default=256, help='decoded FAT volume size in MiB')
     parser.add_argument('--video-fixture', type=Path, help='HEVC MP4 for the timed VideoToolbox decode probe')
     parser.add_argument('--video-fixture-10bit', type=Path, help='additional 10-bit HEVC MP4 for pixel and frame checks')
+    parser.add_argument('--icon-path', help='one guest application or preference pane for icon isolation')
+    parser.add_argument('--icon-dump-cb', help='bounded FIRST:COUNT command-buffer dump for the isolated icon service')
     parser.add_argument('--preserve-data', action='store_true')
     parser.add_argument('--bluetooth-runtime', type=Path, help='signed runtime report from build-bluetooth-userspace.py')
     parser.add_argument('--refresh-payload', action='store_true', help='build the current board menu, ADT and firmware transport')
@@ -40,6 +42,9 @@ def main():
         parser.error('choose a new output file')
     if args.refresh_payload and not args.uefi:
         parser.error('--refresh-payload requires --uefi')
+    if args.icon_dump_cb and (not args.icon_path or not re.fullmatch(r'[1-9][0-9]*:[1-9][0-9]*', args.icon_dump_cb)
+                             or int(args.icon_dump_cb.split(':')[1]) > 32):
+        parser.error('--icon-dump-cb requires --icon-path and FIRST:COUNT with COUNT at most 32')
     core = (ROOT / tomllib.loads((ROOT / 'board.toml').read_text())['package']['unixnu']).resolve()
     sys.path.insert(0, str(core / 'scripts'))
     from unixnu import ramdisk as codec
@@ -95,6 +100,10 @@ def main():
             '-Wl,-segalign,0x4000', '-o', files / 'bin/gpu-correctness-probe')
         run('codesign', '--force', '--sign', '-', '--timestamp=none', '--pagesize', '4096', files / 'bin/gpu-correctness-probe')
         (files / 'share').mkdir(exist_ok=True)
+        (files / 'share/icon-probe-path').write_text(args.icon_path+'\n' if args.icon_path else '')
+        (files / 'share/icon-dump-cb').write_text(args.icon_dump_cb+'\n' if args.icon_dump_cb else '')
+        for name in ('video-probe.mp4', 'video-probe-10bit.mp4'):
+            (files / 'share' / name).write_bytes(b'')
         if args.video_fixture:
             run('xcrun', 'clang', '-target', 'arm64e-apple-macos27.0', '-isysroot', sdk,
                 '-O2', '-Wall', '-Wextra', '-Werror', '-Wno-deprecated-declarations', '-fobjc-arc',

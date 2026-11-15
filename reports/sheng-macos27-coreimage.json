@@ -52,5 +52,13 @@
     "hevc8_640x360": true,
     "hevc10_3840x2160": false,
     "reason": "Icon float components are nonfinite; the compound half input did not execute. 4K 10-bit pixel validation remains pending."
+  },
+  "latest_kernel_failure": {
+    "capture": "s7aa3d-5b2862a91",
+    "uptime_s": 133,
+    "test_seconds": 208.258,
+    "panic": "ArmCpu: unexpected architectural IRQ 7 @ArmCpu.cpp:808",
+    "diagnostic_export": false,
+    "final_fastboot": true
   }
 }

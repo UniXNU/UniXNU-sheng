@@ -4,6 +4,7 @@ set -u
 /bin/mkdir -p /Users/Shared/unixnu-test
 /bin/chmod 1777 /Users/Shared/unixnu-test
 /bin/rm -f /Users/Shared/unixnu-test/benchmark.done /Users/Shared/unixnu-test/reboot-requested
+/bin/rm -f /Users/Shared/unixnu-test/icon-dump-requested /Users/Shared/unixnu-test/icon-dump-ready
 session=/Users/Shared/unixnu-test
 for name in icon-probe.log video-probe.log icons.png; do
     if [ -s "$session/$name" ]; then
@@ -17,7 +18,7 @@ state=/private/var/db/unixnu-lab
 if [ -r "$build" ]; then
     identity=$(/usr/bin/shasum -a 256 "$build" | /usr/bin/awk '{print $1}')
     previous=$(/bin/cat "$state/icon-cache-build" 2>/dev/null || :)
-    if [ "$identity" != "$previous" ]; then
+    if [ "$identity" != "$previous" ] || [ -s /private/var/ngpu/test/share/icon-probe-path ]; then
         cache=$(/usr/bin/sudo -u unixnu /usr/bin/getconf DARWIN_USER_CACHE_DIR)
         case "$cache" in
             /var/folders/*/C/|/private/var/folders/*/C/)
@@ -39,6 +40,22 @@ boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)
 /bin/rm -f "$session/graphics-events-previous.log"
 /bin/echo "graphics state boot=$boot" > "$session/graphics-state.log"
 /bin/echo "video probe boot=$boot" > "$session/video-probe.log"
+if [ -s /private/var/ngpu/test/share/icon-dump-cb ]; then
+    (
+        for attempt in $(/usr/bin/seq 1 90); do
+            [ -f "$session/icon-dump-requested" ] && break
+            /bin/sleep 1
+        done
+        dump=$(/bin/cat /private/var/ngpu/test/share/icon-dump-cb)
+        target=gui/501/com.apple.iconservices.iconservicesagent
+        /bin/launchctl debug "$target" --stderr "$session/graphics-state.log" \
+            --environment "NATIVE_METAL_DUMP_CB=$dump"
+        result=$?
+        if [ "$result" = 0 ]; then /bin/launchctl kickstart -k "$target"; result=$?; fi
+        /bin/echo "icon service dump status=$result range=$dump" >> "$session/graphics-state.log"
+        /bin/echo "$result" > "$session/icon-dump-ready"
+    ) &
+fi
 predicate='process == "WindowServer" OR process == "loginwindow" OR process BEGINSWITH "Wallpaper" OR process CONTAINS[c] "iconservices" OR process == "icon-probe" OR process == "VTDecoderXPCService" OR process == "video-probe" OR subsystem CONTAINS[c] "VideoToolbox" OR subsystem CONTAINS[c] "CoreImage"'
 /usr/bin/log stream --style compact --level info --timeout 120m --predicate "$predicate" >> "$session/graphics-events.log" 2>&1 &
 graphics_log=$!
