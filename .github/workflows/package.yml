@@ -153,6 +153,10 @@ jobs:
           echo "TREE=$TREE" >> "$GITHUB_ENV"
           # Sign the root windows with a fresh owner key; headers go to the device repo, tables to the tree.
           python3 "$DEVICE/scripts/ci-macos-policies.py" -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI"
+          # On macos-26 the attached APFS container registers a moment after hdiutil attach returns;
+          # the framework's single immediate probe can miss it ("No APFS container found on the attached
+          # seed"). Wait-and-retry that probe (validated in isolation); no other behavior changes.
+          python3 "$DEVICE/scripts/ci-patch-seed-grow.py" "$TREE/scripts/seed-data-grow.py"
           # First-install Data seed (data.dbr): the payload build needs it; the tool runs as root.
           python3 "$DEVICE/scripts/ci-macos-data-seed.py" -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI"
           ./unixnu build kernel package firmware payload -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI" --init-data
