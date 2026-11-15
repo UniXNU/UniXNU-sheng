@@ -345,8 +345,11 @@ struct Session {
     int64_t lastInputUs = INT64_MIN, minStepUs = INT64_MAX;   // the frame period, the least step between two inputs' times
     unsigned steps = 0;
     bool skipLogged = false;
-    uint8_t parameterSets[512] = {};
-    uint32_t parameterSetsSize = 0;
+    uint8_t *parameterSets = nullptr;
+    uint32_t parameterSetsSize = 0, parameterSetsCapacity = 0;
+    ~Session() {
+        if (parameterSets) IOFree(parameterSets, parameterSetsCapacity);
+    }
     bool parametersSent = false;
 
     unsigned device = ~0u;
@@ -626,7 +629,18 @@ bool parameterSets(Session *s, const ImageDescription &d) {
     const uint8_t start[4] = {0, 0, 0, 1};
     s->parameterSetsSize = 0;
     auto add = [&](const uint8_t *nal, uint32_t n) {
-        if (s->parameterSetsSize + 4 + n > sizeof s->parameterSets) return false;
+        if (s->parameterSetsSize > OutputBytes - 4 || n > OutputBytes - 4 - s->parameterSetsSize) return false;
+        const uint32_t required = s->parameterSetsSize + 4 + n;
+        if (required > s->parameterSetsCapacity) {
+            uint32_t capacity = s->parameterSetsCapacity ? s->parameterSetsCapacity : 512;
+            while (capacity < required) capacity = capacity > OutputBytes / 2 ? OutputBytes : capacity * 2;
+            uint8_t *bytes = static_cast<uint8_t *>(IOMalloc(capacity));
+            if (!bytes) return false;
+            if (s->parameterSetsSize) memcpy(bytes, s->parameterSets, s->parameterSetsSize);
+            if (s->parameterSets) IOFree(s->parameterSets, s->parameterSetsCapacity);
+            s->parameterSets = bytes;
+            s->parameterSetsCapacity = capacity;
+        }
         memcpy(s->parameterSets + s->parameterSetsSize, start, 4);
         memcpy(s->parameterSets + s->parameterSetsSize + 4, nal, n);
         s->parameterSetsSize += 4 + n;
@@ -2478,7 +2492,13 @@ int startSession(Session *s, const uint8_t *m, uint32_t n, bool fresh) {
     if (d.codec != cc("avc1") && d.codec != cc("hvc1") && d.codec != cc("hev1")) return -12906;
     if (d.codec != cc("avc1") && !hevcOffered()) return -12906;   // not listed: VideoToolbox decodes it itself
     if (!decodableFormat(d)) return -12910;   // kVTVideoDecoderUnsupportedDataFormatErr
-    if (!parameterSets(s, d)) return -12909;
+    if (!parameterSets(s, d)) {
+        trace("vt configuration refused: codec %08x extensions %u copied %u capacity %u",
+              d.codec, d.extensionsSize, s->parameterSetsSize, s->parameterSetsCapacity);
+        return -12909;
+    }
+    trace("vt configuration: codec %08x NAL bytes %u length %u temporal layers %u",
+          d.codec, s->parameterSetsSize, s->nalLength, s->temporalLayers);
     teardown(s);
     s->lastInputAt = mach_absolute_time();
     s->width = d.width;
