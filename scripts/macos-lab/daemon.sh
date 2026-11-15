@@ -18,6 +18,14 @@ predicate='process == "WindowServer" OR process == "loginwindow" OR process BEGI
 /usr/bin/log stream --style compact --level info --timeout 120m --predicate "$predicate" >> "$session/graphics-events.log" 2>&1 &
 graphics_log=$!
 trap '/bin/kill "$graphics_log" 2>/dev/null || :' EXIT
+preserve_prime_progress() {
+    cache=/private/var/tmp/NativeAdrenoMetal.cache
+    if [ -d "$cache" ]; then
+        /usr/bin/touch "$cache/prime-resume"
+        /usr/sbin/chown "$(/usr/bin/stat -f '%u:%g' "$cache")" "$cache/prime-resume"
+    fi
+}
+trap 'preserve_prime_progress; exit 0' TERM HUP
 video_probe() {
     /bin/sleep 90
     tool=/private/var/ngpu/test
@@ -69,12 +77,7 @@ snapshot
 capture_and_reboot() {
     graphics_state
     snapshot
-    cache=/private/var/tmp/NativeAdrenoMetal.cache
-    if [ -d "$cache" ]; then
-        /usr/bin/touch "$cache/prime-resume"
-        owner=$(/usr/bin/stat -f '%u:%g' "$cache")
-        /usr/sbin/chown "$owner" "$cache/prime-resume"
-    fi
+    preserve_prime_progress
     /usr/sbin/sysctl -w kern.unixnu_diag_request=1 || return 1
     for wait in $(/usr/bin/seq 1 60); do
         status=$(/usr/sbin/sysctl -n kern.unixnu_diag_status)
