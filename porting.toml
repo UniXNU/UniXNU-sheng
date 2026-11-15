@@ -65,8 +65,8 @@ result = "The macOS 27.3 profile and pinned inputs produce the prepared source-b
 
 
 [[area.evidence]]
-kind = "device"
-reference = "https://github.com/rponeawa/UniXNU-sheng/blob/ef84485040ae364c91caeeed3a1a342a9b40d89d/reports/sheng-macos27-first-boot.json"
+kind = "source"
+reference = "https://github.com/rponeawa/UniXNU-sheng/blob/ef84485040ae364c91caeeed3a1a342a9b40d89d/.github/workflows/macos-lab.yml"
 result = "The timed macOS 27.3 lab preserves Data and successful shader checkpoints. The next image selects reflected primer inputs and context-switch recovery fixes."
 
 [[area]]
@@ -167,6 +167,8 @@ result = "Implementation and configuration described in this section"
 [[area.evidence]]
 kind = "device"
 reference = "https://github.com/rponeawa/UniXNU-sheng/blob/ef84485040ae364c91caeeed3a1a342a9b40d89d/reports/sheng-macos27-first-boot.json"
+command = "scripts/run-sheng-unattended.sh sheng-macos27-inherited-prime.img 7500"
+revision = "c30fec292042b44537bf764468e6a15d658f21b6"
 result = "On sheng, macOS 27.3 build 26C5035r reported hw.memsize 6914097152 and an active VM compressor. The per-page outside-memory kernel awaits hardware qualification."
 
 [[area]]
@@ -222,6 +224,8 @@ result = "The source-built kernel includes the owner Data path and the pinned ve
 [[area.evidence]]
 kind = "device"
 reference = "https://github.com/rponeawa/UniXNU-sheng/blob/ef84485040ae364c91caeeed3a1a342a9b40d89d/reports/sheng-macos27-first-boot.json"
+command = "scripts/run-sheng-unattended.sh sheng-macos27-inherited-prime.img 7500"
+revision = "c30fec292042b44537bf764468e6a15d658f21b6"
 result = "On sheng, macOS 27.3 mounted Data as writable APFS. The captured swap total and usage were both zero."
 
 [[area]]
@@ -438,6 +442,8 @@ result = "Plugin ad47c08 and the acceptance executable build against translator 
 [[area.evidence]]
 kind = "device"
 reference = "https://github.com/rponeawa/UniXNU-sheng/blob/ef84485040ae364c91caeeed3a1a342a9b40d89d/reports/sheng-macos27-first-boot.json"
+command = "scripts/run-sheng-unattended.sh sheng-macos27-inherited-prime.img 7500"
+revision = "c30fec292042b44537bf764468e6a15d658f21b6"
 result = "The macOS 27.3 capture completed 19572 function checkpoints and 129 of 258 eligible libraries. The pass reported 8037 refused functions and one GPU recovery; numerical and performance comparison awaits complete priming."
 
 [[area]]
@@ -711,6 +717,8 @@ result = "The source-built macOS kernel includes the shared charging state machi
 [[area.evidence]]
 kind = "device"
 reference = "https://github.com/rponeawa/UniXNU-sheng/blob/ef84485040ae364c91caeeed3a1a342a9b40d89d/reports/sheng-macos27-first-boot.json"
+command = "scripts/run-sheng-unattended.sh sheng-macos27-inherited-prime.img 7500"
+revision = "c30fec292042b44537bf764468e6a15d658f21b6"
 result = "The macOS 27.3 PC-USB capture reported battery 97 percent, 4865 mV and 1109 mA at the input, with gauge authentication bits 3."
 
 [[area]]
@@ -795,8 +803,8 @@ result = "The prepared RAM boot preserves Data and encodes its 256 MiB logical F
 
 
 [[area.evidence]]
-kind = "device"
-reference = "https://github.com/rponeawa/UniXNU-sheng/blob/ef84485040ae364c91caeeed3a1a342a9b40d89d/reports/sheng-macos27-first-boot.json"
+kind = "source"
+reference = "https://github.com/rponeawa/UniXNU-sheng/blob/ef84485040ae364c91caeeed3a1a342a9b40d89d/.github/workflows/macos-lab.yml"
 result = "The macOS lab restores cached XNU compile records, builds the source-matched Metal bridge, and supports a boot-only build with root_storage=false."
 
 [[area]]
@@ -853,6 +861,8 @@ result = "The signed numeric, native-control and scene tools are packaged with t
 [[area.evidence]]
 kind = "device"
 reference = "https://github.com/rponeawa/UniXNU-sheng/blob/ef84485040ae364c91caeeed3a1a342a9b40d89d/reports/sheng-macos27-first-boot.json"
+command = "scripts/run-sheng-unattended.sh sheng-macos27-inherited-prime.img 7500"
+revision = "c30fec292042b44537bf764468e6a15d658f21b6"
 result = "The macOS lab exported 72721568 bytes through the Linux reader and returned to command-responsive fastboot. The clock probe records CNTFRQ, counter deltas and Darwin clock deltas around a one-second sleep."
 
 [[area]]
@@ -912,6 +922,8 @@ result = "iPadOS 27.0.1 (24A446): the app installs over USB, launches and stays 
 [[area.evidence]]
 kind = "device"
 reference = "https://github.com/rponeawa/UniXNU-sheng/blob/ef84485040ae364c91caeeed3a1a342a9b40d89d/reports/sheng-macos27-first-boot.json"
+command = "scripts/run-sheng-unattended.sh sheng-macos27-inherited-prime.img 7500"
+revision = "c30fec292042b44537bf764468e6a15d658f21b6"
 result = "On sheng, macOS 27.3 build 26C5035r booted and automatically logged into the unixnu admin account with UID 501."
 
 [[area]]
