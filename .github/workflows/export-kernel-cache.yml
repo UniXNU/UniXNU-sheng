@@ -39,6 +39,17 @@ jobs:
           python3 - "$tree" "$sdk" <<'PY'
           import json, subprocess, sys
           from pathlib import Path
+          import shutil
+          tools = Path('export/toolchain/bin')
+          tools.mkdir(parents=True)
+          for name in ('migcom', 'iig', 'tightbeamc', 'ctfconvert', 'ctfmerge'):
+              found = subprocess.run(['xcrun', '--find', name], capture_output=True, text=True)
+              if found.returncode:
+                  if name in ('migcom', 'iig'):
+                      raise SystemExit('Required kernel tool missing: ' + name)
+                  continue
+              shutil.copy2(found.stdout.strip(), tools / name)
+              print(subprocess.check_output(['otool', '-L', str(tools / name)], text=True))
           Path('export/build-paths.json').write_text(json.dumps(dict(
               tree=str(Path(sys.argv[1]).resolve()), sdk=sys.argv[2],
               xcode=subprocess.check_output(['xcodebuild', '-version'], text=True)), indent=2) + '\n')
