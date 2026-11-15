@@ -18,9 +18,10 @@ reader = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(reader)
 
 
-def detached_command(wait_pd):
+def detached_command(wait_pd, snapshot=False):
+    operation = '' if snapshot else f'--authenticate --wait-pd {wait_pd} '
     job = f'''echo "$$" > /run/charge.started
-/bin/sheng-charge-setup --authenticate --wait-pd {wait_pd} --out /run/charge.log
+/bin/sheng-charge-setup {operation}--out /run/charge.log
 result=$?
 dmesg > /run/charge-dmesg.txt
 echo "$result" > /run/charge.status'''
@@ -39,6 +40,7 @@ class ChargeTest:
         self.shell = None
         self.booted = False
         self.report = dict(serial=args.serial, reader=str(args.reader), wait_pd=args.wait_pd,
+                           mode='snapshot' if args.snapshot else 'charger-swap',
                            timeout=args.timeout, fastboot=False, auth_exit=None)
 
     def remaining(self, limit, end=None):
@@ -118,14 +120,18 @@ class ChargeTest:
         port = self.connect(min(self.work_end, time.monotonic() + 60))
         self.shell.port.deadline = self.work_end
         window = max(0, int(self.work_end - time.monotonic() - 15))
-        if window < 150:
+        if not self.args.snapshot and window < 150:
             raise TimeoutError('reader startup left less than 150 seconds for the charger swap and log collection')
-        self.shell.run(detached_command(self.args.wait_pd), 5)
+        self.shell.run(detached_command(self.args.wait_pd, self.args.snapshot), 5)
         started = self.shell.run('for i in 1 2 3 4 5; do [ -s /run/charge.started ] && break; '
                                  'sleep 1; done; cat /run/charge.started', 8)
         if not started.isdigit():
             raise RuntimeError('detached authentication did not start')
         self.report['job_pid'] = int(started)
+        if self.args.snapshot:
+            print('Collecting the connected source, battery and charge-pump readings.', flush=True)
+            self.collect()
+            return
         window = max(0, int(self.work_end - time.monotonic() - 15))
         print(f'Authentication runs independently of USB. Connect the PD charger now, leave it connected for '
               f'140 seconds, then reconnect this PC within {window} seconds.', flush=True)
@@ -180,6 +186,7 @@ def main():
     parser.add_argument('--reader', required=True, type=Path, help='image from prepare-linux-charge-reader.py')
     parser.add_argument('--out', type=Path, default=ROOT / 'build/sheng-charge' / time.strftime('%Y%m%d-%H%M%S'))
     parser.add_argument('--port', help='reader USB serial path when several ports are present')
+    parser.add_argument('--snapshot', action='store_true', help='collect the connected source without a charger swap')
     parser.add_argument('--wait-pd', type=int, default=90, help='PD connection wait, at most 120 seconds')
     parser.add_argument('--timeout', type=int, default=270, help='total host time including return to fastboot, 180 to 270 seconds')
     args = parser.parse_args()
@@ -206,7 +213,8 @@ def main():
         print(task.report['error'], file=sys.stderr)
     if not task.report['fastboot']:
         print('Fastboot was not observed within the host time limit. The reader retains its 300-second rebootbl timer.', file=sys.stderr)
-    return 0 if task.report['fastboot'] and task.report.get('auth_completed') and not task.report.get('error') else 1
+    completed = task.report['auth_exit'] == 0 if args.snapshot else task.report.get('auth_completed')
+    return 0 if task.report['fastboot'] and completed and not task.report.get('error') else 1
 
 
 if __name__ == '__main__':
