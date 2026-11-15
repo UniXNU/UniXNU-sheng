@@ -129,9 +129,10 @@ def main():
                    '--payload-mib', args.payload_mib,
                    '--payload-file', str(addon) + '=' + prefix + 'gpuaddon',
                    '--payload-file', str(trust) + '=' + prefix + 'trustcache',
-                   '--remove-arg', 'exec-log', '--remove-arg', 'vc-text']
+                   '--remove-arg', 'exec-log', '--remove-arg', 'vc-text', '--remove-arg', 'storage-probe']
         for value in ('autoreset=7200', 'uefi-watchdog=1', 'diag=1', 'diag-export=6900',
-                      'gpu-trace=1', 'gpu-perf=1', 'log-gpu=1', 'log-power=1', 'log-sys=1', 'log-display=1'):
+                      'gpu-trace=1', 'gpu-perf=1', 'log-gpu=1', 'log-power=1', 'log-sys=1', 'log-display=1',
+                      'log-video=1', 'build-tag=s00000'):
             command += ['--kernel-arg', value]
         if args.preserve_data:
             command += ['--remove-arg', 'data-reset']
