@@ -30,6 +30,17 @@ set -u
     wait "$probe"
     /bin/echo "correctness exit=$?" >> "$log"
     /bin/kill "$alarm" 2>/dev/null || :
+    replay=/private/var/ngpu/test/bin/renderbox-alpha-probe
+    if [ -x "$replay" ]; then
+        inputs=/private/var/ngpu/test/share/renderbox-alpha
+        "$replay" "$inputs/vertex.air" "$inputs/fragment.air" "$inputs/globals.bin" "$inputs/gradient.bin" >> "$log" 2>&1 &
+        probe=$!
+        ( /bin/sleep 30; /bin/kill -KILL "$probe" 2>/dev/null ) &
+        alarm=$!
+        wait "$probe"
+        /bin/echo "RenderBox alpha replay exit=$?" >> "$log"
+        /bin/kill "$alarm" 2>/dev/null || :
+    fi
     for mps in 1 0; do
         CI_ENABLE_MPS="$mps" "$tool" >> "$log" 2>&1 &
         probe=$!

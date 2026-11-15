@@ -31,6 +31,7 @@ def main():
     parser.add_argument('--video-fixture-10bit', type=Path, help='additional 10-bit HEVC MP4 for pixel and frame checks')
     parser.add_argument('--icon-path', help='one guest application or preference pane for icon isolation')
     parser.add_argument('--icon-dump-cb', help='bounded FIRST:COUNT command-buffer dump for the isolated icon service')
+    parser.add_argument('--icon-skip-draws', help='omit PASS:FIRST:LAST draws in the isolated icon service')
     parser.add_argument('--preserve-data', action='store_true')
     parser.add_argument('--bluetooth-runtime', type=Path, help='signed runtime report from build-bluetooth-userspace.py')
     parser.add_argument('--refresh-payload', action='store_true', help='build the current board menu, ADT and firmware transport')
@@ -45,6 +46,12 @@ def main():
     if args.icon_dump_cb and (not args.icon_path or not re.fullmatch(r'[1-9][0-9]*:[1-9][0-9]*', args.icon_dump_cb)
                              or int(args.icon_dump_cb.split(':')[1]) > 32):
         parser.error('--icon-dump-cb requires --icon-path and FIRST:COUNT with COUNT at most 32')
+    if args.icon_skip_draws:
+        if not args.icon_dump_cb or not re.fullmatch(r'[1-9][0-9]*:[1-9][0-9]*:[1-9][0-9]*', args.icon_skip_draws):
+            parser.error('--icon-skip-draws requires --icon-dump-cb and PASS:FIRST:LAST')
+        _, first, last = map(int, args.icon_skip_draws.split(':'))
+        if first > last:
+            parser.error('--icon-skip-draws requires FIRST <= LAST')
     core = (ROOT / tomllib.loads((ROOT / 'board.toml').read_text())['package']['unixnu']).resolve()
     sys.path.insert(0, str(core / 'scripts'))
     from unixnu import ramdisk as codec
@@ -189,7 +196,8 @@ def main():
             options.kernel_arg = [f'autoreset={args.autoreset}', f'diag-export={args.autoreset-60}',
                 'uefi-watchdog=1', 'diag=1', 'gpu-trace=1', 'log-gpu=1',
                 'log-video=1', 'log-bluetooth=3', 'build-tag=s00000', 'ci-mps=0']
-            options.kernel_arg += ['icon-cb='+args.icon_dump_cb] if args.icon_dump_cb else ['gpu-perf=1']
+            capture = args.icon_dump_cb + (':' + args.icon_skip_draws if args.icon_skip_draws else '') if args.icon_dump_cb else None
+            options.kernel_arg += ['icon-cb='+capture] if capture else ['gpu-perf=1']
             fd = firmware.fd_path(ctx, ctx.uefi, 'DEBUG')
             # The template carries every firmware module built for this candidate.
             # Its ramdisk is empty; the account and OS remain private payload inputs.
@@ -229,7 +237,8 @@ def main():
                       'build-tag=s00000', 'ci-mps=0'):
             command += ['--kernel-arg', value]
         if args.icon_dump_cb:
-            command += ['--remove-arg', 'gpu-perf', '--kernel-arg', 'icon-cb='+args.icon_dump_cb]
+            capture = args.icon_dump_cb + (':' + args.icon_skip_draws if args.icon_skip_draws else '')
+            command += ['--remove-arg', 'gpu-perf', '--kernel-arg', 'icon-cb='+capture]
         else:
             command += ['--kernel-arg', 'gpu-perf=1']
         if args.preserve_data:
