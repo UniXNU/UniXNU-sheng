@@ -69,6 +69,14 @@ kind = "source"
 reference = "https://github.com/rponeawa/UniXNU-sheng/blob/ef84485040ae364c91caeeed3a1a342a9b40d89d/.github/workflows/macos-lab.yml"
 result = "The timed macOS 27.3 lab preserves Data and successful shader checkpoints, using reflected primer inputs and context-switch recovery."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/pull/99"
+revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
+command = "unixnu build kernel prelink firmware --os macos-27 with the exported kernel toolchain and installed Data seed"
+result = "The macOS integration resolves the SM8550 GENI UART and video interfaces from the selected platform source."
+
 [[area]]
 id = "firmware"
 status = "implemented"
@@ -228,6 +236,14 @@ command = "scripts/run-sheng-unattended.sh sheng-macos27-inherited-prime.img 750
 revision = "c30fec292042b44537bf764468e6a15d658f21b6"
 result = "On sheng, macOS 27.3 mounted Data as writable APFS. The captured swap total and usage were both zero."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/pull/99"
+revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
+command = "unixnu build kernel prelink firmware --os macos-27 with the exported kernel toolchain and installed Data seed"
+result = "The selected ShengUfs b6c41b69 source compiles and links in the macOS 27.3 kernel; the validated integration mounts its sealed root and persistent Data volumes."
+
 [[area]]
 id = "display"
 status = "implemented"
@@ -315,6 +331,14 @@ reference = "https://github.com/rponeawa/UniXNU-sheng/blob/d4f97b86b7bcf239f03ab
 revision = "d4f97b86b7bcf239f03ab9fe34bfb1f295901400"
 command = "prepare-sheng-gpu-lab.py --preserve-data"
 result = "The selected input archives compile and link into the macOS 27.3 kernel image."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/pull/99"
+revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
+command = "unixnu build kernel prelink firmware --os macos-27 with the exported kernel toolchain and installed Data seed"
+result = "ShengNovatekTouch 69fddf30 compiles and links against the selected SM8550 interfaces in the macOS 27.3 integration."
 
 [[area]]
 id = "keyboard"
@@ -530,6 +554,14 @@ command = "fastboot boot boot.img (bluetooth=1 log-bluetooth=2); pair and play A
 revision = "cc895db196751e155831d58e23a6e33984360367"
 result = "AirPods Pro pair, reconnect after reboot and play A2DP at normal volume and quality; noise control and battery work; one bluetoothd process for the whole run with no panic and no UART errors. The images predate the kern.qbt_* rename and the board and driver were local checkouts."
 
+
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/pull/104"
+revision = "6866eae8f573e2be6db12b94d326ddb14646d8ec"
+command = "clang -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined package/tests/bluetooth_hci_trace.c; python3 tools/test-runtime.py; python3 tools/test-geni.py"
+result = "The HCI recorder, QcaBluetooth runtime and GENI model checks pass ASan/UBSan, including full packets, retry cursors, overwrite accounting, fragmented writes and bounded callbacks. The selected kernel sources compile for macOS arm64e."
 
 [[area]]
 id = "usb"
@@ -814,6 +846,14 @@ kind = "source"
 reference = "https://github.com/rponeawa/UniXNU-sheng/blob/ef84485040ae364c91caeeed3a1a342a9b40d89d/.github/workflows/macos-lab.yml"
 result = "The macOS lab restores cached XNU compile records, builds the source-matched Metal bridge, and supports a boot-only build with root_storage=false."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/pull/99"
+revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
+command = "unixnu build kernel prelink firmware --os macos-27 with the exported kernel toolchain and installed Data seed"
+result = "Probe packaging resolves the LLVM tools through the shared host lookup used by the matching firmware build."
+
 [[area]]
 id = "diagnostics"
 status = "implemented"
@@ -878,6 +918,14 @@ reference = "https://github.com/rponeawa/UniXNU-sheng/blob/788684be43e74755367a7
 command = "SERIAL=SERIAL READER=reader.img OUT=capture scripts/run-sheng-unattended.sh boot.img 7500"
 revision = "a35cbc41487da1720147bea1fc887fb714a26ed8"
 result = "With Xcode 26.6 tools, all three source-built kernels reached Data disk initialization and returned through the watchdog after approximately 80 seconds. GPU-only and combined CPU/GPU reference selections reproduced the stall; cause undetermined."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/pull/99"
+revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
+command = "unixnu build kernel prelink firmware --os macos-27 with the exported kernel toolchain and installed Data seed"
+result = "The entry-probe build uses the shared LLVM lookup; the selected component lock resolves in the local macOS kernel and firmware builds."
 
 [[area]]
 id = "arm64e-os"
