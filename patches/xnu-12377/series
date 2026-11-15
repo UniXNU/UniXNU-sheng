@@ -20,3 +20,4 @@ sheng-appsync-user-trust.patch
 zzzzzzzzzzz-sheng-edge-matrix.patch
 zzzzzz-sheng-bsd-checkpoints.patch
 sheng-bootstrap-checkpoints.patch
+sheng-headless-startup-checkpoints.patch

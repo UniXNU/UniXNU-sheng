@@ -480,6 +480,11 @@ void boot_log_checkpoint(const char *stage) {
   IOLockUnlock(checkpoint_lock);
 }
 
+void boot_log_startup_stage(int pid, const char *stage) {
+  if (boot_log_state != 2 || ml_at_interrupt_context()) return;
+  if ((pid ? pid : proc_selfpid()) == 1) boot_log_checkpoint(stage);
+}
+
 static volatile int boot_log_panicked;   // set by boot_log_panic_flush: the writer no longer writes
 
 // The export: boot_log_export_put takes the blob's pieces in order (any thread) and writes them through a staging buffer straight into

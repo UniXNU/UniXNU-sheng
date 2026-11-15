@@ -145,8 +145,7 @@ extern volatile unsigned boot_ui_trace_index __attribute__((weak_import));
 extern void boot_process_capture(void) __attribute__((weak_import));
 extern void boot_process_snapshot(void) __attribute__((weak_import));
 extern void boot_log_tick(unsigned) __attribute__((weak_import));
-extern volatile uint32_t boot_log_state __attribute__((weak_import));
-extern void boot_log_checkpoint(const char *) __attribute__((weak_import));
+extern void boot_log_startup_stage(int, const char *) __attribute__((weak_import));
 extern void sheng_cpufreq_poll(void) __attribute__((weak_import));
 extern char boot_process_rows[10][120] __attribute__((weak_import));
 extern unsigned boot_ui_trace_role_rows(unsigned,char [][120],unsigned,unsigned) __attribute__((weak_import));
@@ -612,8 +611,7 @@ void boot_progress_putc(char c) {
   release();
 }
 void boot_progress_stage(const char *text) {
-  if (&boot_log_state && boot_log_state == 2 && !ml_at_interrupt_context() && proc_selfpid() == 1 && &boot_log_checkpoint)
-    boot_log_checkpoint(text);
+  if (&boot_log_startup_stage) boot_log_startup_stage(0, text);
   if (!enabled || !take()) return;
   unsigned now=seconds();
   char stamped[BP_COLS], name[32]={0};
@@ -627,11 +625,7 @@ void boot_progress_stage(const char *text) {
   release();
 }
 void boot_progress_process_stage(int pid,const char *name,const char *text) {
-  if (pid == 1 && &boot_log_state && boot_log_state == 2 && !ml_at_interrupt_context() && &boot_log_checkpoint) {
-    char checkpoint[160];
-    snprintf(checkpoint,sizeof checkpoint,"pid1 %.31s %.110s",name ? name : "",text);
-    boot_log_checkpoint(checkpoint);
-  }
+  if (&boot_log_startup_stage) boot_log_startup_stage(pid, text);
   if(!enabled || !take())return;
   char stamped[BP_COLS];unsigned now=seconds();
   if(!strncmp(text,"exec process signature",22))census_note(name,0);
