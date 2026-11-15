@@ -89,12 +89,21 @@ class ChargeTest:
         raise TimeoutError('reader USB shell unavailable: ' + last)
 
     def collect(self):
-        state = self.shell.run('if [ -s /run/charge.status ]; then cat /run/charge.status; '
-                               'else echo pending; fi', 5).decode().strip()
+        def status():
+            for attempt in range(3):
+                try:
+                    return self.shell.run('if [ -s /run/charge.status ]; then cat /run/charge.status; '
+                                          'else echo pending; fi', 5).decode().strip()
+                except (OSError, SystemExit, TimeoutError):
+                    if attempt == 2:
+                        raise
+                    self.close()
+                    self.report['shell_reconnects'] = self.report.get('shell_reconnects', 0) + 1
+                    self.connect(min(self.work_end, time.monotonic() + 8))
+        state = status()
         while state == 'pending':
             time.sleep(self.remaining(1, self.work_end))
-            state = self.shell.run('if [ -s /run/charge.status ]; then cat /run/charge.status; '
-                                   'else echo pending; fi', 5).decode().strip()
+            state = status()
         self.report['auth_exit'] = int(state)
         self.shell.run('dmesg > /run/charge-dmesg-return.txt', 5)
         for name in ('charge.log', 'charge-console.log', 'charge-dmesg.txt', 'charge-dmesg-return.txt', 'charge.status'):
