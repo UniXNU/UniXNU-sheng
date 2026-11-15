@@ -199,13 +199,16 @@ static bool find_root(char root[512]) {
 }
 static void telemetry(const char *root) {
     char value[160];
+    if (read_node(root,"real_type",value,sizeof value) >= 0) {
+        emit("[charge firmware] real_type="); emit(value); emit("\n");
+    }
     for (const auto &p : properties) {
         int n = read_node(root, p.name, value, sizeof value);
         emit("[charge firmware] "); emit(p.name); emit("=");
         if (n >= 0) emit(value); else {emit("error:"); integer(n);}
         emit("\n");
     }
-    const char *supplies[] = {"usb","battery"};
+    const char *supplies[] = {"qcom-battmgr-usb","qcom-battmgr-bat","usb","battery"};
     const char *fields[] = {"online","voltage_now","current_now","current_max","input_current_limit","temp","capacity","status"};
     for (const char *supply : supplies) for (const char *field : fields) {
         char base[512]; path(base,"/sys/class/power_supply",supply);
@@ -214,7 +217,9 @@ static void telemetry(const char *root) {
 }
 static int source_type(const char *root) {
     char online[8], type[32];
-    if (read_file("/sys/class/power_supply/usb/online",online,sizeof online) < 0 || !same(online,"1")) return 0;
+    if (read_file("/sys/class/power_supply/qcom-battmgr-usb/online",online,sizeof online) < 0 &&
+        read_file("/sys/class/power_supply/usb/online",online,sizeof online) < 0) return 0;
+    if (!same(online,"1")) return 0;
     if (read_node(root,"real_type",type,sizeof type) < 0) return 0;
     return same(type,"PD") ? 6 : same(type,"PD_DRP") ? 7 : same(type,"PD_PPS") ? 8 : 1;
 }

@@ -59,6 +59,12 @@ def number(path, hexadecimal=False):
     return int(text, 16 if hexadecimal else 10)
 
 
+def supply_path(kind):
+    base = Path('/sys/class/power_supply')
+    name = 'qcom-battmgr-usb' if kind == 'usb' else 'qcom-battmgr-bat'
+    return base / name if (base / name).is_dir() else base / kind
+
+
 def telemetry(root):
     result = {}
     for name in ('real_type', *PROPERTIES.values()):
@@ -67,7 +73,7 @@ def telemetry(root):
         except OSError as error:
             result[name] = {'error': error.errno}
     for supply in ('usb', 'battery'):
-        base = Path('/sys/class/power_supply') / supply
+        base = supply_path(supply)
         values = {}
         for name in ('online', 'voltage_now', 'current_now', 'current_max', 'input_current_limit', 'temp', 'capacity', 'status'):
             try:
@@ -173,7 +179,7 @@ def authenticate(root):
         while lib.auth_state(auth) not in (16, 17):
             if time.monotonic() >= end or requests >= 500:
                 raise TimeoutError('Authentication exceeded its 90-second limit')
-            if read('/sys/class/power_supply/usb/online') != '1':
+            if read(supply_path('usb') / 'online') != '1':
                 lib.sheng_charge_auth_observe(auth, 0, 0, now_ms())
                 return {'state': 'source-disconnected'}
             if lib.auth_state(auth) == 6:
