@@ -7,7 +7,7 @@
 - (id)initWithType:(NSString *)type;
 - (id)initWithApplicationExtensionBundleIdentifier:(NSString *)identifier;
 - (id)initWithSize:(CGSize)size scale:(double)scale;
-- (CGImageRef)CGImageForDescriptor:(id)descriptor;
+- (void)getCGImageForImageDescriptor:(id)descriptor completion:(void (^)(CGImageRef))completion;
 - (void)setIgnoreCache:(BOOL)ignore;
 @end
 
@@ -20,8 +20,21 @@ static NSImage *settingsServiceIcon(NSString *path) {
  [descriptor setIgnoreCache:YES];
  NSString *identifier=type?:info[@"CFBundleIdentifier"];
  printf("settings service type=%s descriptor=%s\n",identifier.UTF8String,[descriptor description].UTF8String);
- CGImageRef source=[icon CGImageForDescriptor:descriptor];
- return source?[[NSImage alloc] initWithCGImage:source size:NSMakeSize(24,24)]:nil;
+ __block NSImage *rendered=nil;
+ __block BOOL finished=NO;
+ [icon getCGImageForImageDescriptor:descriptor completion:^(CGImageRef source) {
+  @synchronized(icon) {
+   if(source)rendered=[[NSImage alloc] initWithCGImage:source size:NSMakeSize(24,24)];
+   finished=YES;
+  }
+ }];
+ NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:30];
+ while(deadline.timeIntervalSinceNow>0) {
+  @synchronized(icon) {if(finished)return rendered;}
+  [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.05]];
+ }
+ printf("settings service timeout identifier=%s\n",identifier.UTF8String);
+ return nil;
 }
 
 static BOOL sourcePixels(NSImage *icon, NSUInteger index, NSUInteger size) {
