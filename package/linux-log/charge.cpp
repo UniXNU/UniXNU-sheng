@@ -64,6 +64,59 @@ static int read_file(const char *file, char *out, unsigned capacity) {
 static int read_node(const char *root, const char *name, char *out, unsigned size) {
     char file[512]; if (!path(file, root, name)) return -36; return read_file(file, out, size);
 }
+static int read_binary(const char *root, const char *name, uint8_t *out, unsigned size) {
+    char file[512]; if (!path(file, root, name)) return -36;
+    long fd = syscall(56,-100,(long)file,0); if (fd < 0) return (int)fd;
+    long bytes = syscall(63,fd,(long)out,size); syscall(57,fd); return (int)bytes;
+}
+static uint32_t be_word(const uint8_t *p) {return (uint32_t)p[0]<<24 | (uint32_t)p[1]<<16 | (uint32_t)p[2]<<8 | p[3];}
+static bool dt_word(const char *root, const char *name, uint32_t *out) {
+    uint8_t bytes[8]; if (read_binary(root,name,bytes,sizeof bytes) != 4) return false;
+    *out = be_word(bytes); return true;
+}
+static bool dt_pair(const char *root, const char *name, uint32_t first, uint32_t second) {
+    uint8_t bytes[12]; return read_binary(root,name,bytes,sizeof bytes) == 8 && be_word(bytes) == first && be_word(bytes+4) == second;
+}
+static int arm_fastboot() {
+    if (syscall(174) != 0) {emit("[charge safety] root required\n"); return 2;}
+    const char *tree = "/sys/firmware/devicetree/base";
+    char text[128], reboot[512]; uint32_t cell = 0, mode = 0;
+    if (read_node(tree,"compatible",text,sizeof text) < 0 || !same(text,"xiaomi,sheng") ||
+        !path(reboot,tree,"reboot-mode") || !dt_word(reboot,"nvmem-cells",&cell) || !cell ||
+        !dt_word(reboot,"mode-bootloader",&mode) || mode != 2) {
+        emit("[charge safety] sheng reboot-mode cell unavailable\n"); return 2;
+    }
+    const char *devices = "/sys/bus/nvmem/devices";
+    long directory = syscall(56,-100,(long)devices,0);
+    if (directory < 0) {emit("[charge safety] nvmem providers unavailable\n"); return 2;}
+    uint8_t buffer[4096]; char selected[512] = {}; long bytes; unsigned matches = 0;
+    while ((bytes = syscall(61,directory,(long)buffer,sizeof buffer)) > 0) {
+        for (long at = 0; at+20 <= bytes;) {
+            uint16_t record = buffer[at+16] | (uint16_t)buffer[at+17]<<8;
+            if (record < 20 || at+record > bytes) break;
+            const char *name = (const char *)buffer+at+19;
+            char provider[512], node[512], reason[512]; uint32_t base = 0, phandle = 0;
+            if (name[0] != '.' && path(provider,devices,name) && path(node,provider,"of_node") &&
+                read_node(node,"compatible",text,sizeof text) > 0 && same(text,"qcom,spmi-sdam") &&
+                dt_word(node,"reg",&base) && base == 0x7100 && path(reason,node,"reboot-reason@48") &&
+                dt_word(reason,"phandle",&phandle) && phandle == cell && dt_pair(reason,"reg",0x48,1) &&
+                dt_pair(reason,"bits",1,7) && path(selected,provider,"nvmem")) ++matches;
+            at += record;
+        }
+    }
+    syscall(57,directory);
+    if (bytes < 0 || matches != 1) {emit("[charge safety] unique SDAM reboot-reason provider unavailable\n"); return 2;}
+    long fd = syscall(56,-100,(long)selected,2);
+    uint8_t old = 0, got = 0;
+    if (fd < 0) {emit("[charge safety] reboot reason open failed\n"); return 2;}
+    bool ok = syscall(67,fd,(long)&old,1,0x48) == 1;
+    const uint8_t wanted = (old & 1u) | (2u << 1);
+    if (ok) ok = syscall(68,fd,(long)&wanted,1,0x48) == 1 && syscall(67,fd,(long)&got,1,0x48) == 1 && got == wanted;
+    syscall(57,fd);
+    if (!ok) {emit("[charge safety] reboot reason write/readback failed\n"); return 2;}
+    emit("[charge safety] "); emit(selected); emit(" offset=72 old="); integer(old);
+    emit(" bootloader="); integer(got); emit(" verified\n"); return 0;
+}
 static int write_node(const char *root, const char *name, const char *value) {
     char file[512]; if (!path(file, root, name)) return -36;
     long fd = syscall(56, -100, (long)file, 1); if (fd < 0) return (int)fd;
@@ -251,13 +304,14 @@ static int authenticate(const char *root) {
 }
 extern "C" int charge_main(long argc, char **argv) {
     char root[512] = {}; const char *output = nullptr; bool run = false; uint32_t wait = 0, wait_pd = 0;
+    if (argc == 2 && same(argv[1],"--arm-fastboot")) return arm_fastboot();
     for (long i = 1; i < argc; ++i) {
         if (same(argv[i],"--authenticate")) run = true;
         else if (same(argv[i],"--sysfs") && i+1 < argc) {if (!copy(root,sizeof root,argv[++i])) return 2;}
         else if (same(argv[i],"--out") && i+1 < argc) output = argv[++i];
         else if (same(argv[i],"--wait") && i+1 < argc) {if (!number(argv[++i],10,&wait) || wait > 120) return 2;}
         else if (same(argv[i],"--wait-pd") && i+1 < argc) {if (!number(argv[++i],10,&wait_pd) || wait_pd > 120) return 2;}
-        else {emit("usage: sheng-charge [--authenticate] [--sysfs DIR] [--out FILE] [--wait SECONDS] [--wait-pd SECONDS]\n"); return same(argv[i],"--help") ? 0 : 2;}
+        else {emit("usage: sheng-charge --arm-fastboot | [--authenticate] [--sysfs DIR] [--out FILE] [--wait SECONDS] [--wait-pd SECONDS]\n"); return same(argv[i],"--help") ? 0 : 2;}
     }
     if (output) {log_fd = (int)syscall(56,-100,(long)output,577,0600); if (log_fd < 0) return 2;}
     const uint64_t end = now_ms() + wait*1000u;

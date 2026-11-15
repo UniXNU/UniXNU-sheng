@@ -32,6 +32,7 @@ def main():
     ap.add_argument('--module', action='append', default=[], type=Path)
     ap.add_argument('--file', action='append', default=[], metavar='TARGET=SOURCE',
                     help='add a relative initramfs path, preserving the source executable bit')
+    ap.add_argument('--append', action='append', default=[], help='additional kernel command-line argument')
     a = ap.parse_args()
     boot = a.boot.read_bytes()
     if boot[:8] != b'ANDROID!':
@@ -69,7 +70,10 @@ def main():
     header = bytearray(page)
     header[:8] = b'ANDROID!'
     struct.pack_into('<10I', header, 8, len(kernel), kernel_addr, len(ramdisk), 0x01000000, 0, 0x00f00000, tags, page, 0, os_version)
-    header[64:64 + len(CMDLINE)] = CMDLINE
+    cmdline = b' '.join([CMDLINE, *(value.encode() for value in a.append)])
+    if len(cmdline) >= 512:
+        ap.error('kernel command line exceeds the boot header field')
+    header[64:64 + len(cmdline)] = cmdline
     digest = hashlib.sha1()
     for blob in (kernel, ramdisk, b''):
         digest.update(blob)

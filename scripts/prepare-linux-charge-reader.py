@@ -20,6 +20,10 @@ MODULE_ROOTS = ('qrtr-smd.ko.zst', 'qcom_pd_mapper.ko.zst', 'qcom_glink_smem.ko.
                 'qcom_battmgr.ko.zst', 'qcom_q6v5_pas.ko.zst')
 SETUP = '''#!/bin/busybox sh
 set -eu
+if ! /bin/sheng-charge --arm-fastboot; then
+    echo '[charge safety] returning to fastboot before loading charging modules' >&2
+    exec /bin/rebootbl
+fi
 while read file name; do
     [ -d "/sys/module/$name" ] || insmod "/lib/charge-modules/$file"
 done < /lib/charge-modules/modules.load
@@ -134,11 +138,14 @@ def main():
         files += ['--file', f'lib/charge-modules/{path.name}={path}']
     subprocess.run([sys.executable, str(ROOT / 'package/linux-log/build-linux-log-boot.py'), '--boot', str(boot),
                     '--busybox', str(args.busybox), '--rebootbl', str(reboot), '--module',
-                    str(modules / 'nvmem-reboot-mode.ko'), '--out', str(args.out), *files], check=True)
+                    str(modules / 'nvmem-reboot-mode.ko'), '--out', str(args.out), '--append', 'panic=5',
+                    '--append', 'qcom_scm.download_mode=off', *files], check=True)
     report = {'kernel': KERNEL, 'modules': ordered, 'charge_command': '/bin/sheng-charge-setup --authenticate --wait-pd 120 --out /run/charge.log',
               'firmware_source': FIRMWARE, 'firmware': {name: hashlib.sha256((cache / 'firmware' / name).read_bytes()).hexdigest()
                                                        for name in FIRMWARE_FILES},
-              'image': str(args.out.resolve()), 'hardware_tested': False}
+              'image': str(args.out.resolve()), 'panic_timeout': 5, 'download_mode': 'off',
+              'bootloader_reason': 'SDAM 0x7100 offset 0x48 bits 7:1 = 2; preserve bit 0',
+              'hardware_tested': False}
     args.out.with_suffix('.json').write_text(json.dumps(report, indent=2) + '\n')
     print(args.out)
 
