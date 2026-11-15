@@ -96,6 +96,22 @@ jobs:
               dest.write_bytes(data)
               print(f'{name}: {len(data)} bytes verified', flush=True)
           PY
+      - name: cache ath12k deps
+        uses: actions/cache@v4
+        with:
+          path: device/drivers/Ath12kWifi/deps
+          key: ath12k-deps-${{ hashFiles('device/drivers/Ath12kWifi/tools/source-lock.json') }}
+      - name: fetch ath12k sources
+        working-directory: device/drivers/Ath12kWifi
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        # The supplicant build only runs fetch-sources.py --check (verify, never fetch). Populate the
+        # pinned Linux/FreeBSD/supplicant sources here so that check passes. Idempotent: the kernel
+        # module's own fetch-sources.sh re-verifies without re-cloning. Cached across runs.
+        run: |
+          set -euo pipefail
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+          python3 tools/fetch-sources.py
       - name: build
         working-directory: UniXNU
         env:
