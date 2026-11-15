@@ -11,11 +11,11 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import struct
 import subprocess
 import tomllib
 from pathlib import Path
+from unixnu.util import tool
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'build/sheng/probe'
@@ -45,8 +45,8 @@ def main():
     fill -= fill % 16
     if not 0 < fill <= fb_size:
         raise SystemExit('Marker does not fit inside Display Reserved')
-    clang = shutil.which('clang') or '/opt/homebrew/opt/llvm/bin/clang'
-    objcopy = shutil.which('llvm-objcopy') or '/opt/homebrew/opt/llvm/bin/llvm-objcopy'
+    clang = tool('clang')
+    objcopy = tool('llvm-objcopy')
     fd = (ROOT / 'uefi-sheng/Build/shengPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd').read_bytes()
     dtb = abl_dtb()
     if len(fd) != size:

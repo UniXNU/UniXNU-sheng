@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: MIT
-// Board glue for BootResetCore.h: PSCI feature probe, a read-only look at the PMIC arbiter and the reboot-reason cell, and the guarded
-// "restart into fastboot" (boot argument autoreset=<seconds>, see BootLog.c). Nothing here runs without BootLog's boot arguments.
+// Board power transitions and opt-in reset diagnostics. Normal macOS shutdown
+// uses the platform callback; BootLog arguments control diagnostic reset paths.
 #include <kern/thread.h>
 #include <machine/machine_routines.h>
 #include <string.h>
 #include <IOKit/IOLib.h>
+#include <IOKit/IOPlatformExpert.h>
 #include <kern/sched.h>
 #include <pexpert/pexpert.h>
 #include "BootResetCore.h"
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+#include "BootPower.h"
+#endif
 
 // Physical windows from the sheng devicetree (spmi@c400000 reg, reg-names core/chnls/obsrvr/cnfg).
 enum {SpmiCore = 0xc400000, SpmiCoreSize = 0x3000, SpmiObsrvr = 0xc440000, SpmiChnls = 0xc500000, SpmiCnfg = 0xc42d000, SpmiCnfgSize = 0x4000};
@@ -29,6 +33,31 @@ static uint64_t psci(uint64_t fid, uint64_t a1) {
                    "x14", "x15", "x16", "x17");
   return x0;
 }
+
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+static int platform_off_available, platform_reset_available;
+static int platform_power_invoke(uint32_t fid) {
+  const int64_t status = (int64_t)psci(fid, 0);
+  // A completed PSCI transition never returns to this kernel.
+  IOLog("[power] PSCI %x returned %lld\n", fid, (long long)status);
+  return -1;
+}
+static int platform_halt_restart(unsigned type) {
+  IOLog("[power] platform request %u off=%d reset=%d\n", type,
+        platform_off_available, platform_reset_available);
+  return boot_power_dispatch(type, platform_off_available, platform_reset_available,
+                             platform_power_invoke);
+}
+void boot_reset_install_platform(void) {
+  platform_off_available = (int32_t)psci(PsciFeatures, BootPowerOff) >= 0;
+  platform_reset_available = (int32_t)psci(PsciFeatures, BootPowerReset) >= 0;
+  int (*expected)(unsigned) = NULL;
+  const int installed = __atomic_compare_exchange_n(&PE_halt_restart, &expected,
+      platform_halt_restart, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+  IOLog("[power] platform handler %s off=%d reset=%d\n",
+        installed ? "installed" : "retained", platform_off_available, platform_reset_available);
+}
+#endif
 
 // ml_io_map hands out permanent mappings (io_submap, KMA_PERMANENT) that ml_io_unmap cannot free: its kmem_free on kernel_map panics with the
 // map lock held (int-105 hung launchd that way). Mappings that are unmapped again must be unmappable ones (flags 7 = VM_WIMG_IO).
