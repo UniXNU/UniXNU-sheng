@@ -27,6 +27,7 @@ def main():
     core = (ROOT / board['package']['unixnu']).resolve()
     sys.path.insert(0, str(core / 'scripts'))
     from unixnu import bootimg
+    from unixnu import ramdisk as codec
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='sheng-watchdog-', dir=args.output.parent) as directory:
         work = Path(directory)
@@ -47,6 +48,10 @@ def main():
                         parser.error('truncated payload')
                     target.write(data)
                     left -= len(data)
+        if codec.packed(payload):
+            decoded = work / 'decoded.img'
+            codec.decode(payload, decoded, core)
+            payload = decoded
         kernel = work / 'kernel.macho'
         path = '::/EFI/UniXNU/Payloads/kernel.macho'
         subprocess.run(['mcopy', '-i', str(payload), path, str(kernel)], check=True)

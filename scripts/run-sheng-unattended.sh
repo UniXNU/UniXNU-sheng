@@ -11,6 +11,7 @@ import struct
 import subprocess
 import sys
 import time
+import tomllib
 
 root = Path(sys.argv[1])
 if len(sys.argv) not in (3, 4):
@@ -25,6 +26,14 @@ if not image.is_file() or not reader.is_file() or limit <= 0:
     sys.exit('require existing test and reader images and a positive timeout')
 if userdata is not None and not userdata.is_file():
     sys.exit('USERDATA must name the full-partition sparse image')
+maximum = tomllib.loads((root / 'board.toml').read_text())['bootimg']['image']['ramdisk_max_bytes']
+for candidate in (image, reader):
+    with candidate.open('rb') as source:
+        header = source.read(48)
+    if len(header) < 48 or header[:8] != b'ANDROID!':
+        sys.exit(f'{candidate}: require an Android boot image')
+    if struct.unpack_from('<I', header, 16)[0] > maximum:
+        sys.exit(f'{candidate}: encoded ramdisk exceeds the {maximum}-byte sheng limit')
 if sys.platform == 'darwin':
     subprocess.Popen(['/usr/bin/caffeinate', '-is', '-w', str(os.getpid())])
 
@@ -42,12 +51,21 @@ def wait_fastboot(seconds):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         if serial in devices():
-            return
+            try:
+                result = subprocess.run(['fastboot', '-s', serial, 'getvar', 'product'],
+                                        capture_output=True, text=True, timeout=5)
+                if result.returncode == 0 and re.search(r'^product:\s*sheng\s*$', result.stdout + result.stderr, re.M):
+                    return
+            except subprocess.TimeoutExpired:
+                pass
         time.sleep(2)
     raise SystemExit(f'{serial}: fastboot did not appear within {seconds}s; evidence retained in {output}')
 
 def boot(path):
-    subprocess.run(['fastboot', '-s', serial, 'boot', str(path)], check=True, timeout=120)
+    try:
+        subprocess.run(['fastboot', '-s', serial, 'boot', str(path)], check=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        print(f'{serial}: boot acknowledgement timed out; waiting for the image return timer', flush=True)
 
 output.mkdir(parents=True, exist_ok=True)
 wait_fastboot(30)

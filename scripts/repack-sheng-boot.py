@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import struct
 import subprocess
+import sys
 import tempfile
 import tomllib
 
@@ -58,6 +59,10 @@ def main():
     parser.add_argument('--payload-mib', type=int, help='FAT payload size for a diagnostic RAM boot')
     parser.add_argument('--payload-file', action='append', default=[], metavar='SOURCE=FAT_PATH')
     args = parser.parse_args()
+    board = tomllib.loads((Path(__file__).resolve().parents[1] / 'board.toml').read_text())
+    core = (Path(__file__).resolve().parents[1] / board['package']['unixnu']).resolve()
+    sys.path.insert(0, str(core / 'scripts'))
+    from unixnu import ramdisk as codec
     if args.output.exists() or args.input.resolve() == args.output.resolve():
         parser.error('choose a new output file')
     blob = args.input.read_bytes()
@@ -74,19 +79,29 @@ def main():
         parser.error('boot image has truncated sections or unknown trailing data')
     kernel = blob[page:page + kernel_size]
     second = blob[second_at:second_at + second_size]
-    payload_bytes = args.payload_mib * MIB if args.payload_mib is not None else ramdisk_size
-    if payload_bytes < MIB:
+    payload_bytes = args.payload_mib * MIB if args.payload_mib is not None else None
+    maximum = board['bootimg']['image']['ramdisk_max_bytes']
+    if payload_bytes is not None and payload_bytes < MIB:
         parser.error('payload size must be at least 1 MiB')
     if args.partition_bytes:
         room = args.partition_bytes - page - align(kernel_size) - align(second_size)
-        payload_bytes = min(payload_bytes, room // MIB * MIB)
-        if payload_bytes < MIB:
+        if room < MIB:
             parser.error('boot partition leaves no room for the payload')
+        maximum = min(maximum, room)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='sheng-repack-', dir=args.output.parent) as directory:
         work = Path(directory)
         original = work / 'original.img'
         original.write_bytes(blob[ramdisk_at:ramdisk_at + ramdisk_size])
+        compressed = codec.packed(original)
+        if compressed:
+            decoded = work / 'decoded.img'
+            codec.decode(original, decoded, core)
+            original = decoded
+        original_size = original.stat().st_size
+        payload_bytes = payload_bytes or original_size
+        if args.partition_bytes and not compressed:
+            payload_bytes = min(payload_bytes, maximum // MIB * MIB)
         config = work / 'unixnu.toml'
         run('mcopy', '-i', original, '::/EFI/UniXNU/unixnu.toml', config)
         config.write_text(change_arguments(config.read_text(), args.kernel_arg, args.remove_arg))
@@ -98,7 +113,7 @@ def main():
                 parser.error('--payload-file needs an existing source and relative FAT path')
             replacements.append((Path(source), relative))
         payload = original
-        if payload_bytes != ramdisk_size:
+        if payload_bytes != original_size:
             files = work / 'files'
             files.mkdir()
             run('mcopy', '-s', '-i', original, '::*', files)
@@ -117,7 +132,14 @@ def main():
             for source, relative in replacements:
                 run('mcopy', '-o', '-i', payload, source, '::/' + relative.as_posix())
             run('mcopy', '-o', '-i', payload, config, '::/EFI/UniXNU/unixnu.toml')
-        ramdisk = payload.read_bytes()
+        if compressed:
+            packed = work / 'packed.img'
+            codec.encode(payload, packed, core)
+            ramdisk = packed.read_bytes()
+        else:
+            ramdisk = payload.read_bytes()
+        if len(ramdisk) > maximum:
+            parser.error(f'encoded ramdisk exceeds the {maximum}-byte sheng limit; use matching compressed-payload firmware')
     header = bytearray(blob[:page])
     struct.pack_into('<I', header, 16, len(ramdisk))
     digest = hashlib.sha1()
@@ -130,7 +152,7 @@ def main():
         for section in (kernel, ramdisk, second):
             output.write(section)
             output.write(bytes(align(len(section)) - len(section)))
-    print(f'{args.output}: {args.output.stat().st_size} bytes, payload {len(ramdisk) // MIB} MiB')
+    print(f'{args.output}: {args.output.stat().st_size} bytes, FAT {payload_bytes // MIB} MiB, encoded ramdisk {len(ramdisk)} bytes')
 
 
 if __name__ == '__main__':

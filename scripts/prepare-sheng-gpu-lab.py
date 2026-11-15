@@ -32,6 +32,8 @@ def main():
     if args.output.exists() or args.input.resolve() == args.output.resolve():
         parser.error('choose a new output file')
     core = (ROOT / tomllib.loads((ROOT / 'board.toml').read_text())['package']['unixnu']).resolve()
+    sys.path.insert(0, str(core / 'scripts'))
+    from unixnu import ramdisk as codec
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='sheng-gpu-lab-', dir=args.output.parent) as directory:
         work = Path(directory)
@@ -52,6 +54,10 @@ def main():
                         parser.error('truncated payload')
                     target.write(data)
                     left -= len(data)
+        if codec.packed(payload):
+            decoded = work / 'decoded.img'
+            codec.decode(payload, decoded, core)
+            payload = decoded
         original_addon, original_trust = work / 'original-addon.bin', work / 'original-trust.bundle'
         prefix = 'EFI/UniXNU/Payloads/kernel.macho.'
         run('mcopy', '-i', payload, '::/' + prefix + 'gpuaddon', original_addon)

@@ -104,6 +104,10 @@ CI_ENABLE_METAL_GPU = "0"
 "dtb" = "build/sheng/sheng.dtb"
 "dtb_node" = [{ "path" = "/reserved-memory/splash_region", "props" = [{ "name" = "label", "type" = "s", "value" = "cont_splash_region" }, { "name" = "reg", "type" = "x", "value" = ["0x0", "0xb8000000", "0x0", "0x2b00000"] }] }]
 
+["bootimg"."image"]
+ramdisk_compression = "uefi-chunks"
+ramdisk_max_bytes = 199229440
+
 
 ["device_tree"]
 "source" = "device:dts/sheng.dts"
