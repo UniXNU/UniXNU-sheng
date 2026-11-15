@@ -252,6 +252,13 @@ revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
 command = "python3 scripts/run-local-kernel.py --sdk SDK --tools TOOLCHAIN -- build kernel prelink -D ../UniXNU-sheng --os macos-27 --data-ramdisk installed-data.dbr --skip-preflight"
 result = "The selected ShengUfs b6fe07b307eeddc5e258c9d5d4387b968a55e4e9 source compiles and links in the macOS 27.3 kernel; the validated integration mounts its sealed root and persistent Data volumes."
 
+[[area.evidence]]
+kind = "device"
+reference = "reports/macos27-internal-storage.md"
+revision = "0aa9193002eab9879e5b4cb4ff8df7e200df1ac6"
+command = "SERIAL=b714917c READER=sheng-linux-log.img OUT=capture scripts/run-sheng-unattended.sh sheng-macos27-pass-snapshot.img 540"
+result = "On sheng with macOS 27.3, eight snapshots retain all three Internal UFS identities and the sealed App cryptex mount. Safari's target directory is accessible. The same storage source mounts the App cryptex across three captured boots; the latest capture records 302 seconds and a command-responsive fastboot return."
+
 [[area]]
 id = "display"
 status = "implemented"
