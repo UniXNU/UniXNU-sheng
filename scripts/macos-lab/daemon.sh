@@ -5,6 +5,11 @@ set -u
 /bin/chmod 1777 /Users/Shared/unixnu-test
 /bin/rm -f /Users/Shared/unixnu-test/benchmark.done /Users/Shared/unixnu-test/reboot-requested
 session=/Users/Shared/unixnu-test
+for name in icon-probe.log video-probe.log icons.png; do
+    if [ -s "$session/$name" ]; then
+        /bin/mv -f "$session/$name" "$session/previous-$name"
+    fi
+done
 build=/Library/GPUBundles/NativeAdrenoMetal.bundle/Contents/Resources/gpu-build.json
 state=/private/var/db/unixnu-lab
 /bin/mkdir -p "$state"
