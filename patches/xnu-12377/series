@@ -21,3 +21,4 @@ zzzzzzzzzzz-sheng-edge-matrix.patch
 zzzzzz-sheng-bsd-checkpoints.patch
 sheng-bootstrap-checkpoints.patch
 sheng-headless-startup-checkpoints.patch
+sheng-startup-failure-log.patch

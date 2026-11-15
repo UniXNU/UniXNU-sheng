@@ -20,6 +20,7 @@
 #include <mach/mach_time.h>
 #include <machine/machine_routines.h>
 #include <string.h>
+#include <stdarg.h>
 #include <pexpert/pexpert.h>
 #include <kern/misc_protos.h>
 #include <IOKit/IOLib.h>
@@ -484,6 +485,12 @@ void boot_log_checkpoint(const char *stage) {
 void boot_log_startup_stage(int pid, const char *stage) {
   if (boot_log_state != 2 || ml_at_interrupt_context()) return;
   if ((pid ? pid : proc_selfpid()) == 1) boot_log_checkpoint(stage);
+}
+
+void boot_log_startup_result(const char *stage, int result) {
+  char text[160];
+  snprintf(text, sizeof text, "%s result=%d", stage, result);
+  boot_log_startup_stage(0, text);
 }
 
 static volatile int boot_log_panicked;   // set by boot_log_panic_flush: the writer no longer writes
@@ -2959,6 +2966,23 @@ void boot_log_panic_flush(void) {
   memcpy(boot_log_panic_buffer, &h, sizeof h);
   native_ufs_log_write(0, 1, boot_log_panic_buffer);
   native_ufs_log_sync();
+}
+
+void boot_log_panic_record(const char *format, va_list *args, unsigned long caller) {
+  static unsigned recorded;
+  uint32_t probe = 0;
+  if (boot_log_state != 2 || !&boot_progress_panic_text ||
+      !PE_parse_boot_argn("storage-probe", &probe, sizeof probe) || probe != 1) return;
+  if (__atomic_exchange_n(&recorded, 1, __ATOMIC_ACQ_REL)) return;
+  va_list copy;
+  va_copy(copy, *args);
+  vsnprintf(boot_progress_panic_text, sizeof boot_progress_panic_text, format, copy);
+  va_end(copy);
+  const size_t length = strnlen(boot_progress_panic_text, sizeof boot_progress_panic_text);
+  if (length < sizeof boot_progress_panic_text)
+    snprintf(boot_progress_panic_text + length, sizeof boot_progress_panic_text - length,
+             " caller=%lx", caller);
+  boot_log_panic_flush();
 }
 
 // EARLY_BOOT takes over the firmware watchdog before memory adoption and IOKit startup.
