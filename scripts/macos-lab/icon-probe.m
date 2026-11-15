@@ -1,6 +1,28 @@
 #import <AppKit/AppKit.h>
 #import <CoreImage/CoreImage.h>
 #import <Metal/Metal.h>
+#include <dlfcn.h>
+
+@interface NSObject (SettingsIconProbe)
+- (id)initWithType:(NSString *)type;
+- (id)initWithApplicationExtensionBundleIdentifier:(NSString *)identifier;
+- (id)initWithSize:(CGSize)size scale:(double)scale;
+- (CGImageRef)CGImageForDescriptor:(id)descriptor;
+- (void)setIgnoreCache:(BOOL)ignore;
+@end
+
+static NSImage *settingsServiceIcon(NSString *path) {
+ NSDictionary *info=[NSDictionary dictionaryWithContentsOfFile:[path stringByAppendingPathComponent:@"Contents/Info.plist"]];
+ NSString *type=info[@"CFBundleIcons"][@"ISGraphicIconConfiguration"][@"ISTypeIdentifier"];
+ id icon=type?[[NSClassFromString(@"ISIcon") alloc] initWithType:type]:
+              [[NSClassFromString(@"ISIcon") alloc] initWithApplicationExtensionBundleIdentifier:info[@"CFBundleIdentifier"]];
+ id descriptor=[[NSClassFromString(@"ISImageDescriptor") alloc] initWithSize:CGSizeMake(24,24) scale:2];
+ [descriptor setIgnoreCache:YES];
+ NSString *identifier=type?:info[@"CFBundleIdentifier"];
+ printf("settings service type=%s descriptor=%s\n",identifier.UTF8String,[descriptor description].UTF8String);
+ CGImageRef source=[icon CGImageForDescriptor:descriptor];
+ return source?[[NSImage alloc] initWithCGImage:source size:NSMakeSize(24,24)]:nil;
+}
 
 static BOOL sourcePixels(NSImage *icon, NSUInteger index, NSUInteger size) {
  NSRect bounds=NSMakeRect(0,0,size,size);
@@ -105,7 +127,12 @@ int main(int argc, const char **argv) {
   const char *destination=single?argv[3]:settings?argv[2]:argv[1];
   NSMutableArray<NSString *> *paths=[NSMutableArray array];
   NSFileManager *files=NSFileManager.defaultManager;
-  if(settings)[paths addObjectsFromArray:settingsIconPaths()];
+  if(settings) {
+   dlopen("/System/Library/PrivateFrameworks/IconServices.framework/IconServices",RTLD_LAZY);
+   for(NSString *path in settingsIconPaths()) {
+    [paths addObject:path];[paths addObject:[@"iconservices:" stringByAppendingString:path]];
+   }
+  }
   else if(single)[paths addObject:@(argv[2])];
   else for(NSString *root in @[@"/System/Applications",@"/System/Library/PreferencePanes"]) {
    for(NSString *name in [[files contentsOfDirectoryAtPath:root error:nil] sortedArrayUsingSelector:@selector(compare:)]) {
@@ -123,11 +150,13 @@ int main(int argc, const char **argv) {
   for(NSUInteger i=0;i<count;++i) {
    @autoreleasepool {
     NSTimeInterval began=NSDate.timeIntervalSinceReferenceDate;
-    NSImage *icon=symbols && i>0?[NSImage imageWithSystemSymbolName:paths[i] accessibilityDescription:nil]:[NSWorkspace.sharedWorkspace iconForFile:paths[i]];
+    BOOL service=[paths[i] hasPrefix:@"iconservices:"];
+    NSString *path=service?[paths[i] substringFromIndex:13]:paths[i];
+    NSImage *icon=service?settingsServiceIcon(path):symbols && i>0?[NSImage imageWithSystemSymbolName:path accessibilityDescription:nil]:[NSWorkspace.sharedWorkspace iconForFile:path];
     if(!icon){printf("icon index=%lu unavailable path=%s\n",(unsigned long)i,paths[i].UTF8String);available=NO;continue;}
     if(settings || (symbols && i>0))available=symbolPixels(icon,paths[i]) && available;
     if(settings) {
-     NSDictionary *info=[NSDictionary dictionaryWithContentsOfFile:[paths[i] stringByAppendingPathComponent:@"Contents/Info.plist"]];
+     NSDictionary *info=[NSDictionary dictionaryWithContentsOfFile:[path stringByAppendingPathComponent:@"Contents/Info.plist"]];
      printf("settings icon index=%lu configuration=%s\n",(unsigned long)i,[info[@"CFBundleIcons"] description].UTF8String);
      available=sourcePixels(icon,i,24) && available;
     }
