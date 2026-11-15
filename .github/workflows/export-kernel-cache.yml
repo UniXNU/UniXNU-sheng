@@ -45,11 +45,11 @@ jobs:
           tools = Path('export/toolchain/bin')
           tools.mkdir(parents=True)
           pending = []
-          for name in ('clang', 'clang++', 'ld', 'ar', 'ranlib', 'libtool', 'nm', 'strip', 'dsymutil',
+          for name in ('clang', 'clang++', 'ld', 'ld-classic', 'ar', 'ranlib', 'libtool', 'nm', 'strip', 'dsymutil',
                        'migcom', 'iig', 'tightbeamc', 'ctfconvert', 'ctfmerge'):
               found = subprocess.run(['xcrun', '--find', name], capture_output=True, text=True)
               if found.returncode:
-                  if name in ('clang', 'clang++', 'ld', 'migcom', 'iig'):
+                  if name in ('clang', 'clang++', 'ld', 'ld-classic', 'migcom', 'iig'):
                       raise SystemExit('Required kernel tool missing: ' + name)
                   continue
               original = Path(found.stdout.strip())
@@ -98,6 +98,16 @@ jobs:
           shutil.copytree(resource, libraries / 'clang' / resource.name, symlinks=False)
           for name, option in (('clang', '--version'), ('iig', '--version'), ('ld', '-version_details')):
               subprocess.run([str((tools / name).resolve()), option], check=True)
+          probe = Path('export/toolchain-check.c')
+          probe.write_text('int unixnu_toolchain_export(void) { return 0; }\n')
+          subprocess.run([str((tools / 'clang').resolve()), '-target', 'arm64e-apple-ios27.0',
+                          '-c', str(probe), '-o', 'export/toolchain-check.o'], check=True)
+          subprocess.run([str((tools / 'ld-classic').resolve()), '-r', '-arch', 'arm64e',
+                          '-platform_version', 'ios', '27.0', '27.0', 'export/toolchain-check.o',
+                          '-o', 'export/toolchain-check.partial.o'], check=True)
+          subprocess.run(['tar', '-C', str(tools.parent), '-cf', 'export/toolchain-linker.tar',
+                          'bin/ld-classic'], check=True)
+          subprocess.run(['zstd', '-T2', '-3', '--rm', 'export/toolchain-linker.tar'], check=True)
           Path('export/build-paths.json').write_text(json.dumps(dict(
               tree=str(Path(sys.argv[1]).resolve()), sdk=sys.argv[2],
               toolchain=str(compiler.parent.parent),
