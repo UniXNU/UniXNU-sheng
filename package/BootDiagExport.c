@@ -11,8 +11,17 @@
 #include <sys/dirent.h>
 #include <sys/fcntl.h>
 #include <sys/kauth.h>
+#include <sys/sysctl.h>
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
+
+extern int boot_diag_request;
+extern volatile int boot_diag_status;
+SYSCTL_DECL(_kern);
+SYSCTL_INT(_kern, OID_AUTO, unixnu_diag_request, CTLFLAG_RW | CTLFLAG_LOCKED,
+           &boot_diag_request, 0, "Request one enabled diagnostic export");
+SYSCTL_INT(_kern, OID_AUTO, unixnu_diag_status, CTLFLAG_RD | CTLFLAG_LOCKED,
+           (int *)&boot_diag_status, 0, "Diagnostic export state");
 
 extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
 /* Opt-in capture of the cache loader's own error log. Runs on the log writer,

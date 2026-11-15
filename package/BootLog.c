@@ -17,7 +17,6 @@
 #include "BootTime.h"
 #include <kern/thread.h>
 #include <kern/clock.h>
-#include <sys/sysctl.h>
 #include <string.h>
 #include <pexpert/pexpert.h>
 #include <kern/misc_protos.h>
@@ -446,12 +445,7 @@ static uint32_t export_total, export_filled, export_generation, export_target, e
 static uint32_t diag_first, diag_bytes;
 static int diag_owned;
 volatile int boot_diag_status;
-static int boot_diag_request;
-SYSCTL_DECL(_kern);
-SYSCTL_INT(_kern, OID_AUTO, unixnu_diag_request, CTLFLAG_RW | CTLFLAG_LOCKED,
-           &boot_diag_request, 0, "Request one enabled diagnostic export");
-SYSCTL_INT(_kern, OID_AUTO, unixnu_diag_status, CTLFLAG_RD | CTLFLAG_LOCKED,
-           (int *)&boot_diag_status, 0, "Diagnostic export state");
+int boot_diag_request;
 extern volatile uint32_t boot_diag_files __attribute__((weak_import));
 extern volatile uint32_t boot_diag_alloc __attribute__((weak_import));
 extern volatile uint32_t boot_diag_skipped __attribute__((weak_import));
