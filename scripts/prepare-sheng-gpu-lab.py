@@ -101,7 +101,6 @@ def main():
         run('codesign', '--force', '--sign', '-', '--timestamp=none', '--pagesize', '4096', files / 'bin/gpu-correctness-probe')
         (files / 'share').mkdir(exist_ok=True)
         (files / 'share/icon-probe-path').write_text(args.icon_path+'\n' if args.icon_path else '')
-        (files / 'share/icon-dump-cb').write_text(args.icon_dump_cb+'\n' if args.icon_dump_cb else '')
         for name in ('video-probe.mp4', 'video-probe-10bit.mp4'):
             (files / 'share' / name).write_bytes(b'')
         if args.video_fixture:
@@ -183,11 +182,14 @@ def main():
             ctx.uefi = args.uefi.resolve()
             spec = ctx.board['payload']
             spec['size_mib'], spec['timeout'] = args.payload_mib, 1
-            removed = {'exec-log', 'vc-text', 'storage-probe', 'data-reset'}
+            removed = {'exec-log', 'vc-text', 'storage-probe', 'data-reset', 'icon-cb'}
+            if args.icon_dump_cb:
+                removed.add('gpu-perf')
             spec['kernel_args'] = [item for item in spec['kernel_args'] if item.split('=', 1)[0] not in removed]
             options.kernel_arg = [f'autoreset={args.autoreset}', f'diag-export={args.autoreset-60}',
-                'uefi-watchdog=1', 'diag=1', 'gpu-trace=1', 'gpu-perf=1', 'log-gpu=1',
+                'uefi-watchdog=1', 'diag=1', 'gpu-trace=1', 'log-gpu=1',
                 'log-video=1', 'log-bluetooth=3', 'build-tag=s00000', 'ci-mps=0']
+            options.kernel_arg += ['icon-cb='+args.icon_dump_cb] if args.icon_dump_cb else ['gpu-perf=1']
             fd = firmware.fd_path(ctx, ctx.uefi, 'DEBUG')
             # The template carries every firmware module built for this candidate.
             # Its ramdisk is empty; the account and OS remain private payload inputs.
@@ -220,11 +222,16 @@ def main():
                    '--payload-mib', args.payload_mib,
                    '--payload-file', str(addon) + '=' + prefix + 'gpuaddon',
                    '--payload-file', str(trust) + '=' + prefix + 'trustcache',
-                   '--remove-arg', 'exec-log', '--remove-arg', 'vc-text', '--remove-arg', 'storage-probe']
+                   '--remove-arg', 'exec-log', '--remove-arg', 'vc-text', '--remove-arg', 'storage-probe',
+                   '--remove-arg', 'icon-cb']
         for value in (f'autoreset={args.autoreset}', 'uefi-watchdog=1', 'diag=1', f'diag-export={args.autoreset-60}',
-                      'gpu-trace=1', 'gpu-perf=1', 'log-gpu=1', 'log-power=1', 'log-sys=1', 'log-display=1',
+                      'gpu-trace=1', 'log-gpu=1', 'log-power=1', 'log-sys=1', 'log-display=1',
                       'log-video=1', 'log-bluetooth=3', 'build-tag=s00000'):
             command += ['--kernel-arg', value]
+        if args.icon_dump_cb:
+            command += ['--remove-arg', 'gpu-perf', '--kernel-arg', 'icon-cb='+args.icon_dump_cb]
+        else:
+            command += ['--kernel-arg', 'gpu-perf=1']
         if args.preserve_data:
             command += ['--remove-arg', 'data-reset']
         run(*command)
