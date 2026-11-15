@@ -1,0 +1,38 @@
+{
+  "device": "sheng",
+  "os": "macOS 27.3 26C5035r",
+  "core_revision": "1fb6dee31f490407208581f8b6f98fcfb1b31f62",
+  "device_revision": "6cb46347a5dc03ea6a14899c805353918345e4c0",
+  "kernel_sha256": "2de608ec47cbacb6dca55c875e38eec4781fe1bca73c60fc810de8c3c86c7662",
+  "translator": "d9236a8a11d3b90a1aa27b54e2d74d3891c4d2e5",
+  "runtime": "0c6a597185dfb7ce905070445ecd032d",
+  "capture": {
+    "tag": "s97d56",
+    "fresh": true,
+    "uptime_seconds": 633,
+    "files": 25,
+    "bytes": 57355723
+  },
+  "observations": {
+    "windowserver_pid": 168,
+    "last_sample_elapsed": "08:25",
+    "windowserver_exit": "status 0 during the scheduled shutdown",
+    "apfs_hash_mismatch_messages": 0,
+    "windowserver_abnormal_exits": [],
+    "gpu_hangs": 0,
+    "gpu_restarts": 0,
+    "gpu_recovery_failures": 0,
+    "shader_priming": "The exported prime.log identifies an older boot; this capture does not qualify current-runtime priming.",
+    "video_probe": "The probe submitted an empty AVAssetReader marker and returned -12902. The corrected host probe skips four markers and decodes all 120 HEVC frames on hardware."
+  },
+  "host_checks": {
+    "signed_text_groups": 9,
+    "undefined_behavior_sanitizer": "passed with recovery disabled"
+  },
+  "recovery": {
+    "test_seconds": 700.546,
+    "reader_seconds": 23.152,
+    "final_fastboot": true,
+    "persistent_boot_partition_modified": false
+  }
+}

@@ -48,12 +48,22 @@ int main(int argc, const char **argv) {
         VTDecompressionOutputCallbackRecord callback = {decoded, &results};
         VTDecompressionSessionRef session = NULL;
         unsigned submitted = 0;
+        unsigned markers = 0;
         OSStatus status = 0;
         CFAbsoluteTime started = CFAbsoluteTimeGetCurrent();
         CMSampleBufferRef sample;
         while ((sample = [output copyNextSampleBuffer])) {
+            if (!CMSampleBufferGetNumSamples(sample)) {
+                ++markers;
+                CFRelease(sample);
+                continue;
+            }
             if (!session) {
                 CMVideoFormatDescriptionRef format = CMSampleBufferGetFormatDescription(sample);
+                printf("video-probe sample valid=%d ready=%d samples=%ld bytes=%zu format=%p\n",
+                    CMSampleBufferIsValid(sample), CMSampleBufferDataIsReady(sample),
+                    (long)CMSampleBufferGetNumSamples(sample), CMSampleBufferGetTotalSampleSize(sample), format);
+                if (!format) format = (__bridge CMVideoFormatDescriptionRef)track.formatDescriptions.firstObject;
                 CMVideoDimensions size = CMVideoFormatDescriptionGetDimensions(format);
                 FourCharCode codec = CMFormatDescriptionGetMediaSubType(format);
                 NSDictionary *spec = required ? @{(__bridge NSString *)kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: @YES}
@@ -84,8 +94,8 @@ int main(int argc, const char **argv) {
             CFRelease(session);
         }
         unsigned count = atomic_load(&results.decoded), errors = atomic_load(&results.errors);
-        printf("video-probe submitted=%u decoded=%u dropped=%u errors=%u seconds=%.6f reader=%ld error=%s\n",
-            submitted, count, atomic_load(&results.dropped), errors, CFAbsoluteTimeGetCurrent() - started,
+        printf("video-probe submitted=%u decoded=%u dropped=%u errors=%u markers=%u seconds=%.6f reader=%ld error=%s\n",
+            submitted, count, atomic_load(&results.dropped), errors, markers, CFAbsoluteTimeGetCurrent() - started,
             (long)reader.status, reader.error.description.UTF8String ?: "");
         return status || errors || !count || count != submitted || reader.status == AVAssetReaderStatusFailed ? 1 : 0;
     }
