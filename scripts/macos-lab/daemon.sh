@@ -77,7 +77,9 @@ video_probe() {
         /bin/echo "video probe exit=$result" >> "$session/video-probe.log"
     done
 }
-video_probe &
+if [ ! -s /private/var/ngpu/test/share/icon-probe-path ]; then
+    video_probe &
+fi
 if [ -s /private/var/ngpu/test/share/graphics-comparison ]; then
     (
         delays='120 90'
