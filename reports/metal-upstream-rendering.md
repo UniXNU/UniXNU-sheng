@@ -6,20 +6,18 @@ The comparison uses the General pane in System Settings and a 1024 by 896 atlas 
 
 | Source | Upstream revision | Result |
 | --- | --- | --- |
-| Main reference, component `26d4902c588d0d0c23993cc4f32ebe9062d5c377` | `555b13d57e09bff70996a88cff64f1275256d5cf` | Complete icon backgrounds. |
-| Main consumer optimizations, component `89d7942e06dad93b5a5a52f817aa8c19fd899b37` | `842fd73b71f4c595810651bb61d8a0c48f486845` | All atlas pixels match the reference. CB 4 pass 2 and its downstream attachments match the reference statistics, with RGB minimum zero. |
-| Native half contraction, component `e717879a905089bc65d34851fb795bb9fb505fdb` | `f3c9f748ce94ede0bddb3626654e1d8b0bb31797` | All atlas pixels and selected attachment statistics match the reference, with RGB minimum zero. |
-| Render-target checkpoint, component `79915e358c0e2c4e750ed851eb9c8f4359dfb339` | `a5a0ecbd30aeeba46f4f5ad80c7112fdaccf112b` | All atlas pixels and selected attachment statistics match the reference, with RGB minimum zero. |
-| Half arithmetic checkpoint, component `59b23b38b722be17ef167a53cea8412830489760` | `50cdea6eb876c6319b7dba8bccafb28bb9e97d88` | All atlas pixels and selected attachment statistics match the reference, with RGB minimum zero. |
-| Snapshot reuse checkpoint, component `54c18dcffc359d21f4e620c3b38b3908cecc46a5` | `8b9b2875ab2ca32de30db6d5c396e1469e164bee` | All atlas pixels and selected attachment statistics match the reference, with RGB minimum zero. |
-| Texture row checkpoint, component `252601c418be284246c648eb9a014ad0268f3a13` | `38cc6ae244af2bb2e8bb4ceede5bf9cc7dbede3b` | All atlas pixels and selected attachment statistics match the reference, with RGB minimum zero. Settings backgrounds remain complete through 175 seconds. |
-| Buffer offset baseline, component `898c786c0d7087ab62eb1886b96240597caadc2d` | `188606728a57db94f94395ba03144fccbe05a91d` | All atlas pixels and selected attachment statistics match the reference, with RGB minimum zero. Settings backgrounds remain complete through 175 seconds. |
-| Snapshot and binding checkpoint, component `5e881fea2086ccd959c85b846ada42e8c59f3b6a` | `1b5a527f5e00abe64036db54c445d2a0e91325c1` | Green checkerboard artifacts in a widget, cropped Settings icons and changed atlas RGB pixels. CB 4 pass 2 has RGB minima near -0.95; atlas alpha pixels match the reference. |
-| Integrated diagnostic runtime, component `f3103ad1e5f4b6b53ba5669db9d63dac0cb9d271` | `39dc65850326a5c69ad8bdf87a6fd58c8d188108` | Cropped backgrounds and colored edges. CB 4 pass 2 has RGB minima near -0.95. |
+| Main reference, component `26d4902c588d0d0c23993cc4f32ebe9062d5c377` | `555b13d57e09bff70996a88cff64f1275256d5cf` | Complete icon backgrounds. Some low-resolution variants contain the background alone. |
+| Last matching checkpoint, component `898c786c0d7087ab62eb1886b96240597caadc2d` | `188606728a57db94f94395ba03144fccbe05a91d` | All atlas pixels and selected attachment statistics match the main reference. |
+| Shared uniform ranges, component `5e881fea2086ccd959c85b846ada42e8c59f3b6a` | `1b5a527f5e00abe64036db54c445d2a0e91325c1` | Green widget artifacts, cropped Settings icons and changed atlas RGB pixels. CB 4 pass 2 has RGB minima near -0.95. |
+| Corrected uniform array capacity, component `79a2d579af8e1e559391ca03874ca7cbadc360bf` | `1b5a527f5e00abe64036db54c445d2a0e91325c1` | All 56-source atlas pixels and CB 4 passes 2, 4 and 5 statistics match the main reference, with RGB minimum zero. Retained widget and Settings photos show complete backgrounds. |
 
-The verified checkpoint uses runtime `0e34e046e4a39a1e7c78b485888ca1df`. Capture `s0aec4-3b692b846`, boot `97A3B365-A174-4BA6-9ACD-6323BA19136B`, retained the 60, 90, 120, 150 and 175 second photos. The image returned after 204.325 seconds; Linux log retrieval took 18.852 seconds and fastboot responded. The reference atlas is from `sf0ff4-22d059986`; its CB 4 trace is from `s57b45-14bbf54d9`. The integrated diagnostic capture is `se8d01-1cc2adcce`.
+## Uniform array capacity
 
-The regression is bounded by `18860672` (RUNTIME 2338) and `1b5a527f` (RUNTIME 2340), a range of three commits: RUNTIME 2339, its source pin and RUNTIME 2340. Capture `seb6b9-43f6ffa80`, boot `E917244A-979D-4CAC-B828-E9A293DAC83D`, reproduced the selected attachment statistics of `39dc6585`. Its v0 image returned after 207.460 seconds; Linux retrieval took 19.332 seconds and fastboot responded. The cause within this range is unresolved.
+RUNTIME 2339 (`734e1cac02c26be4040dca3ea280a6e2f17908a2`) shares uniform descriptor ranges and places a binding's remaining offset in the shader. The shader's fixed array must span that descriptor range. Sizing it to the original window allows an offset inside the descriptor to exceed the declared array.
+
+A740 reports a 64-byte uniform offset alignment and a 65536-byte maximum uniform range. A 16-byte window declared an 80-byte array, while a shared range can give it a 256-byte offset. The corrected compiler sizes eligible uniform arrays to the aligned maximum range and uses a separate cache semantics version. Shared ranges and the consumer's optimizations remain enabled.
+
+The corrected runtime is `24128cb24c4a7146e58247a367ec0e06`. Capture `s393c4-48393a6e3`, boot `428DE739-2D3F-49F1-88C3-5FBF38A32A09`, retained photos at 60, 90, 120, 150 and 175 seconds. The image returned after 206.264 seconds; Linux log retrieval took 19.015 seconds and fastboot responded. The original reference atlas is `sf0ff4-22d059986`, and its CB 4 trace is `s57b45-14bbf54d9`. The failing comparison is `seb6b9-43f6ffa80`.
 
 ## Capture
 
