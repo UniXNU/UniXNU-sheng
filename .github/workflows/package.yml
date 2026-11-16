@@ -34,12 +34,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: UniXNU/UniXNU
-          ref: fd7280a44e60f33191e7714051366734326fecbc # main: macOS GPU/root-storage/APFS/VM fixes the author boots from
+          ref: 71400b5663ccb793ef4cea7302d488645011dd61 # main HEAD: #266/#267 catalog + author's data-seed wait_for_container fix
           path: UniXNU
           submodules: recursive
       - uses: actions/checkout@v4
         with:
           repository: UniXNU/uefi-sheng
+          ref: b303410c8e401fc9419ae65a024356ed09a438ef # sheng HEAD: PR #6 8GiB ABL memory map
           path: uefi-sheng
           submodules: recursive
       - name: tools
@@ -153,10 +154,6 @@ jobs:
           echo "TREE=$TREE" >> "$GITHUB_ENV"
           # Sign the root windows with a fresh owner key; headers go to the device repo, tables to the tree.
           python3 "$DEVICE/scripts/ci-macos-policies.py" -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI"
-          # On macos-26 the attached APFS container registers a moment after hdiutil attach returns;
-          # the framework's single immediate probe can miss it ("No APFS container found on the attached
-          # seed"). Wait-and-retry that probe (validated in isolation); no other behavior changes.
-          python3 "$DEVICE/scripts/ci-patch-seed-grow.py" "$TREE/scripts/seed-data-grow.py"
           # First-install Data seed (data.dbr): the payload build needs it; the tool runs as root.
           python3 "$DEVICE/scripts/ci-macos-data-seed.py" -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI"
           ./unixnu build kernel package firmware payload -D "$DEVICE" --os "$OS_PROFILE" --uefi "$UEFI" --init-data
