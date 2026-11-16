@@ -10,9 +10,10 @@ The comparison uses the General pane in System Settings and a 1024 by 896 atlas 
 | Main consumer optimizations, component `89d7942e06dad93b5a5a52f817aa8c19fd899b37` | `842fd73b71f4c595810651bb61d8a0c48f486845` | All atlas pixels match the reference. CB 4 pass 2 and its downstream attachments match the reference statistics, with RGB minimum zero. |
 | Native half contraction, component `e717879a905089bc65d34851fb795bb9fb505fdb` | `f3c9f748ce94ede0bddb3626654e1d8b0bb31797` | All atlas pixels and selected attachment statistics match the reference, with RGB minimum zero. |
 | Render-target checkpoint, component `79915e358c0e2c4e750ed851eb9c8f4359dfb339` | `a5a0ecbd30aeeba46f4f5ad80c7112fdaccf112b` | All atlas pixels and selected attachment statistics match the reference, with RGB minimum zero. |
+| Half arithmetic checkpoint, component `59b23b38b722be17ef167a53cea8412830489760` | `50cdea6eb876c6319b7dba8bccafb28bb9e97d88` | All atlas pixels and selected attachment statistics match the reference, with RGB minimum zero. |
 | Integrated diagnostic runtime, component `f3103ad1e5f4b6b53ba5669db9d63dac0cb9d271` | `39dc65850326a5c69ad8bdf87a6fd58c8d188108` | Cropped backgrounds and colored edges. CB 4 pass 2 has RGB minima near -0.95. |
 
-The verified checkpoint uses runtime `53a28ca1e4990dd03563a0a8758c2916`. Capture `s5e0b2-52770d967`, boot `53D5AC3D-E293-4637-8175-9CF9C4912D54`, retained the 120, 150 and 175 second Settings photos. The image returned after 205.343 seconds; Linux log retrieval took 18.998 seconds and fastboot responded. The reference atlas is from `sf0ff4-22d059986`; its CB 4 trace is from `s57b45-14bbf54d9`. The integrated diagnostic capture is `se8d01-1cc2adcce`.
+The verified checkpoint uses runtime `a2462a13d47f8e3c5a5a9ae1406bc671`. Capture `s8172d-37459217d`, boot `0D9044D5-697D-4B67-BE75-017600EB6BEA`, retained the 120, 150 and 175 second photos, including General Settings at 150 seconds. The image returned after 207.088 seconds; Linux log retrieval took 18.941 seconds and fastboot responded. The reference atlas is from `sf0ff4-22d059986`; its CB 4 trace is from `s57b45-14bbf54d9`. The integrated diagnostic capture is `se8d01-1cc2adcce`.
 
 ## Capture
 
