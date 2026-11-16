@@ -396,10 +396,10 @@ run([llvm / 'llvm-objcopy', '--remove-section=__DATA,__mod_init_func', '--global
      gop / 'NativeGOPPresenter.o', gop_late])
 # Keyboard, buttons and touch, the iPadOS 17 drivers: their source-API objects (public IOHIDFamily headers, so every IOHIDDevice
 # virtual keeps its real name and pointer-authentication discriminator), linked against the original IOHIDDevice of this fileset.
-DEVICE = Path(os.environ.get('UNIXNU_DEVICE') or ROOT.parents[5] / 'UniXNU-sheng')
+DEVICE = Path(os.environ.get('UNIXNU_DEVICE') or (ROOT / 'kits/sheng').resolve().parent)
 # The UniXNU checkout's copy: it reads the OS profile next to it.
 # The HID source is the tree's refer link (a clean pinned clone of the feed), not a hand-placed copy.
-print(run(['python3', ROOT.parents[4] / 'scripts/build-sheng-source-drivers.py', '--tree', ROOT, '--device', DEVICE], text=True), end='')
+print(run(['python3', ROOT / 'scripts/build-sheng-source-drivers.py', '--tree', ROOT, '--device', DEVICE], text=True), end='')
 SRC = ROOT / 'build/sheng-source-drivers'
 hid_abi = json.loads(Path(__file__).resolve().with_name(f'hid-device-{BUILD}.json').read_text())
 hid_slots = [(int(t, 16), int(d, 16)) for t, d in hid_abi['slots']]
