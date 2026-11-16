@@ -3,6 +3,10 @@ name: sheng macOS lab
 on:
   workflow_dispatch:
     inputs:
+      core_ref:
+        description: UniXNU core branch or commit
+        type: string
+        default: main
       root_storage:
         description: Build the userdata root image
         type: boolean
@@ -50,7 +54,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: UniXNU/UniXNU
-          ref: a59e7622051c14ad8768a96c8baef2b51114829c
+          ref: ${{ inputs.core_ref }}
           path: UniXNU
           submodules: recursive
       - name: Check out firmware sources
