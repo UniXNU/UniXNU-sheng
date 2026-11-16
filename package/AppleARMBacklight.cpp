@@ -27,6 +27,7 @@
 #include <libkern/c++/OSSymbol.h>
 #include <pexpert/pexpert.h>
 #include "GeniI2c.h"
+#include "LidClamshell.h"
 
 // [0] stage (1 mapped, 2 engines ready, 3 published, 4 published as AppleARMBacklight, negative: the step that failed), [1] brightness requests, [2] last level written,
 // [3] level read back from engine a at start, [4] from engine b, [5] transfer errors, [6] last M_IRQ status of a failed transfer,
@@ -58,6 +59,10 @@ volatile uint32_t gIrqStatus[2];
 IOInterruptEventSource *volatile gInbox;
 // The newest brightness asked for: goal << 16 | fade milliseconds, with bit 63 set while the work loop has not taken it.
 volatile uint64_t gRequest;
+// 1 while the keyboard cover's lid is closed (sheng_backlight_lid): the level written to the panel is none (LidClamshell.h).
+volatile uint32_t gLidClosed;
+// The lid timer of the running service, armed by sheng_backlight_lid to apply the lid on the work loop.
+IOTimerEventSource *volatile gLidTimer;
 
 bool mapWindow(Window &w, uint64_t base, uint64_t size) {
     IODeviceMemory *memory = IODeviceMemory::withRange(base, size);
@@ -100,7 +105,7 @@ class ShengBacklight : public IOService {
     struct Engine {GeniI2c bus; Step step; bool started, usable; uint8_t lsb; int32_t written; uint32_t sending; uint64_t deadline;};
     Engine engine[2] = {};
     IOWorkLoop *loop = nullptr;
-    IOTimerEventSource *fade = nullptr, *tick = nullptr, *attachTimer = nullptr, *request = nullptr;
+    IOTimerEventSource *fade = nullptr, *tick = nullptr, *attachTimer = nullptr, *request = nullptr, *lid = nullptr;
     IOInterruptEventSource *inbox = nullptr;
     uint32_t level = 0, from = 0, to = 0, target = 0, attachTries = 0;
     uint64_t start = 0, period = 0;
@@ -211,6 +216,12 @@ class ShengBacklight : public IOService {
     static void tickFired(OSObject *owner, IOTimerEventSource *) {
         if (ShengBacklight *self = static_cast<ShengBacklight *>(owner)) self->service();
     }
+    // The lid changed (sheng_backlight_lid): the level now shown is written again through the lid, dark or back to it.
+    static void lidFired(OSObject *owner, IOTimerEventSource *) {
+        ShengBacklight *self = static_cast<ShengBacklight *>(owner);   // see impersonate()
+        if (!self || !self->published) return;
+        self->setLevel(self->level);
+    }
     // Attaching the two lines, retried while the GIC driver is not up yet; the engines keep working by polling meanwhile.
     static void attachFired(OSObject *owner, IOTimerEventSource *sender) {
         ShengBacklight *self = static_cast<ShengBacklight *>(owner);   // see impersonate()
@@ -228,7 +239,7 @@ class ShengBacklight : public IOService {
     }
 
     void setLevel(uint32_t value) {
-        target = value;
+        target = lid_backlight_level(value, __atomic_load_n(&gLidClosed, __ATOMIC_ACQUIRE) != 0);
         kick(0); kick(1);
         armTick();
     }
@@ -363,6 +374,8 @@ class ShengBacklight : public IOService {
         publish(level);
         registerService();
         native_backlight_stats[0] = impersonated ? 4 : 3;
+        // A lid closed before the service was up: the panel goes dark now, with the level read kept as the one shown.
+        if (__atomic_load_n(&gLidClosed, __ATOMIC_ACQUIRE)) setLevel(level);
     }
 public:
     bool startBacklight(const bool usable[2]) {
@@ -372,9 +385,11 @@ public:
         attachTimer = IOTimerEventSource::timerEventSource(this, &ShengBacklight::attachFired);
         inbox = IOInterruptEventSource::interruptEventSource(this, &ShengBacklight::inboxFired);
         request = IOTimerEventSource::timerEventSource(this, &ShengBacklight::requestFired);
-        if (!loop || !fade || !tick || !attachTimer || !inbox || !request) return false;
+        lid = IOTimerEventSource::timerEventSource(this, &ShengBacklight::lidFired);
+        if (!loop || !fade || !tick || !attachTimer || !inbox || !request || !lid) return false;
         if (loop->addEventSource(fade) || loop->addEventSource(tick) || loop->addEventSource(attachTimer) || loop->addEventSource(inbox) ||
-            loop->addEventSource(request)) return false;
+            loop->addEventSource(request) || loop->addEventSource(lid)) return false;
+        gLidTimer = lid;
         for (unsigned i = 0; i < 2; ++i) {
             const GeniIo io = {ioRead, ioWrite, (void *)gSe[i].va};
             uint32_t config = 0;
@@ -443,6 +458,14 @@ OSDefineDefaultStructors(ShengBacklight, IOService)
 #else
 OSDefineMetaClassAndStructors(ShengBacklight, IOService)
 #endif
+
+// The keyboard cover's lid (KeyboardProbe.cpp publishLid, macOS): closed, the panel goes dark; open, it shows the level asked for again.
+// Called from the keyboard thread; the work loop applies it (a timer carries it, as setProperties does a brightness), so this never waits.
+extern "C" void sheng_backlight_lid(bool closed) {
+    __atomic_store_n(&gLidClosed, closed ? 1u : 0u, __ATOMIC_RELEASE);
+    IOLog("sheng backlight: lid %s, panel %s\n", closed ? "closed" : "open", closed ? "dark" : "back to its level");
+    if (IOTimerEventSource *timer = gLidTimer) timer->setTimeoutUS(1);
+}
 
 // Called by BacklightProbe.cpp once this file's classes are registered (its static initializer runs between preModLoad and postModLoad).
 // The service starts with the engines' level reads in flight and publishes itself when they are answered.
