@@ -58,6 +58,9 @@ extern "C" const uint32_t native_keyboard_firmware_size;
 // [11] I2C failures, [12] engine interrupts, [13] last I2C error | its M_IRQ status << 8, [14] commands sent, [15] authentication
 // requests | other frames << 16, [16] touching palms sent as lifted
 extern "C" {volatile int32_t native_keyboard_stats[17];}
+// 1 while the lid hall sensor sees the cover closed over the screen; the macOS touchscreen drops its reports then (TouchLid.h). Written
+// only once the thread serves the cover (stage 7), so a cover that never comes up leaves it 0 and the touchscreen as it was.
+extern "C" {volatile uint32_t native_keyboard_lid_closed;}
 // The cover's last accelerometer sample (x, y, z in 1/256 g, tablet axes) and the number of samples.
 extern "C" {volatile int32_t native_keyboard_accel[4];}
 // The range of the controller's own touchpad coordinates over every touching contact: X min, X max, Y min, Y max (-1 before the first).
@@ -471,11 +474,18 @@ void detachCover() {
     native_keyboard_stats[8] = native_keyboard_stats[8] & ~0xff;
 }
 
+void publishLid(bool closed, bool changed) {
+    __atomic_store_n(&native_keyboard_lid_closed, closed ? 1u : 0u, __ATOMIC_RELEASE);
+    if (changed) IOLog("sheng keyboard: lid %s\n", closed ? "closed" : "open");
+}
+
 void readHall() {
     Keyboard *kb = gKb;
+    const bool wasLid = kb->lid;
     kb->lid = !level(PinLid);
     kb->tablet = !level(PinTablet);
     native_keyboard_stats[9] = (native_keyboard_stats[9] & ~3) | (kb->lid ? 1 : 0) | (kb->tablet ? 2 : 0);
+    publishLid(kb->lid, kb->lid != wasLid);
     const bool enabled = !kb->lid && !kb->tablet;
     if (enabled == kb->inputEnabled) return;
     kb->inputEnabled = enabled;
@@ -631,6 +641,7 @@ void keyboardThread(void *, wait_result_t) {
     if (!loadImage()) return;
     sheng_keyboard_cover_output_sink(ledRequest, nullptr);
     stage(7);
+    publishLid(kb->lid, kb->lid);   // the state read at stage 4; serve() reads the sensor again within kHallPollMs
     serve();
 }
 }  // namespace
