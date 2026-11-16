@@ -22,6 +22,8 @@ The corrected runtime is `24128cb24c4a7146e58247a367ec0e06`. Capture `s393c4-483
 
 The current development capture is `s4fa13-4bd7e1abb`, boot `DBCB42BF-E951-4E1D-91D9-CAFE40F2B363`, runtime `2bb0552b6e78724f9ab119c3370d20ed`. Its image returned after 206.204 seconds; Linux retrieval took 19.213 seconds and fastboot responded. The Core Image half-blur probe completed 4096 pixels with no nonfinite values.
 
+The local arm64e release build and signing passed. The [complete macOS CI build](https://github.com/UniXNU/UniXNU-sheng/actions/runs/43963130713) compiled and packaged core `6d059b16c2f09f2f6911d5a5c1ee0d8ee4c866f5`. The current source is available through [AdrenoMetal #51](https://github.com/UniXNU/AdrenoMetal/pull/51) and [UniXNU #286](https://github.com/UniXNU/UniXNU/pull/286).
+
 ## Capture
 
 ```sh
