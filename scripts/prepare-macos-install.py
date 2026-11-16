@@ -35,7 +35,9 @@ def main():
     if ctx.args.data_ramdisk and not seed.is_file():
         raise SystemExit(f'Preserved Data seed not found: {seed}')
     if not seed.exists():
-        password = os.environ['UNIXNU_LAB_PASSWORD']
+        password = os.environ.get('UNIXNU_LAB_PASSWORD', '')
+        if not password or '\0' in password:
+            raise SystemExit('Set UNIXNU_LAB_PASSWORD to create the macOS administrator account')
         subprocess.run(['sudo', sys.executable, str(ROOT / 'scripts/make-macos-data-seed.py'),
                         str(source.disk_image('OS')), str(seed), '--gib',
                         str(ctx.board['payload']['runtime']['data_gib']), '--skip-setup',

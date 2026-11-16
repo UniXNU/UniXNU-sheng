@@ -35,6 +35,7 @@ jobs:
     timeout-minutes: 360
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      UNIXNU_IPSW_JOBS: 16
       HOMEBREW_NO_AUTO_UPDATE: 1
       GITHUB_TOKEN: ${{ github.token }}
       UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
@@ -59,6 +60,9 @@ jobs:
           ref: 8156d2e54a9f57818dc8b415a1a7dc28ad9ba4be
           path: uefi-sheng
           submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
       - name: Restore build inputs
         id: build-cache
         uses: actions/cache/restore@v4
