@@ -26,7 +26,7 @@ state=/private/var/db/unixnu-lab
 icon_cache=$(/usr/bin/sudo -u unixnu /usr/bin/getconf DARWIN_USER_CACHE_DIR)
 icon_command_log=${icon_cache%/}/com.apple.iconservicesagent/com.apple.metal/m2v/command-buffer.log
 if [ -s /private/var/ngpu/test/share/icon-probe-path ]; then
-    /bin/rm -f "$icon_command_log"
+    /bin/rm -f "$icon_command_log" "${icon_command_log%/*}/runtime-stderr.log"
 fi
 /bin/mkdir -p "$state"
 /bin/chmod 700 "$state"
