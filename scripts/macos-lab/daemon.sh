@@ -80,6 +80,13 @@ video_probe() {
 if [ ! -s /private/var/ngpu/test/share/icon-probe-path ]; then
     video_probe &
 fi
+if [ -s /private/var/ngpu/test/share/icon-probe-path ]; then
+    (
+        /bin/sleep 25
+        /bin/echo "icon runtime stderr boot=$boot" > "$session/icon-runtime.stderr"
+        /bin/launchctl debug gui/501/com.apple.iconservices.iconservicesagent --stderr "$session/icon-runtime.stderr"
+    ) &
+fi
 if [ -s /private/var/ngpu/test/share/graphics-comparison ]; then
     (
         delays='120 90'
@@ -101,6 +108,9 @@ graphics_state() {
     {
         /bin/date -u
         /bin/echo "boot=$boot"
+        if [ -s /private/var/ngpu/test/share/icon-probe-path ] && [ -s "$session/icon-runtime.stderr" ]; then
+            /usr/bin/tail -c 131072 "$session/icon-runtime.stderr"
+        fi
         /bin/ps -axo pid,ppid,etime,pcpu,rss,comm | /usr/bin/awk 'NR == 1 || /WindowServer|loginwindow|Wallpaper|iconservices|icon-probe|video-probe|VTDecoder|KeyboardSetupAssistant|ShaderCache/'
         if [ -x '/Library/GPUBundles/Shader Cache.app/Contents/MacOS/ShaderCache' ]; then
             '/Library/GPUBundles/Shader Cache.app/Contents/MacOS/ShaderCache' --status
