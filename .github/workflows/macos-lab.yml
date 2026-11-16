@@ -38,7 +38,6 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
       UNIXNU_LAB_PASSWORD: ${{ secrets.UNIXNU_LAB_PASSWORD }}
-      NMB_PREBUILT_BRIDGE: ${{ github.workspace }}/metal-bridge/libadreno_metal_bridge.a.json
       UNIXNU_MACOS_TEST: ${{ github.workspace }}/device/scripts/macos-lab
     steps:
       - name: Check out device sources
@@ -49,15 +48,15 @@ jobs:
       - name: Check out core sources
         uses: actions/checkout@v4
         with:
-          repository: rponeawa/UniXNU
-          ref: f4b1d8c60cdea05820aa0c437d077ad3fd5510fe
+          repository: UniXNU/UniXNU
+          ref: 21d683dff61c66f219f03ab9d8b9249026514788
           path: UniXNU
           submodules: recursive
       - name: Check out firmware sources
         uses: actions/checkout@v4
         with:
           repository: UniXNU/uefi-sheng
-          ref: fb2b2ae1d2f8c855cc76bb24ee3bcd28e3ecacbb
+          ref: 8156d2e54a9f57818dc8b415a1a7dc28ad9ba4be
           path: uefi-sheng
           submodules: false
       - name: Restore build inputs
@@ -84,7 +83,7 @@ jobs:
           core = Path('UniXNU')
           pin = json.loads((core / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']['commit']
           source = core / 'out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/gpu-reference/metal2vulkan'
-          signature = hashlib.sha256((pin + '\n').encode() + (core / 'drivers/AdrenoMetal/bridge/patches/0043-unixnu-runtime-on-development-400efe79.patch').read_bytes()).hexdigest()
+          signature = hashlib.sha256((pin + '\n').encode() + (core / 'scripts/build-adreno-metal-bridge.py').read_bytes() + b''.join(path.read_bytes() for path in sorted((core / 'drivers/AdrenoMetal/bridge/patches').glob('*.patch')))).hexdigest()
           stamp = source.with_name('unixnu-translator-patch.sha256')
           if source.exists():
               actual = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
@@ -134,13 +133,6 @@ jobs:
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/xnu-work
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/fakeroot
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/xnu
-      - name: Fetch the source-matched Metal bridge
-        run: |
-          mkdir metal-bridge
-          GH_TOKEN="$GITHUB_TOKEN" gh release download sheng-metal-bridge-0e018dc --repo rponeawa/UniXNU \
-            --pattern metal-bridge-macos27-0e018dc.tar.zst --dir metal-bridge
-          zstd -dc metal-bridge/metal-bridge-macos27-0e018dc.tar.zst | tar -xf - -C metal-bridge
-          rm -rf UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/m2v-target
       - name: Prepare installation
         working-directory: UniXNU
         run: |
