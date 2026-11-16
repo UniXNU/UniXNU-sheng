@@ -210,7 +210,8 @@ def main():
             if args.graphics_comparison or args.graphics_view:
                 options.kernel_arg = [value for value in options.kernel_arg
                                       if value.split('=', 1)[0] not in ('log-video', 'log-bluetooth')]
-                options.kernel_arg += ['gpu-prime=0']
+                if not any(value.startswith('gpu-prime=') for value in args.kernel_arg):
+                    options.kernel_arg += ['gpu-prime=0']
             options.kernel_arg += args.kernel_arg
             fd = firmware.fd_path(ctx, ctx.uefi, 'DEBUG')
             # The template carries every firmware module built for this candidate.
@@ -259,7 +260,9 @@ def main():
             command += ['--kernel-arg', 'gpu-perf=1']
         command += ['--remove-arg', 'gpu-prime']
         if args.graphics_comparison or args.graphics_view:
-            command += ['--remove-arg', 'log-video', '--remove-arg', 'log-bluetooth', '--kernel-arg', 'gpu-prime=0']
+            command += ['--remove-arg', 'log-video', '--remove-arg', 'log-bluetooth']
+            if not any(value.startswith('gpu-prime=') for value in args.kernel_arg):
+                command += ['--kernel-arg', 'gpu-prime=0']
         for value in args.kernel_arg:
             command += ['--kernel-arg', value]
         if args.preserve_data:
