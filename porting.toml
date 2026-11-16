@@ -92,6 +92,13 @@ revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
 command = "scripts/package.sh --os macos-27"
 result = "The macOS desktop release completed with the selected profile and local build inputs. The 972-byte boot argument string matches the manual desktop image."
 
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/actions/runs/43848064083"
+revision = "6a99956461d3808e36ba2047e18cf6083a6dcb82"
+command = "scripts/package.sh --os macos-27 --uefi ../uefi-sheng"
+result = "The Xcode 26.6 and Python 3.14 CI release completed. Its 972-byte kernel command line matches the local manual desktop build."
+
 [[area]]
 id = "firmware"
 status = "implemented"
@@ -920,6 +927,13 @@ revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
 command = "scripts/package.sh --os macos-27"
 result = "The standard release produces a 79413248-byte boot image, a 256 MiB logical payload and a 143835136-byte prelinked kernel. Boot arguments, Data seed and Metal source fingerprint match the manual desktop inputs."
 
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/actions/runs/43848064083"
+revision = "6a99956461d3808e36ba2047e18cf6083a6dcb82"
+command = "scripts/package.sh --os macos-27 --uefi ../uefi-sheng"
+result = "The CI release produces a 79351808-byte boot image, a 256 MiB logical payload and a 143835136-byte prelinked kernel, and publishes the packaged artifacts."
+
 [[area]]
 id = "diagnostics"
 status = "implemented"
@@ -1015,6 +1029,13 @@ reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9890389dd7c7a1ec0f7dc
 revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
 command = "scripts/package.sh --os macos-27"
 result = "The desktop runtime contains the manual-session marker and Shader Cache application entry. The boot profile retains autoreset=7200, uefi-watchdog=1 and diag-export=7140."
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/actions/runs/43848064083"
+revision = "6a99956461d3808e36ba2047e18cf6083a6dcb82"
+command = "scripts/package.sh --os macos-27 --uefi ../uefi-sheng"
+result = "The CI manifest retains autoreset=7200, uefi-watchdog=1 and diag-export=7140. Its 434 shader-library inventory paths match the local desktop build."
 
 [[area]]
 id = "arm64e-os"
