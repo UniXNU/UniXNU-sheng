@@ -102,7 +102,7 @@ graphics_state() {
         /bin/date -u
         /bin/echo "boot=$boot"
         if [ -s /private/var/ngpu/test/share/icon-probe-path ] && [ -s "${icon_command_log%/*}/runtime-stderr.log" ]; then
-            /usr/bin/tail -c 131072 "${icon_command_log%/*}/runtime-stderr.log"
+            /usr/bin/grep -Ev '^native-metal dump (function|cb|pipeline|image) ' "${icon_command_log%/*}/runtime-stderr.log" | /usr/bin/tail -c 131072
         fi
         /bin/ps -axo pid,ppid,etime,pcpu,rss,comm | /usr/bin/awk 'NR == 1 || /WindowServer|loginwindow|Wallpaper|iconservices|icon-probe|video-probe|VTDecoder|KeyboardSetupAssistant|ShaderCache/'
         if [ -x '/Library/GPUBundles/Shader Cache.app/Contents/MacOS/ShaderCache' ]; then
