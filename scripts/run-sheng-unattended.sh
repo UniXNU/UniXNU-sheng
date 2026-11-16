@@ -107,6 +107,8 @@ if os.environ.get('ADDON'):
             sys.exit('ADDON must name a runtime addon')
     repack += ['--payload-file', str(addon) + '=EFI/UniXNU/Payloads/kernel.macho.gpuaddon']
 for value in shlex.split(os.environ.get('EXTRA_KERNEL_ARGS', '')):
+    if value.split('=', 1)[0] in ('autoreset', 'diag-export', 'build-tag'):
+        sys.exit('EXTRA_KERNEL_ARGS uses diagnostics; the runner owns deadlines and the boot tag')
     repack += ['--kernel-arg', value]
 subprocess.run(repack, check=True)
 wait_fastboot(30)
