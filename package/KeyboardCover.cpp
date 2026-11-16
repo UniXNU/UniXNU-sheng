@@ -118,7 +118,7 @@ class ShengKeyboardCover : public IOHIDDevice {
 
     // ShengTouchpadTiming, for `ioreg -r -c ShengKeyboardCover`: 32-bit little-endian words, layout 1, the touchpad reports, the
     // pointer reports sent, the touches the pause rule restarted, the gap buckets (Wn8030.h wn8030_gap_bucket), then the controller's
-    // 17 counters. Sent with the first touchpad report and then at most once a second of report time.
+    // 17 counters. Published at device start and at most once a second of report time.
     void publishTiming(uint32_t now) {
         if (timingSent && now - timingAt < 1000) return;
         timingSent = true; timingAt = now;
@@ -230,6 +230,11 @@ public:
         if (!setProperty("HIDDefaultBehavior", true)) return false;
         if (!IOHIDDevice::start(provider)) return false;
         native_keyboard_hid_stats[0] = native_keyboard_hid_stats[0] + 1;
+#if NATIVE_COVER_POINTER
+        uint64_t ns;
+        absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+        publishTiming(static_cast<uint32_t>(ns / 1000000));
+#endif
         return true;
     }
     void stop(IOService *provider) override {
