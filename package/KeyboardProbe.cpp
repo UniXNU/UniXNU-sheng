@@ -72,6 +72,23 @@ extern "C" {volatile int32_t native_keyboard_accel[4];}
 extern "C" {volatile int32_t native_keyboard_touch_range[4] = {-1, -1, -1, -1};}
 
 namespace {
+// Keep immutable cover diagnostics in the macOS read-only data segment.
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+#define KEYBOARD_CONST __attribute__((section("__DATA_CONST,__const")))
+#else
+#define KEYBOARD_CONST
+#endif
+static const char kLidLog[] KEYBOARD_CONST = "sheng keyboard: lid %s\n";
+static const char kClamshellLog[] KEYBOARD_CONST = "sheng keyboard: clamshell %s sent to the power manager\n";
+static const char kCoverLog[] KEYBOARD_CONST = "sheng keyboard: cover %s; frame %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x; before it %s, ms since a frame %d, "
+          "input %d, accelerometer %d; frames %d, controller interrupts %d, i2c failures %d, last i2c error 0x%x, auth %d, attaches %d, "
+          "reloads %u\n";
+static const char kKeepAwakeFailureLog[] KEYBOARD_CONST = "sheng keyboard: keep-awake command failed, waking the controller (i2c failures %d, last i2c error 0x%x)\n";
+static const char kControllerReloadLog[] KEYBOARD_CONST = "sheng keyboard: controller reload %u (read failures %u, command failures %u, i2c failures %d, last i2c error 0x%x, "
+              "frames %d)\n";
+static const char kControllerReloadResultLog[] KEYBOARD_CONST = "sheng keyboard: controller reload %u %s (stage %d, detail %d)\n";
+#undef KEYBOARD_CONST
+
 constexpr uint64_t kGcc = 0x00100000ULL, kTlmm = 0x0f100000ULL, kSe = 0x00884000ULL, kRsc = 0x17a20000ULL, kCmdDb = 0x81c60000ULL;
 constexpr uint32_t kCmdDbSize = 0x20000, kRscTcs = 0xd00, kTcs = 2;
 // gcc-sm8550.c: QUP2 branch votes in 0x52010 (bit 0 wrap2 core, 1 S AHB, 2 M AHB, 3 core 2x, 5 SE1), their halt registers, the SE1 RCG.
@@ -490,7 +507,7 @@ namespace {
 
 void publishLid(bool closed, bool changed) {
     __atomic_store_n(&native_keyboard_lid_closed, closed ? 1u : 0u, __ATOMIC_RELEASE);
-    if (changed) IOLog("sheng keyboard: lid %s\n", closed ? "closed" : "open");
+    if (changed) IOLog(kLidLog, closed ? "closed" : "open");
 #if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
     // macOS's power manager follows the lid (LidClamshell.h): closed, WindowServer turns the built-in display off. The root domain
     // queues the message, so this thread does not wait on it.
@@ -499,7 +516,7 @@ void publishLid(bool closed, bool changed) {
     const lid_clamshell_message message = lid_clamshell_step(&gClamshell, closed);
     if (message == LidClamshellNone) return;
     root->receivePowerNotification(message == LidClamshellClosed ? kIOPMClamshellClosed : kIOPMClamshellOpened);
-    IOLog("sheng keyboard: clamshell %s sent to the power manager\n", message == LidClamshellClosed ? "closed" : "open");
+    IOLog(kClamshellLog, message == LidClamshellClosed ? "closed" : "open");
     // macOS leaves the built-in panel to the clamshell sleep this board refuses: the backlight driver darkens it (LidClamshell.h).
     if (sheng_backlight_lid) sheng_backlight_lid(message == LidClamshellClosed);
 #endif
@@ -543,9 +560,7 @@ void logAttach(const char *what, uint32_t now) {
     kb_trace_summarize(&kb->trace, now, &s);
     const uint8_t *b = kb->frame;
     const int32_t *k = const_cast<const int32_t *>(native_keyboard_stats);
-    IOLog("sheng keyboard: cover %s; frame %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x; before it %s, ms since a frame %d, "
-          "input %d, accelerometer %d; frames %d, controller interrupts %d, i2c failures %d, last i2c error 0x%x, auth %d, attaches %d, "
-          "reloads %u\n", what, b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15], b[16], s.kinds,
+    IOLog(kCoverLog, what, b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15], b[16], s.kinds,
           (int32_t)s.since_any, (int32_t)s.since_input, (int32_t)s.since_accel, k[6], k[5], k[11], k[13], k[15] & 0xffff,
           (k[8] >> 8) & 0xffff, kb->reloads);
 }
@@ -636,7 +651,7 @@ struct KeyboardIO {
     bool apply() const {return applyInputState();}
     void release() const {releaseInputs();}
     void wake() const {
-        IOLog("sheng keyboard: keep-awake command failed, waking the controller (i2c failures %d, last i2c error 0x%x)\n",
+        IOLog(kKeepAwakeFailureLog,
               native_keyboard_stats[11], native_keyboard_stats[13]);
         setOutput(PinSleep, false); IOSleep(10);
         setOutput(PinSleep, true); IOSleep(25);
@@ -645,11 +660,10 @@ struct KeyboardIO {
     bool recover() const {
         Keyboard *kb = gKb;
         ++kb->reloads;
-        IOLog("sheng keyboard: controller reload %u (read failures %u, command failures %u, i2c failures %d, last i2c error 0x%x, "
-              "frames %d)\n", kb->reloads, kb->service.readFailures, kb->service.controlFailures, native_keyboard_stats[11],
+        IOLog(kControllerReloadLog, kb->reloads, kb->service.readFailures, kb->service.controlFailures, native_keyboard_stats[11],
               native_keyboard_stats[13], native_keyboard_stats[6]);
         const bool ok = recoverController();
-        IOLog("sheng keyboard: controller reload %u %s (stage %d, detail %d)\n", kb->reloads, ok ? "done" : "failed",
+        IOLog(kControllerReloadResultLog, kb->reloads, ok ? "done" : "failed",
               native_keyboard_stats[0], native_keyboard_stats[1]);
         return ok;
     }
