@@ -1,0 +1,44 @@
+diff --git a/osfmk/kern/boot_progress.h b/osfmk/kern/boot_progress.h
+--- a/osfmk/kern/boot_progress.h
++++ b/osfmk/kern/boot_progress.h
+@@ -17,18 +17,19 @@
+ void boot_progress_process_stage(int, const char *, const char *);
+ void boot_progress_exit(int, const char *, int, unsigned, uint64_t);
+ #else
++extern void boot_log_startup_stage(int, const char *) __attribute__((weak_import));
+ #define boot_progress_init() ((void)0)
+ #define boot_progress_start() ((void)0)
+ #define boot_progress_active() 0
+ #define boot_progress_bind(...) ((void)0)
+ static inline void boot_progress_putc(char c) { (void)c; }
+-#define boot_progress_stage(s) ((void)0)
++#define boot_progress_stage(s) do { if (&boot_log_startup_stage) boot_log_startup_stage(0, (s)); } while (0)
+ #define boot_progress_irq(...) ((void)0)
+ #define boot_progress_poll() ((void)0)
+ #define boot_progress_user_breakpoint(...) ((void)0)
+ #define boot_progress_user_abort(...) ((void)0)
+ #define boot_progress_critical_exit(...) ((void)0)
+-#define boot_progress_process_stage(...) ((void)0)
++#define boot_progress_process_stage(pid, name, text) do { if (&boot_log_startup_stage) boot_log_startup_stage((pid), (text)); } while (0)
+ #define boot_progress_exit(...) ((void)0)
+ #endif
+ #endif
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -10094,11 +10094,15 @@
+ 
+ #if DEVELOPMENT || DEBUG
+ 	/* Use the opportunity to initialize exec's debug log stream */
++	boot_progress_stage("exec log create enter");
+ 	exec_log_handle = os_log_create("com.apple.xnu.bsd", "exec");
++	boot_progress_stage("exec log create returned");
+ #endif /* DEVELOPMENT || DEBUG */
+ 
++	boot_progress_stage("init scratch allocate enter");
+ 	(void) mach_vm_allocate_kernel(map, &scratch_addr, map_page_size,
+ 	    VM_MAP_KERNEL_FLAGS_ANYWHERE());
++	boot_progress_stage("init scratch allocate returned");
+ 	user_addr_t init_envp = USER_ADDR_NULL;
+ #if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
+ 	boot_progress_stage("SystemOS mount enter");

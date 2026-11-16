@@ -15,10 +15,6 @@ directory = ROOT / '.cache/firmware/sheng'
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--delete-archive', action='store_true')
 args = parser.parse_args()
-states = list(directory.glob('*.tgz.ranges.json'))
-if len(states) != 1:
-    raise SystemExit('Expected one firmware download manifest')
-download = json.loads(states[0].read_text())
 import os
 import tomllib
 board = Path(os.environ.get('UNIXNU_DEVICE') or ROOT) / 'board.toml'
@@ -31,6 +27,10 @@ if record_path.is_file():
             and record.get('archive_sha256') == image['sha256']):
         print('firmware inputs already extracted; nothing to do')
         raise SystemExit(0)
+states = list(directory.glob('*.tgz.ranges.json'))
+if len(states) != 1:
+    raise SystemExit('Expected one firmware download manifest')
+download = json.loads(states[0].read_text())
 if (not download.get('verified') or download.get('url') != image['url'] or
         download.get('md5') != image['md5'] or download.get('sha256') != image['sha256']):
     raise SystemExit('Download must finish its verification against board.toml [firmware.image] first')

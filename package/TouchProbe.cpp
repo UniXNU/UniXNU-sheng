@@ -14,6 +14,7 @@
 #include <libkern/c++/OSSharedPtr.h>
 #include <kern/thread.h>
 #include <kern/clock.h>
+#include "BootTime.h"
 #include <mach/mach_time.h>
 #include <IOKit/IOLocks.h>
 #include <pexpert/pexpert.h>
@@ -387,8 +388,7 @@ struct Stroke {int id, x0, y0, x1, y1, frames; uint64_t t0;};
 Stroke strokes[NVT_SLOTS];
 unsigned strokeCount;
 uint32_t touchMs() {
-    uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
-    return (uint32_t)(mach_absolute_time() / ((f ? f : 19200000) / 1000));
+    return (uint32_t)boot_mach_ms(mach_absolute_time());
 }
 void trackStrokes(unsigned count, const int *ids, const int *xs, const int *ys) {
     const uint32_t now = touchMs();

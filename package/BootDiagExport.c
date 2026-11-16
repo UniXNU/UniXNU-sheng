@@ -11,8 +11,17 @@
 #include <sys/dirent.h>
 #include <sys/fcntl.h>
 #include <sys/kauth.h>
+#include <sys/sysctl.h>
 #include <IOKit/IOLib.h>
 #include <pexpert/pexpert.h>
+
+extern int boot_diag_request;
+extern volatile int boot_diag_status;
+SYSCTL_DECL(_kern);
+SYSCTL_INT(_kern, OID_AUTO, unixnu_diag_request, CTLFLAG_RW | CTLFLAG_LOCKED,
+           &boot_diag_request, 0, "Request one enabled diagnostic export");
+SYSCTL_INT(_kern, OID_AUTO, unixnu_diag_status, CTLFLAG_RD | CTLFLAG_LOCKED,
+           (int *)&boot_diag_status, 0, "Diagnostic export state");
 
 extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
 /* Opt-in capture of the cache loader's own error log. Runs on the log writer,
@@ -67,7 +76,7 @@ void boot_cache_loader_log_capture(unsigned now) {
 }
 
 enum {DiagMaxFiles = 128, DiagPath = 192, DiagDepth = 0, DiagChunk = 256 * 1024, DiagNote = 32768};
-struct diag_file {char path[DiagPath]; uint64_t size; uint32_t mode, uid, gid, root, keep;};
+struct diag_file {char path[DiagPath]; uint64_t size, offset; uint32_t mode, uid, gid, root, keep;};
 static struct diag_file *diag_files;
 static uint32_t diag_count, diag_skipped_count;
 static void *cache_input;
@@ -106,6 +115,13 @@ enum {LatencyCapacity=16+524288*72};
 static const char *const diag_roots[] = {
   "/private/var/mobile/Library/Caches/com.apple.backboardd/m2v/frames.trace",
   "/private/var/root/Library/Caches/com.apple.backboardd/m2v/frames.trace",
+  "/private/var/tmp/NativeAdrenoMetal.trace/frames.trace",
+  "/private/var/tmp/NativeAdrenoMetal.cache",
+  "/Users/Shared/unixnu-test",
+  "/Library/Logs/DiagnosticReports",
+  "/Library/Logs/DiagnosticReports/Retired",
+  "/Users/unixnu/Library/Logs/DiagnosticReports",
+  "/Users/unixnu/Library/Logs/DiagnosticReports/Retired",
   "/private/var/mobile/Library/Logs/CrashReporter",
   "/private/var/root/Library/Logs/CrashReporter",
 };
@@ -142,7 +158,8 @@ static void note(const char *text, const char *path, int error) {
 }
 
 static void add(const char *path, uint32_t root, vfs_context_t ctx) {
-  if(!bl_latency_file(path) && !cache_path(path))return;
+  const unsigned macos_limit=bl_macos_file_limit(path);
+  if(!bl_latency_file(path) && !cache_path(path) && !macos_limit)return;
   vnode_t file = NULLVP;
   int error = vnode_lookup(path, 0, &file, ctx);
   if (error) {note("lookup", path, error); ++boot_diag_errors; return;}
@@ -159,6 +176,14 @@ static void add(const char *path, uint32_t root, vfs_context_t ctx) {
   struct diag_file *f = &diag_files[diag_count++];
   strlcpy(f->path, path, sizeof f->path);
   f->size = va.va_data_size; f->mode = va.va_mode; f->uid = va.va_uid; f->gid = va.va_gid; f->root = root; f->keep = 0;
+  f->offset=0;
+  if(macos_limit && f->size>macos_limit){
+    note("truncated",path,(int)(f->size>>10));
+    const size_t length=strlen(path);
+    if(length>=4 && !strcmp(path+length-4,".png")){--diag_count;return;}
+    if(length>=4 && !strcmp(path+length-4,".log"))f->offset=f->size-macos_limit;
+    f->size=macos_limit;
+  }
 }
 
 static void scan(const char *path, unsigned depth, uint32_t root, vfs_context_t ctx) {
@@ -502,7 +527,7 @@ uint64_t boot_diag_scan(uint64_t budget) {
   }
   for(unsigned i=0;i<sizeof diag_roots/sizeof diag_roots[0];++i)scan(diag_roots[i],0,i,ctx);
   qsort(diag_files,diag_count,sizeof diag_files[0],worth);
-  unsigned crash_count[5]={0};uint64_t crash_bytes=0;uint32_t files_kept=0;
+  unsigned crash_count[BlCrashProcessCount]={0};uint64_t crash_bytes=0;uint32_t files_kept=0;
   for(uint32_t i=0;i<diag_count;++i) {
     struct diag_file *f=&diag_files[i];int process=bl_crash_process(f->path);
     uint64_t cost=24+strlen(f->path)-1+f->size;
@@ -776,7 +801,7 @@ int boot_diag_stream(boot_diag_emit_t emit, void *arg) {
       const uint32_t want = f->size - at < DiagChunk ? (uint32_t)(f->size - at) : DiagChunk;
       int resid = (int)want;
       memset(chunk, 0, want);
-      if (vp && (error = vn_rdwr(UIO_READ, vp, (caddr_t)chunk, (int)want, (off_t)at, UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid,
+      if (vp && (error = vn_rdwr(UIO_READ, vp, (caddr_t)chunk, (int)want, (off_t)(f->offset+at), UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid,
                                  vfs_context_proc(ctx)))) {
         note("read", f->path, error); ++boot_diag_errors;
         vnode_close(vp, FREAD, ctx); vp = NULLVP;

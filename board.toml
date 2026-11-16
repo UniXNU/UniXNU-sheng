@@ -45,6 +45,7 @@
 "MEMORY_PROTECTION" = "TRUE"
 "SHIP_MODE" = "FALSE"
 "BUILDID_STRING" = "sheng-research"
+"SHENG_BOOT_GUARD" = "1"
 
 
 
@@ -102,6 +103,10 @@ CI_ENABLE_METAL_GPU = "0"
 ["bootimg"]
 "dtb" = "build/sheng/sheng.dtb"
 "dtb_node" = [{ "path" = "/reserved-memory/splash_region", "props" = [{ "name" = "label", "type" = "s", "value" = "cont_splash_region" }, { "name" = "reg", "type" = "x", "value" = ["0x0", "0xb8000000", "0x0", "0x2b00000"] }] }]
+
+["bootimg"."image"]
+ramdisk_compression = "uefi-chunks"
+ramdisk_max_bytes = 199229440
 
 
 ["device_tree"]
@@ -214,7 +219,7 @@ CI_ENABLE_METAL_GPU = "0"
 "timeout" = -1
 # The macOS kernel collection (137 MiB), the Data seed (20 MiB) and the GPU addon (the Metal plugin and Turnip, zlib-compressed).
 # iPadOS 17 and 26 images boot on this device with 208 MiB.
-"size_mib" = 200
+"size_mib" = 187
 # GPU as on iPadOS 27: fb-bgra=1 renders in system memory with transient attachments in GMEM (Turnip patches), fb-gpu=1 hands the
 # compositor's frames to the render server's GPU copy when the display cannot scan them out directly (dpu-scanout=2).
 # macOS: storage, display, HID, USB, CPU, GPU, audio (with the battery on the ADSP), and en0 (ShengEthernet), which carries the Wi-Fi module. Bluetooth is not enabled yet; AppSync
@@ -292,8 +297,3 @@ CI_ENABLE_METAL_GPU = "0"
 
 ["os_overrides"."macos-27.3-26C5035r"."bootimg"]
 "max_image_bytes" = 202375168
-
-["os_overrides"."macos-27.3-26C5035r"."kernel"]
-"defconfig" = "sheng_macos_defconfig"
-"config_fragments" = ["arch:configs/common.config", "os:configs/macos.config"]
-"archives" = ["build-corecrypto-14.py", "build-corecrypto-14.py --namespace", "component:ArmDTPlatform", "component:ArmCpu", "build-libpthread-kernel.py", "component:ShengUfs", "build-sheng-source-storage.py --policy-dir scripts/policies/macos-27.3-26C5035r", "component:RamBlock", "component:Adreno740", "fetch-sheng-dts.py", "fetch-adreno-inputs.py", "prepare-sheng-gmu.py", "prepare-sheng-gpu-smmu.py", "prepare-sheng-gmu-votes.py", "build-adreno740-kits.py", "build-adreno740-accelerator.py", "component:AppleKeyStoreState", "component:SoftwareAES", "build-gop-legacy-display-27.py"]

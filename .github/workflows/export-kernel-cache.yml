@@ -1,0 +1,125 @@
+name: Export local kernel build inputs
+
+on:
+  workflow_call:
+    inputs:
+      cache_key:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      cache_key:
+        description: Kernel cache key from a successful macOS build
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - name: Select the kernel Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+      - uses: actions/cache/restore@v4
+        with:
+          key: ${{ inputs.cache_key }}
+          fail-on-cache-miss: true
+          path: |
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/xnu-work
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/fakeroot
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/xnu
+      - name: Package build inputs
+        run: |
+          tree=UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree
+          mkdir export
+          tar -C "$tree" -cf - .cache/xnu-work .cache/fakeroot build/xnu | zstd -T2 -3 -o export/kernel-cache.tar.zst
+          sdk=$(xcrun --sdk iphoneos --show-sdk-path)
+          tar -C "$sdk" -cf - . | zstd -T2 -3 -o export/iphoneos-sdk.tar.zst
+          python3 - "$tree" "$sdk" <<'PY'
+          import json, subprocess, sys
+          from pathlib import Path
+          import shutil
+          tools = Path('export/toolchain/bin')
+          tools.mkdir(parents=True)
+          pending = []
+          for name in ('clang', 'clang++', 'ld', 'ld-classic', 'ar', 'ranlib', 'libtool', 'nm', 'strip', 'dsymutil',
+                       'migcom', 'iig', 'tightbeamc', 'ctfconvert', 'ctfmerge'):
+              found = subprocess.run(['xcrun', '--find', name], capture_output=True, text=True)
+              if found.returncode:
+                  if name in ('clang', 'clang++', 'ld', 'ld-classic', 'migcom', 'iig'):
+                      raise SystemExit('Required kernel tool missing: ' + name)
+                  continue
+              original = Path(found.stdout.strip())
+              shutil.copy2(original, tools / name)
+              pending.append(original)
+              print(subprocess.check_output(['otool', '-L', str(tools / name)], text=True))
+          compiler = Path(subprocess.check_output(['xcrun', '--find', 'clang'], text=True).strip())
+          libraries = tools.parent / 'lib'
+          libraries.mkdir()
+          for name in ('libclang.dylib', 'libLTO.dylib', 'libIndexStore.dylib'):
+              source = compiler.parent.parent / 'lib' / name
+              if source.exists():
+                  shutil.copy2(source, libraries / name)
+                  pending.append(source)
+          # Follow each tool's non-system dylib dependencies before packaging.
+          copied = []
+          scanned = set()
+          while pending:
+              source = pending.pop().resolve()
+              if source in scanned:
+                  continue
+              scanned.add(source)
+              for line in subprocess.check_output(['otool', '-L', str(source)], text=True).splitlines():
+                  dependency = line.strip().split(' (compatibility version ', 1)[0]
+                  if dependency.startswith(('/System/', '/usr/lib/')) or not dependency.startswith(('@', '/')):
+                      continue
+                  if '(architecture ' in dependency or dependency.endswith(':'):
+                      continue
+                  name = Path(dependency).name
+                  if name == source.name:
+                      continue
+                  candidates = [Path(dependency), source.parent / dependency.removeprefix('@loader_path/'),
+                                compiler.parent.parent / 'lib' / name,
+                                compiler.parent.parent / 'lib/swift/host' / name]
+                  original = next((path for path in candidates if path.is_file()), None)
+                  if original is None:
+                      raise SystemExit('Unresolved toolchain dependency: ' + dependency)
+                  destination = libraries / name
+                  if not destination.exists():
+                      shutil.copy2(original, destination)
+                      copied.append(name)
+                  pending.append(original)
+          subprocess.run(['tar', '-C', str(libraries), '-cf', 'export/toolchain-library-deps.tar', *copied], check=True)
+          subprocess.run(['zstd', '-T2', '-3', '--rm', 'export/toolchain-library-deps.tar'], check=True)
+          resource = Path(subprocess.check_output([str(compiler), '-print-resource-dir'], text=True).strip())
+          shutil.copytree(resource, libraries / 'clang' / resource.name, symlinks=False)
+          for name, option in (('clang', '--version'), ('iig', '--version'), ('ld', '-version_details')):
+              subprocess.run([str((tools / name).resolve()), option], check=True)
+          probe = Path('export/toolchain-check.c')
+          probe.write_text('int unixnu_toolchain_export(void) { return 0; }\n')
+          subprocess.run([str((tools / 'clang').resolve()), '-target', 'arm64e-apple-ios27.0',
+                          '-c', str(probe), '-o', 'export/toolchain-check.o'], check=True)
+          subprocess.run([str((tools / 'ld-classic').resolve()), '-r', '-arch', 'arm64e',
+                          '-platform_version', 'ios', '27.0', '27.0', 'export/toolchain-check.o',
+                          '-o', 'export/toolchain-check.partial.o'], check=True)
+          subprocess.run(['tar', '-C', str(tools.parent), '-cf', 'export/toolchain-linker.tar',
+                          'bin/ld-classic'], check=True)
+          subprocess.run(['zstd', '-T2', '-3', '--rm', 'export/toolchain-linker.tar'], check=True)
+          Path('export/build-paths.json').write_text(json.dumps(dict(
+              tree=str(Path(sys.argv[1]).resolve()), sdk=sys.argv[2],
+              toolchain=str(compiler.parent.parent),
+              compiler=subprocess.check_output([str(compiler), '--version'], text=True),
+              xcode=subprocess.check_output(['xcodebuild', '-version'], text=True)), indent=2) + '\n')
+          PY
+          tar -C export -cf - toolchain | zstd -T2 -3 -o export/compiler-toolchain.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: local-kernel-build-inputs
+          path: |
+            export/*.tar.zst
+            export/build-paths.json
+          retention-days: 1
+          compression-level: 0
