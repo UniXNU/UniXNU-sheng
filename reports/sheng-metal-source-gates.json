@@ -1,0 +1,28 @@
+{
+  "device": "sheng",
+  "gpu": "Adreno 740",
+  "image_device_revision": "e08bc6176578d615276fbf70df0949a52a04cba9",
+  "image_core_revision": "cb2431b481b3a08b18d9f1a7d62ae5d11f85512d",
+  "firmware_revision": "fb2b2ae1d2f8c855cc76bb24ee3bcd28e3ecacbb",
+  "metal_component": "7496958da604f86356f238b7bbd75537472388e9",
+  "translator": "400efe7932f2a4accc7bfa74f4443281f46be54c",
+  "patched_tree": "4d7a1fc307a67bb4ed225fc7ed81bebd6a1e21e9",
+  "runtime_id": "97dc9478424a6febf81d087923e488a3",
+  "upstream_commits_integrated": 1081,
+  "retained_overlay_files": 62,
+  "runtime_policy_fields": 25,
+  "turnip_options": 19,
+  "unresolved_policy_defaults": [],
+  "math_enumeration": "Upstream Math::float_stems(), BinOp::ALL, PrecisionNote::of_math_call/of_float_operator, engine_float_call_notes and fast_paths; no separate operation list.",
+  "inventory": {
+    "libraries": 434,
+    "OS": 406,
+    "SystemOS": 28,
+    "App": 0,
+    "embedded_inventory_matches_image": true
+  },
+  "host_build": "passed: XNU, source drivers, prelink, runtime, payload, firmware and userdata",
+  "product_signatures": "strict codesign verification passed",
+  "device_runtime": "pending",
+  "build_run_id": 43675340751
+}

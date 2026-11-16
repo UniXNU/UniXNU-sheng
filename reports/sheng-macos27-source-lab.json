@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "device": "sheng",
+  "os_profile": "macos-27.3-26C5035r",
+  "kernel_build": {
+    "run_id": 43684813634,
+    "result": "success",
+    "device_revision": "ffc738501b8cded10aa75a1b06f58f87b185b2cf",
+    "core_revision": "0282fdd9322527e8ceb39e68151504b3a59a8e47",
+    "firmware_revision": "fb2b2ae1d2f8c855cc76bb24ee3bcd28e3ecacbb"
+  },
+  "assembly": {
+    "device_revision": "d5f2c2eec7574669a1d083e9af4bcfcbd2f64918",
+    "core_revision": "1de115e837710acf3486877e89990a040da277b6",
+    "component_revision": "ad47c08a8f9058744ff1e3bcfd370e0ffc3830a2",
+    "runtime": "97dc9478424a6febf81d087923e488a3",
+    "translator": "400efe7932f2a4accc7bfa74f4443281f46be54c",
+    "translator_tree": "4d7a1fc307a67bb4ed225fc7ed81bebd6a1e21e9"
+  },
+  "image": {
+    "bytes": 99901440,
+    "encoded_ramdisk_bytes": 98732528,
+    "logical_fat_bytes": 268435456,
+    "ramdisk_limit_bytes": 199229440,
+    "preserve_data": true
+  },
+  "host_validation": {
+    "signed_diagnostic_images": 6,
+    "system_library_inventory": 434,
+    "firmware": "built",
+    "kernel": "built",
+    "plugin": "built",
+    "acceptance": "built",
+    "packaging": "completed"
+  },
+  "hardware_qualification": "pending"
+}

@@ -1,0 +1,529 @@
+{
+  "old_pin": "7ef17497d3980a846d71f314feeb976fa7e0d242",
+  "new_pin": "400efe7932f2a4accc7bfa74f4443281f46be54c",
+  "upstream_commits": 1081,
+  "old_overlay_file_count": 62,
+  "new_overlay_file_count": 62,
+  "files": [
+    {
+      "path": "crates/metal2vulkan-air/src/canon/mod.rs",
+      "added": 70,
+      "removed": 14,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Prune function-constant dead entry blocks before inlining and fold constant loads/tables to a fixed point; current upstream forward/generic/loop transforms follow this pass."
+    },
+    {
+      "path": "crates/metal2vulkan-conformance/src/device.rs",
+      "added": 3,
+      "removed": 2,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/batch_order.rs",
+      "added": 13,
+      "removed": 1,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": false,
+      "retained_reason": "Include Turnip in end-ordered submissions, from its serialized ring execution; preserve all current batch guards."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/buffer.rs",
+      "added": 10,
+      "removed": 1,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/buffer_texture.rs",
+      "added": 12,
+      "removed": 2,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/command_buffer/completion.rs",
+      "added": 20,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/command_buffer/mod.rs",
+      "added": 38,
+      "removed": 3,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/command_buffer/submit.rs",
+      "added": 69,
+      "removed": 12,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/creation.rs",
+      "added": 61,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": false,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/device/compiles.rs",
+      "added": 24,
+      "removed": 1,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": false,
+      "retained_reason": "Direct pipeline creation when already on the suitable QoS; retain asynchronous work where a host step must remain finite."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/device/mod.rs",
+      "added": 88,
+      "removed": 2,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Expose memory pressure release/census and first lost-device source, integrate on-demand room keeper and persistent Vulkan prime cache."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/device/prime.rs",
+      "added": 25,
+      "removed": 5,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Persist the Vulkan priming pipeline cache keyed by driver/profile/feature set."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/device/room.rs",
+      "added": 121,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": false,
+      "retained_reason": "Create placement pool reserve on an on-demand worker, outside the committing thread."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/device/submit.rs",
+      "added": 1,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/exit_guard.rs",
+      "added": 11,
+      "removed": 11,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": false,
+      "retained_reason": "Apply Darwin QoS handling to iOS as well as macOS."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/lib.rs",
+      "added": 7,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/library.rs",
+      "added": 9,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/memory.rs",
+      "added": 265,
+      "removed": 12,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Start wired shared-memory pools at 4MiB and grow within upstream allocation/type limits; retain pooled Turnip image binds without kernel work, add bounded census/trace."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/neutral.rs",
+      "added": 5,
+      "removed": 5,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": false,
+      "retained_reason": "Use ordered small resource maps to avoid hash setup on neutral resources."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/range.rs",
+      "added": 5,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": false,
+      "retained_reason": "Expose placed-byte census for bounded pool sizing."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/rebind.rs",
+      "added": 37,
+      "removed": 1,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Allow consumers that never rebind/detach to omit replay holds; retained frontend contract is explicit."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/recycle.rs",
+      "added": 20,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Count and release cached image/buffer placements on memory pressure."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/render.rs",
+      "added": 14,
+      "removed": 9,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/scheduler/mod.rs",
+      "added": 46,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/scheduler/steps.rs",
+      "added": 3,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/shader_cache/chunks.rs",
+      "added": 34,
+      "removed": 2,
+      "old_overlay": false,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Keep upstream content-defined chunks, make shared layer directories/chunks readable by sandboxed consumers."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/shader_cache/mod.rs",
+      "added": 97,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Add trusted system layer and its counters plus driver/profile-keyed priming cache; upstream warm refusal tracking retained."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/shader_cache/store.rs",
+      "added": 152,
+      "removed": 21,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Read missing local entries through trusted system layer, publish readable entries and chunk manifests, stop repeated sandbox-refused atime updates."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/shader_cache/system.rs",
+      "added": 304,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": false,
+      "retained_reason": "Bounded root-owned, non-writable, no-symlink system shader-cache reader including current upstream chunk manifests."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/shadow.rs",
+      "added": 5,
+      "removed": 3,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/stage_trace.rs",
+      "added": 252,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": false,
+      "retained_reason": "Finite stage/memory diagnostic ring using Darwin uptime in nanoseconds."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/texture.rs",
+      "added": 43,
+      "removed": 8,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/texture/heap.rs",
+      "added": 13,
+      "removed": 1,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/texture/surface_two_planes.rs",
+      "added": 9,
+      "removed": 1,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Avoid allocating a duplicate whole YCbCr image where existing plane storage is enough."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/texture/usage_shadow.rs",
+      "added": 19,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/texture/ycbcr_image.rs",
+      "added": 186,
+      "removed": 12,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Keep plane-only YCbCr textures and lazy combined image materialization; use current upstream StorageCell and generation model."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/used_resources.rs",
+      "added": 64,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/work_counts.rs",
+      "added": 15,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan-runtime/src/ycbcr.rs",
+      "added": 20,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain resource lifetime/memory counts and bounded stage tracing used by the frontend high-latency diagnostics; current upstream resource/generation/submission logic remains in place."
+    },
+    {
+      "path": "crates/metal2vulkan/src/device/driver_facts.rs",
+      "added": 23,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": false,
+      "retained_reason": "Source-proven A740 DontCare store behavior keyed by actual Qualcomm/chip/Turnip identity."
+    },
+    {
+      "path": "crates/metal2vulkan/src/device/policy.rs",
+      "added": 7,
+      "removed": 2,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Preserve the measured local A740 native-half RelaxedPrecision route and its declared PrecisionNote under AtExits; upstream controlled native16/half_hold and native float operations remain selected by their current gates."
+    },
+    {
+      "path": "crates/metal2vulkan/src/lower/access/blob.rs",
+      "added": 38,
+      "removed": 6,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Fold constant pointer address expressions into shared constant-blob offsets with checked arithmetic."
+    },
+    {
+      "path": "crates/metal2vulkan/src/lower/arith/chunk.rs",
+      "added": 1,
+      "removed": 1,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Preserve the measured local A740 native-half RelaxedPrecision route and its declared PrecisionNote under AtExits; upstream controlled native16/half_hold and native float operations remain selected by their current gates."
+    },
+    {
+      "path": "crates/metal2vulkan/src/lower/arith/divide.rs",
+      "added": 1,
+      "removed": 1,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Scale widened half operands into the native16 divisor interval before relaxed-precision FDiv. Keep upstream controlled native16 and non-relaxed float32 fallback."
+    },
+    {
+      "path": "crates/metal2vulkan/src/lower/arith/math.rs",
+      "added": 15,
+      "removed": 4,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Preserve the measured local A740 native-half RelaxedPrecision route and its declared PrecisionNote under AtExits; upstream controlled native16/half_hold and native float operations remain selected by their current gates."
+    },
+    {
+      "path": "crates/metal2vulkan/src/lower/arith/mod.rs",
+      "added": 8,
+      "removed": 3,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Preserve the measured local A740 native-half RelaxedPrecision route and its declared PrecisionNote under AtExits; upstream controlled native16/half_hold and native float operations remain selected by their current gates."
+    },
+    {
+      "path": "crates/metal2vulkan/src/lower/arith/narrow.rs",
+      "added": 42,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Preserve the measured local A740 native-half RelaxedPrecision route and its declared PrecisionNote under AtExits; upstream controlled native16/half_hold and native float operations remain selected by their current gates."
+    },
+    {
+      "path": "crates/metal2vulkan/src/lower/arith/ops.rs",
+      "added": 1,
+      "removed": 1,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Preserve the measured local A740 native-half RelaxedPrecision route and its declared PrecisionNote under AtExits; upstream controlled native16/half_hold and native float operations remain selected by their current gates."
+    },
+    {
+      "path": "crates/metal2vulkan/src/lower/emit.rs",
+      "added": 3,
+      "removed": 2,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Preserve the measured local A740 native-half RelaxedPrecision route and its declared PrecisionNote under AtExits; upstream controlled native16/half_hold and native float operations remain selected by their current gates."
+    },
+    {
+      "path": "crates/metal2vulkan/src/memory/plan.rs",
+      "added": 38,
+      "removed": 26,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Use shared read-only constant blobs for dynamically indexed tables larger than 4KiB."
+    },
+    {
+      "path": "crates/metal2vulkan/src/pipeline/compile.rs",
+      "added": 7,
+      "removed": 3,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Preserve the measured local A740 native-half RelaxedPrecision route and its declared PrecisionNote under AtExits; upstream controlled native16/half_hold and native float operations remain selected by their current gates."
+    },
+    {
+      "path": "crates/metal2vulkan/src/reflection/function.rs",
+      "added": 4,
+      "removed": 1,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": false,
+      "retained_reason": "Accept the full valid SIMD group width range through 128."
+    },
+    {
+      "path": "crates/metal2vulkan/src/spirv/builder/module.rs",
+      "added": 30,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Track local relaxed-half results alongside all current upstream half controls."
+    },
+    {
+      "path": "crates/metal2vulkan/src/spirv/interp/sched.rs",
+      "added": 12,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": false,
+      "retained_reason": "Apply RelaxedPrecision native half rounding to offline interpreter scheduling."
+    },
+    {
+      "path": "crates/metal2vulkan/src/spirv/ir/edit.rs",
+      "added": 1,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": false,
+      "retained_reason": "Carry relaxed result metadata through instruction edits."
+    },
+    {
+      "path": "crates/metal2vulkan/src/spirv/ir/module.rs",
+      "added": 9,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Carry relaxed result metadata through typed modules."
+    },
+    {
+      "path": "crates/metal2vulkan/src/spirv/roll/mod.rs",
+      "added": 1,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Carry relaxed result metadata through rolled modules."
+    },
+    {
+      "path": "crates/metal2vulkan/src/spirv/serialize/mod.rs",
+      "added": 6,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Serialize RelaxedPrecision on selected half instruction results."
+    },
+    {
+      "path": "crates/metal2vulkan/src/spv.rs",
+      "added": 1,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Expose RelaxedPrecision decoration in generated SPIR-V vocabulary."
+    },
+    {
+      "path": "crates/metal2vulkan/src/tests/engine_arena.rs",
+      "added": 45,
+      "removed": 0,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Retain the existing constant-blob compilation verification fixture."
+    },
+    {
+      "path": "docs/API.md",
+      "added": 8,
+      "removed": 2,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Preserve the measured local A740 native-half RelaxedPrecision route and its declared PrecisionNote under AtExits; upstream controlled native16/half_hold and native float operations remain selected by their current gates."
+    },
+    {
+      "path": "scripts/regen-spirv-grammar/items.txt",
+      "added": 1,
+      "removed": 1,
+      "old_overlay": true,
+      "upstream_changed_since_old_pin": true,
+      "retained_reason": "Keep generated SPIR-V vocabulary consistent with RelaxedPrecision support."
+    }
+  ],
+  "old_overlay_paths_removed": [
+    "crates/metal2vulkan/src/lower/arith/fma.rs"
+  ],
+  "proof": "pin-check-final.log; half-fma-counterexample.json gives a normal half result with an unfused-16 error of 1156 ulp.",
+  "upstream_conflicts_resolved_locally": [
+    "canon/mod.rs",
+    "buffer_texture.rs",
+    "command_buffer/completion.rs",
+    "command_buffer/mod.rs",
+    "command_buffer/submit.rs",
+    "scheduler/mod.rs",
+    "shader_cache/mod.rs",
+    "shader_cache/store.rs",
+    "texture.rs",
+    "texture/usage_shadow.rs",
+    "texture/ycbcr_image.rs",
+    "lower/arith/divide.rs",
+    "spirv/builder/module.rs"
+  ],
+  "upstream_behavior_selected_in_consumer": "PipelineWaitPolicy::Bounded: creation/host-step wait is bounded; committed draw/dispatch waits for a ready pipeline through upstream deferred reencoding.",
+  "retained_math": "Native Math::float_stems/BinOp and PrecisionNote remain upstream; local half path adds RelaxedPrecision only when float16 is available, no 16-bit DenormPreserve, AtExits and no measured Metal half arithmetic/conversion.",
+  "hardware_verification": "A740 runtime results remain for the next device session.",
+  "fma_resolution": "Use the complete upstream fma.rs. Half NativeFma keeps its exact float32 product before its final conversion; no RelaxedPrecision shrinking to unfused FP16 MAD.",
+  "division_resolution": "Relaxed half native FDiv uses 2^-2 scaling above 2^14 and 2^10 below 2^-14 before narrowing. Controlled native16 and widened strict routes remain upstream."
+}
