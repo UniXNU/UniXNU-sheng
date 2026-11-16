@@ -13,6 +13,8 @@ Xiaomi Pad 6S Pro, sheng, 8 GiB, macOS 27.3 build 26C5035r, Android boot header 
 
 Capture `sd8c9a-87004aede`, boot `701D1EDE-9D10-4439-87D8-2ED1E984364F`, used the kernel source at `6b293e4` and lab preparation at `906cd78`. The GPU runtime was `2bb0552b6e78724f9ab119c3370d20ed`, component `840e10fc`.
 
+The cover publishes `ShengTouchpadTiming` when its HID device starts and at most once per second of touchpad report time. The layout contains touchpad and pointer counts, gap buckets and controller counters. The macOS HID checker passed 5,119 checks for source `ac40d6811c15f775371db7d0aa1fccb3f099b8e6`; its exported-toolchain kernel prelinked successfully.
+
 ## Kernel preparation
 
 ```sh
