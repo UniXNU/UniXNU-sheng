@@ -65,27 +65,19 @@ def wait_fastboot(seconds):
     raise SystemExit(f'{serial}: fastboot did not appear within {seconds}s; evidence retained in {output}')
 
 def boot(path):
-    for attempt in range(2):
-        try:
-            result = subprocess.run(['fastboot', '-s', serial, 'boot', str(path)],
-                                    capture_output=True, text=True, timeout=120)
-        except subprocess.TimeoutExpired:
-            print(f'{serial}: boot acknowledgement timed out; waiting for the image return timer', flush=True)
-            return False
-        if result.stdout:
-            print(result.stdout, end='', flush=True)
-        if result.stderr:
-            print(result.stderr, end='', file=sys.stderr, flush=True)
-        if result.returncode == 0:
-            return True
-        if attempt == 0 and 'Load Error' in result.stdout + result.stderr and serial in devices():
-            print(f'{serial}: bootloader refused the image; restarting bootloader before one reload', flush=True)
-            subprocess.run(['fastboot', '-s', serial, 'reboot', 'bootloader'], check=True, timeout=15)
-            time.sleep(2)
-            wait_fastboot(45)
-            continue
-        result.check_returncode()
-
+    result = subprocess.run(['fastboot', '-s', serial, 'getvar', 'current-slot'],
+                            capture_output=True, text=True, check=True, timeout=10)
+    selected = re.search(r'^current-slot:\s*([ab])\s*$', result.stdout + result.stderr, re.M)
+    if selected is None:
+        raise SystemExit(f'{serial}: fastboot did not report an A/B slot')
+    # Give each RAM boot a fresh retry budget on the selected slot.
+    subprocess.run(['fastboot', '-s', serial, 'set_active', selected[1]], check=True, timeout=15)
+    try:
+        subprocess.run(['fastboot', '-s', serial, 'boot', str(path)], check=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        print(f'{serial}: boot acknowledgement timed out; waiting for the image return timer', flush=True)
+        return False
+    return True
 
 output.mkdir(parents=True, exist_ok=True)
 previous_tags = {line[4:] for path in output.glob('*/header.txt')
