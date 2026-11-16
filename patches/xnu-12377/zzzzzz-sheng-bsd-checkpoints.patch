@@ -1,0 +1,74 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -81,6 +81,7 @@
+  */
+ 
+ #include <sys/param.h>
++extern void boot_log_checkpoint(const char *) __attribute__((weak_import));
+ #include <sys/filedesc.h>
+ #include <sys/kernel.h>
+ #include <sys/mount_internal.h>
+@@ -586,11 +587,12 @@
+ #endif
+ 
+ #define DEBUG_BSDINIT 0
++#define bsd_init_checkpoint(x) do { if (&boot_log_checkpoint) boot_log_checkpoint(x); } while (0)
+ 
+ #if DEBUG_BSDINIT
+-#define bsd_init_kprintf(x, ...) kprintf("bsd_init: " x, ## __VA_ARGS__)
++#define bsd_init_kprintf(x, ...) do { bsd_init_checkpoint("bsd-progress: " x); kprintf("bsd_init: " x, ## __VA_ARGS__); bsd_init_checkpoint("bsd-call: " x); } while (0)
+ #else
+-#define bsd_init_kprintf(x, ...) boot_progress_stage("bsd_init: " x)
++#define bsd_init_kprintf(x, ...) do { bsd_init_checkpoint("bsd-progress: " x); boot_progress_stage("bsd_init: " x); bsd_init_checkpoint("bsd-call: " x); } while (0)
+ #endif
+ 
+ 	throttle_init();
+@@ -799,7 +801,6 @@
+ 	if (&native_source_storage_start)
+ 		native_source_storage_start();
+ #if DEVELOPMENT || DEBUG
+-	extern void boot_log_checkpoint(const char *) __attribute__((weak_import));
+ 	if (&boot_log_checkpoint) boot_log_checkpoint("bsd-apfs-load");
+ 	native_apfs_load_probe();
+ 	if (&boot_log_checkpoint) boot_log_checkpoint("bsd-apfs-ready");
+@@ -821,19 +822,27 @@
+ 	if (&boot_log_checkpoint) boot_log_checkpoint("bsd-iogpu-ready");
+ #if defined(XNU_ADRENO_FIRMWARE_PROBE) && XNU_ADRENO_FIRMWARE_PROBE
+ 	extern void native_adreno_firmware_probe(void);
++	bsd_init_checkpoint("native_adreno_firmware_probe-enter");
+ 	native_adreno_firmware_probe();
++	bsd_init_checkpoint("native_adreno_firmware_probe-ready");
+ #endif
+ #if defined(XNU_ADRENO_PM4_PROBE) && XNU_ADRENO_PM4_PROBE
+ 	extern void native_adreno_pm4_probe(void);
++	bsd_init_checkpoint("native_adreno_pm4_probe-enter");
+ 	native_adreno_pm4_probe();
++	bsd_init_checkpoint("native_adreno_pm4_probe-ready");
+ #endif
+ #if defined(XNU_SMMU4K_PROBE) && XNU_SMMU4K_PROBE
+ 	extern void native_smmu4k_probe(void);
++	bsd_init_checkpoint("native_smmu4k_probe-enter");
+ 	native_smmu4k_probe();
++	bsd_init_checkpoint("native_smmu4k_probe-ready");
+ #endif
+ #if defined(XNU_CONSTANT_UPLOADS_PROBE) && XNU_CONSTANT_UPLOADS_PROBE
+ 	extern void native_constants_probe(void);
++	bsd_init_checkpoint("native_constants_probe-enter");
+ 	native_constants_probe();
++	bsd_init_checkpoint("native_constants_probe-ready");
+ #endif
+ #endif
+ 
+@@ -844,9 +853,11 @@
+ #endif
+ 
+ #if SOCKETS
++	bsd_init_kprintf("calling net_update_uptime\n");
+ 	net_update_uptime();
+ #if CONFIG_MBUF_MCACHE
+ 	/* Initialize per-CPU cache allocator */
++	bsd_init_kprintf("calling mcache_init\n");
+ 	mcache_init();
+ #endif /* CONFIG_MBUF_MCACHE */
+ 

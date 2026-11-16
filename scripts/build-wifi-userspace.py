@@ -13,11 +13,14 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import urllib.request
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("output", type=Path)
 parser.add_argument("target", choices=("ios27", "macos27"))
+parser.add_argument("--firmware", type=Path, default=root / ".cache/firmware/wcn7850")
 args = parser.parse_args()
 out = args.output.resolve()
 out.mkdir(parents=True, exist_ok=True)
@@ -25,8 +28,9 @@ out.mkdir(parents=True, exist_ok=True)
 component = root / "drivers/Ath12kWifi"
 firmware_prefix = re.search(r'^#define SHENG_WIFI_FIRMWARE_PREFIX "([^"]+)"$',
     (root / "package/WifiFirmware.h").read_text(), re.M).group(1)
-firmware_source = root / "firmware/wcn7850"
-firmware_manifest = json.loads((firmware_source / "manifest.json").read_text())["files"]
+firmware_source = args.firmware
+firmware_identity = json.loads((root / "firmware/wcn7850/manifest.json").read_text())
+firmware_manifest = firmware_identity["files"]
 if not {'amss.bin', 'm3.bin', 'board-2.bin'} <= firmware_manifest.keys():
     raise SystemExit("missing required WCN7850 firmware inputs")
 shutil.rmtree(out / 'firmware', ignore_errors=True)
@@ -34,9 +38,25 @@ shutil.rmtree(out / 'firmware', ignore_errors=True)
 for name, expected in firmware_manifest.items():
     if name not in ('amss.bin', 'amss2.bin', 'm3.bin', 'board-2.bin'):
         raise SystemExit("unsupported WCN7850 firmware name")
-    data = (firmware_source / name).read_bytes()
+    source = firmware_source / name
+    if source.is_file():
+        data = source.read_bytes()
+    else:
+        url = (firmware_identity['repository'].rstrip('/') + '/-/raw/' + firmware_identity['revision']
+               + '/' + firmware_identity['directory'].strip('/') + '/' + name)
+        with urllib.request.urlopen(url, timeout=60) as response:
+            data = response.read()
     if len(data) != expected['bytes'] or hashlib.sha256(data).hexdigest() != expected['sha256']:
         raise SystemExit("WCN7850 firmware differs from manifest: " + name)
+    if not source.is_file():
+        source.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=source.parent, prefix=name + '.', delete=False) as cache:
+            temporary = Path(cache.name)
+            cache.write(data)
+        try:
+            os.replace(temporary, source)
+        finally:
+            temporary.unlink(missing_ok=True)
     (out / 'firmware' / name).write_bytes(data)
 # Unattended testing only: UNIXNU_WIFI_JOIN names a local file (network name on the first line, key on the second) that goes to the
 # firmware directory as join.txt; with the kernel argument wifi-aj=1 the board joins that network by itself (WifiNet.cpp autoJoin).

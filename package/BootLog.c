@@ -14,9 +14,14 @@
 // The header is written last in each round, so a reader never trusts a slot or an export the header does not count yet.
 #include <kern/startup.h>
 #include "BootLatencyFiles.h"
+#include "BootTime.h"
 #include <kern/thread.h>
 #include <kern/clock.h>
+#include <mach/mach_time.h>
+#include <machine/machine_routines.h>
 #include <string.h>
+#include <stdarg.h>
+extern int vsnprintf(char *, size_t, const char *, va_list);
 #include <pexpert/pexpert.h>
 #include <kern/misc_protos.h>
 #include <IOKit/IOLib.h>
@@ -53,6 +58,7 @@ extern volatile int native_hid_input_results[8] __attribute__((weak_import));
 extern char native_hid_input_registry[2048] __attribute__((weak_import));
 extern char native_hid_input_props[1024] __attribute__((weak_import));
 extern int native_ufs_log_panic(void) __attribute__((weak_import));
+extern void boot_reset_watchdog_stop(void) __attribute__((weak_import));
 extern unsigned native_ufs_store_gpt_check(void) __attribute__((weak_import));
 extern uint32_t cs_text_fixup_parsed __attribute__((weak_import));
 extern uint32_t cs_text_fixup_applied __attribute__((weak_import));
@@ -252,6 +258,7 @@ extern volatile int32_t native_battery_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_qrtr_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_battery_raw[10] __attribute__((weak_import));
 extern volatile int32_t native_charger_stats[16] __attribute__((weak_import));
+extern volatile int32_t native_charger_auth_stats[32] __attribute__((weak_import));
 extern char native_qrtr_text[96] __attribute__((weak_import));
 extern volatile uint32_t native_swipe_stats[16] __attribute__((weak_import));
 extern volatile int32_t native_touch_extent[4] __attribute__((weak_import));
@@ -404,6 +411,8 @@ extern struct boot_log_msgbuf *msgbufp;
 
 enum {LogBlock = 4096, LogMsgFirst = 1, LogMsgBlocks = 32, LogSlotFirst = 33, LogSlotBlocks = 16, LogPeriodMs = 2000, LogMaxErrors = 3,
       LogExportStage = 64};   // export bytes staged per write: 256 KiB
+
+
 struct boot_log_header {
   char magic[8];                 // "SHLOG001"
   uint32_t version, header_bytes;
@@ -429,10 +438,75 @@ volatile uint32_t boot_log_state, boot_log_rounds, boot_log_errors;
 const char *volatile boot_log_open_refusal;
 volatile uint64_t boot_log_first_lba;
 static int boot_log_started;
+static char boot_log_tag[32];
+extern uint32_t ml_timebase_scale_num __attribute__((weak_import));
+extern uint32_t ml_timebase_scale_den __attribute__((weak_import));
 static uint8_t *boot_log_buffer;   // LogMsgBlocks blocks: the message buffer, then reused for a slot and the header
 static uint8_t *boot_log_panic_buffer;   // LogMsgBlocks blocks for boot_log_panic_flush, which must not touch the writer's buffer
 static uint8_t *boot_log_msg_ring;   // LogMsgBlocks blocks: the medium's message area as the writer last left it (stream ring)
 static struct boot_log_header *volatile boot_log_live;   // the writer's header once its window is open
+static IOLock *checkpoint_lock;
+static char *checkpoint_buffer;
+static uint64_t checkpoint_sequence, checkpoint_role_sequence[2];
+extern int proc_selfpid(void);
+
+void boot_log_checkpoint(const char *stage) {
+  uint32_t enabled = 0;
+  if (!PE_parse_boot_argn("storage-probe", &enabled, sizeof enabled) || enabled != 1 || !&native_ufs_log_write) return;
+  const struct boot_log_header *live = boot_log_live;
+  if (!live) {printf("[startup checkpoint] %s: log window pending\n", stage); return;}
+  const uint64_t blocks = live->window_blocks;
+  if (blocks <= LogSlotFirst || !checkpoint_lock || !checkpoint_buffer) return;
+  const uint64_t first = LogSlotFirst + (blocks - LogSlotFirst) / LogSlotBlocks * LogSlotBlocks;
+  if (blocks - first < 2) return;
+  IOLockLock(checkpoint_lock);
+  const int pid = proc_selfpid();
+  const unsigned role = pid == 1;
+  const uint64_t half = (blocks - first) / 2;
+  const uint64_t count = role ? blocks - first - half : half;
+  const uint64_t slot = first + (role ? half : 0) + checkpoint_role_sequence[role]++ % count;
+  const uint64_t sequence = ++checkpoint_sequence;
+  char *checkpoint = checkpoint_buffer;
+  uint64_t physical, virtual_count, frequency, control, deadline, daif, pending;
+  __asm__ volatile("mrs %0, cntpct_el0" : "=r"(physical));
+  __asm__ volatile("mrs %0, cntvct_el0" : "=r"(virtual_count));
+  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frequency));
+  __asm__ volatile("mrs %0, cntv_ctl_el0" : "=r"(control));
+  __asm__ volatile("mrs %0, cntv_cval_el0" : "=r"(deadline));
+  __asm__ volatile("mrs %0, daif" : "=r"(daif));
+  __asm__ volatile("mrs %0, icc_hppir1_el1" : "=r"(pending));
+  char tag[32] = "";
+  PE_parse_boot_argn("build-tag", tag, sizeof tag);
+  memset(checkpoint, 0, LogBlock);
+  snprintf(checkpoint, LogBlock,
+           "SHSTG001\ntag=%s\nsequence=%llu\npid=%d\nthread=%llu\nstage=%s\nphysical=%llu\nvirtual=%llu\nabsolute=%llu\nfrequency=%llu\ntimer_ctl=%llx\ntimer_deadline=%llu\ndaif=%llx\npending=%llx\ncaller=%llx\n",
+           tag, (unsigned long long)sequence, pid, (unsigned long long)thread_tid(current_thread()), stage, (unsigned long long)physical, (unsigned long long)virtual_count,
+           (unsigned long long)mach_absolute_time(), (unsigned long long)frequency,
+           (unsigned long long)control, (unsigned long long)deadline, (unsigned long long)daif,
+           (unsigned long long)pending, (unsigned long long)(uintptr_t)__builtin_return_address(0));
+  if (native_ufs_log_write(slot, 1, checkpoint) && &native_ufs_log_sync) native_ufs_log_sync();
+  IOLockUnlock(checkpoint_lock);
+}
+
+void boot_log_startup_stage(int pid, const char *stage) {
+  if (boot_log_state != 2 || ml_at_interrupt_context()) return;
+  if ((pid ? pid : proc_selfpid()) == 1) boot_log_checkpoint(stage);
+}
+
+void boot_log_startup_result(const char *stage, int result) {
+  char text[160];
+  snprintf(text, sizeof text, "%s result=%d", stage, result);
+  boot_log_startup_stage(0, text);
+}
+
+void boot_log_process_exit(int pid, const char *name, int status, unsigned space,
+                           uint64_t code, const char *description, unsigned csflags) {
+  if ((!status || status == 9 || status == 15) && space != 3 && strcmp(name, "WindowServer") && strcmp(name, "loginwindow") &&
+      strcmp(name, "WallpaperAgent") && strncmp(name, "Wallpaper", 9) && strcmp(name, "VTDecoderXPCService")) return;
+  printf("unixnu-exit: %s[%d] status=0x%x reason=%u/0x%llx csflags=0x%x description=%.256s\n",
+         name, pid, status, space, (unsigned long long)code, csflags, description ? description : "");
+}
+
 static volatile int boot_log_panicked;   // set by boot_log_panic_flush: the writer no longer writes
 static int boot_log_hci_on;
 
@@ -448,6 +522,7 @@ static uint32_t export_total, export_filled, export_generation, export_target, e
 static uint32_t diag_first, diag_bytes;
 static int diag_owned;
 volatile int boot_diag_status;
+int boot_diag_request;
 extern volatile uint32_t boot_diag_files __attribute__((weak_import));
 extern volatile uint32_t boot_diag_alloc __attribute__((weak_import));
 extern volatile uint32_t boot_diag_skipped __attribute__((weak_import));
@@ -585,9 +660,20 @@ static const char *log_step_max_where = "";
 static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   size_t at = 0;
   char head[128];
-  const int n = snprintf(head, sizeof head, "#slot %u t=%us tag=%s", slot, now, &boot_progress_tag ? boot_progress_tag() : "");
+  const int n = snprintf(head, sizeof head, "#slot %u t=%us tag=%s", slot, now, boot_log_tag);
   if (log_diag_on && n > 0 && (size_t)n < sizeof head) snprintf(head + n, sizeof head - (size_t)n, " diag=1 export-at=%us", log_diag_export_at);
   at = put(out, at, cap, head, sizeof head);
+  {
+    uint64_t frequency, virtual_counter, second = 0;
+    __asm__ volatile("mrs %0,cntfrq_el0\n\tmrs %1,cntvct_el0" : "=r"(frequency), "=r"(virtual_counter));
+    nanoseconds_to_absolutetime(1000000000ULL, &second);
+    char row[256];
+    snprintf(row, sizeof row, "[timebase] frequency=%llu physical=%llu virtual=%llu absolute=%llu second=%llu scale=%u/%u",
+             (unsigned long long)frequency, (unsigned long long)log_ticks(), (unsigned long long)virtual_counter,
+             (unsigned long long)mach_absolute_time(), (unsigned long long)second,
+             &ml_timebase_scale_num ? ml_timebase_scale_num : 0, &ml_timebase_scale_den ? ml_timebase_scale_den : 0);
+    at = put(out, at, cap, row, sizeof row);
+  }
   if (&boot_progress_page_text) {
     at = put(out, at, cap, "[page]", 8);
     for (unsigned i = 0; i < 48; ++i) if (boot_progress_page_text[i][0]) at = put(out, at, cap, boot_progress_page_text[i], 120);
@@ -612,9 +698,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       // With the requests the provider completed, their bytes and their time: whether bulk data goes through it and at what rate.
       char row[120]; int n = snprintf(row, sizeof row, "[software aes] state=%d", sheng_software_aes_state);
       if (&native_aes_completed && &native_aes_bytes && &native_aes_ticks && n > 0 && (size_t)n < sizeof row) {
-        uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
         snprintf(row + n, sizeof row - (size_t)n, " calls=%u bytes=%llu us=%llu", native_aes_completed, (unsigned long long)native_aes_bytes,
-                 (unsigned long long)(native_aes_ticks * 1000000ULL / f));
+                 (unsigned long long)boot_mach_us(native_aes_ticks));
       }
       at = put(out, at, cap, row, sizeof row);
     }
@@ -631,8 +716,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     // Disk requests (count/MiB/ms, gate wait, longest in us), synchronize (count/ms/bitmap blocks, timer-started), store commands.
     if (&native_data_io_reads && &native_data_write_back) {
       uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
-#define BL_MS(t) ((unsigned long long)((t) * 1000ULL / f))
-#define BL_US(t) ((unsigned long long)((t) * 1000000ULL / f))
+#define BL_MS(t) ((unsigned long long)boot_mach_ms(t))
+#define BL_US(t) ((unsigned long long)boot_mach_us(t))
       char io[560];
       int n = snprintf(io, sizeof io, "DIO wb=%u rd=%llu/%lluM/%llums wr=%llu/%lluM/%llums gate=%llums max=%lluus fl=%llu/%llums/%llu tf=%llu",
                native_data_write_back, (unsigned long long)native_data_io_reads, (unsigned long long)(native_data_io_read_bytes >> 20),
@@ -653,7 +738,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       }
       if (&native_ufs_block_reads && &native_ufs_read_ticks && &native_ufs_verify_ticks && n > 0 && (size_t)n < sizeof io)
         snprintf(io + n, sizeof io - (size_t)n, " root=%llu/%llums v=%llums", (unsigned long long)native_ufs_block_reads,
-                 BL_MS(native_ufs_read_ticks), BL_MS(native_ufs_verify_ticks));
+                 (unsigned long long)(native_ufs_read_ticks * 1000ULL / f),
+                 (unsigned long long)(native_ufs_verify_ticks * 1000ULL / f));
 #undef BL_MS
 #undef BL_US
       at = put(out, at, cap, io, sizeof io);
@@ -1433,14 +1519,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // The submissions' write-combine work: audits, IB lines compared and found dirty, pages set back to write-combined, the re-assertion's
   // total time, and the CPU cache maintenance passes (count, total ms, MiB).
   if (log_gpu_on && (&native_adreno_wc_audit && &native_adreno_reassert_ticks && &native_adreno_cache_stats)) {
-    uint64_t f = 0;
-    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
-    if (!f) f = 19200000;
     char row[200];
     snprintf(row, sizeof row, "[wc] audited=%u lines=%u dirty=%u reset=%u reassert_ms=%llu | maintenance passes=%llu ms=%llu MiB=%llu",
              native_adreno_wc_audit[0], native_adreno_wc_audit[1], native_adreno_wc_audit[2], native_adreno_wc_audit[5],
-             (unsigned long long)(native_adreno_reassert_ticks * 1000 / f), (unsigned long long)native_adreno_cache_stats[3],
-             (unsigned long long)(native_adreno_cache_stats[0] * 1000 / f), (unsigned long long)(native_adreno_cache_stats[1] >> 20));
+             (unsigned long long)boot_mach_ms(native_adreno_reassert_ticks), (unsigned long long)native_adreno_cache_stats[3],
+             (unsigned long long)boot_mach_ms(native_adreno_cache_stats[0]), (unsigned long long)(native_adreno_cache_stats[1] >> 20));
     at = put(out, at, cap, row, sizeof row);
   }
   // [maint]: the GPU driver's CPU cache maintenance by the phase that asked for it, passes/KiB: allocation, map, submission,
@@ -2024,6 +2107,18 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
                native_charger_stats[15]);
       at = put(out, at, cap, row, sizeof row);
     }
+    if (&native_charger_auth_stats) {
+      const volatile int32_t *a = native_charger_auth_stats;
+      snprintf(row, sizeof row, "[charger auth] state=%d attach=%d result=%d last=%d gauges=%x adapter=%d pending=%x read=%d write=%d errors=%d timeout=%d retry=%d host=%d valid=%x",
+               a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13]);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[charger pd] svid=%x pdo2=%x id=%x apdo=%d watts=%d fast=%d quick=%d pps_ptf=%d fg_fast=%d version=%x adapter_mv=%d adapter_temp=%d",
+               a[14], a[15], a[16], a[17], a[18], a[19], a[20], a[21], a[28], a[29], a[30], a[31]);
+      at = put(out, at, cap, row, sizeof row);
+      snprintf(row, sizeof row, "[charger pumps] ok=%d/%d bus_current=%d/%d bus_voltage=%d battery_voltage=%d",
+               a[22], a[23], a[24], a[25], a[26], a[27]);
+      at = put(out, at, cap, row, sizeof row);
+    }
   }
   // Speaker playback (AudioProbe.cpp): stage (70 done; negative: the failing step), last DSP status, DSP answers, buffer map handle,
   // buffers sent and returned, amplifiers identified / PLL locked / reporting errors (bit per amplifier), SMMU result, the two I2C engines,
@@ -2180,8 +2275,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              native_swipe_stats[5] % 1000, native_swipe_stats[6] / 1000, native_swipe_stats[6] % 1000, native_swipe_stats[7] / 1000,
              native_swipe_stats[7] % 1000);
     at = put(out, at, cap, row, sizeof row);
-    snprintf(row, sizeof row, "[swipe2] heavy=%u.%03us controlcenter..%u.%03us notification..%u.%03us apps..%u.%03us", native_swipe_stats[16] / 1000,
-             native_swipe_stats[16] % 1000, native_swipe_stats[9] / 1000, native_swipe_stats[9] % 1000, native_swipe_stats[10] / 1000,
+    snprintf(row, sizeof row, "[swipe2] heavy=%u.%03us controlcenter..%u.%03us notification..%u.%03us apps..%u.%03us", native_swipe_stats[8] / 1000,
+             native_swipe_stats[8] % 1000, native_swipe_stats[9] / 1000, native_swipe_stats[9] % 1000, native_swipe_stats[10] / 1000,
              native_swipe_stats[10] % 1000, native_swipe_stats[11] / 1000, native_swipe_stats[11] % 1000);
     at = put(out, at, cap, row, sizeof row);
   }
@@ -2693,7 +2788,10 @@ static void writer(void *arg, wait_result_t result) {
   h.export_blocks = export_region; h.export_below = export_region; h.boot_id = log_ticks(); h.first_lba = first; h.window_blocks = (uint32_t)blocks;
   h.msg_first = LogMsgFirst; h.msg_blocks = LogMsgBlocks; h.slot_first = LogSlotFirst; h.slot_blocks = LogSlotBlocks; h.slot_count = slot_count;
   h.gpt_open = h.gpt_last = &native_ufs_store_gpt_check ? native_ufs_store_gpt_check() : 0xff;
-  if (&boot_progress_tag) strlcpy(h.tag, boot_progress_tag(), sizeof h.tag);
+  if (!PE_parse_boot_argn("build-tag", boot_log_tag, sizeof boot_log_tag) && &boot_progress_tag)
+    strlcpy(boot_log_tag, boot_progress_tag(), sizeof boot_log_tag);
+  boot_log_tag[sizeof boot_log_tag - 1] = 0;
+  strlcpy(h.tag, boot_log_tag, sizeof h.tag);
   uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
   const uint64_t start = log_ticks();
   // The reboot-into-fastboot path, read only: PSCI features and the PMIC cell. autoreset=<seconds of log time> then writes the cell and
@@ -2791,7 +2889,8 @@ static void writer(void *arg, wait_result_t result) {
     LOG_AT("diag tick");
     if (diag == 1 && &boot_diag_shot_tick) boot_diag_shot_tick(now);
     LOG_AT("diag start");
-    if (((diag_at && now >= diag_at) || (&boot_cache_input_ready && boot_cache_input_ready())) && !boot_diag_status) {
+    if (((diag_at && now >= diag_at) || (diag == 1 && boot_diag_request) ||
+         (&boot_cache_input_ready && boot_cache_input_ready())) && !boot_diag_status) {
       thread_t diag;
       boot_diag_status = 1;
       if (kernel_thread_start_priority(diag_thread, NULL, MINPRI_KERNEL, &diag) == KERN_SUCCESS) thread_deallocate(diag);
@@ -2853,6 +2952,7 @@ static void writer(void *arg, wait_result_t result) {
 // other CPUs still running: the message buffer with the panic text appended, then a header (state 5) that makes it visible, written
 // through NativeUfs's panic path. Only the first call writes; a panic before the writer opened its window writes nothing.
 void boot_log_panic_flush(void) {
+  if (&boot_reset_watchdog_stop) boot_reset_watchdog_stop();
   static volatile int done;
   struct boot_log_header *live = boot_log_live;
   if (done || !live || !boot_log_panic_buffer || !&native_ufs_log_panic || !native_ufs_log_panic()) return;
@@ -2915,18 +3015,36 @@ void boot_log_panic_flush(void) {
   native_ufs_log_sync();
 }
 
-// autoreset: mark the bootloader cell (any restart is fastboot) and arm the hypervisor's watchdog, once. It runs as the first thing
-// after the scheduler starts (EARLY_BOOT), before the kernel adopts memory or starts IOKit, so a panic from there on brings the tablet
-// back to fastboot; the first tick calls it again in case the startup hook did not run.
+void boot_log_panic_record(const char *format, va_list *args, unsigned long caller) {
+  static unsigned recorded;
+  uint32_t probe = 0;
+  if (boot_log_state != 2 || !&boot_progress_panic_text ||
+      !PE_parse_boot_argn("storage-probe", &probe, sizeof probe) || probe != 1) return;
+  if (__atomic_exchange_n(&recorded, 1, __ATOMIC_ACQ_REL)) return;
+  va_list copy;
+  va_copy(copy, *args);
+  vsnprintf(boot_progress_panic_text, sizeof boot_progress_panic_text, format, copy);
+  va_end(copy);
+  const size_t length = strnlen(boot_progress_panic_text, sizeof boot_progress_panic_text);
+  if (length < sizeof boot_progress_panic_text)
+    snprintf(boot_progress_panic_text + length, sizeof boot_progress_panic_text - length,
+             " caller=%lx", caller);
+  boot_log_panic_flush();
+}
+
+// EARLY_BOOT takes over the firmware watchdog before memory adoption and IOKit startup.
+// autoreset sets a ping deadline; the firmware's bootloader reboot reason persists across the handoff.
 static void boot_reset_arm(void) {
   static int armed;
-  uint32_t autoreset = 0;
+  uint32_t autoreset = 0, inherited = 0;
   if (armed) return;
   armed = 1;
-  if (PE_parse_boot_argn("autoreset", &autoreset, sizeof autoreset) && autoreset && &boot_reset_probe &&
+  PE_parse_boot_argn("autoreset", &autoreset, sizeof autoreset);
+  PE_parse_boot_argn("uefi-watchdog", &inherited, sizeof inherited);
+  if ((autoreset || inherited) && &boot_reset_probe &&
       boot_reset_probe(boot_log_reset_probe_text, sizeof boot_log_reset_probe_text) == 0) {
     if (&boot_reset_mark_bootloader) boot_reset_mark_bootloader(boot_log_reset_mark, sizeof boot_log_reset_mark);
-    if (&boot_reset_watchdog) boot_reset_watchdog(autoreset + 60, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
+    if (&boot_reset_watchdog) boot_reset_watchdog(autoreset ? autoreset + 30 : 0, boot_log_reset_watchdog, sizeof boot_log_reset_watchdog);
   }
 }
 STARTUP(EARLY_BOOT, STARTUP_RANK_FIRST, boot_reset_arm);
@@ -2936,10 +3054,7 @@ void boot_log_tick(unsigned now) {
   (void)now;
   if (boot_log_started) return;
   boot_log_started = 1;
-  // An unattended run must come back however it ends: on the desktop past its deadline (int-229 first suspected) or in a panic seconds
-  // after the start, before UFS and this log exist (int-229: a duplicate class at PE_lockdown_iokit). So the first tick, independent of
-  // log, marks the cell (any restart is fastboot) and arms the hypervisor's watchdog, which bites a minute after the pings stop:
-  // after the autoreset deadline, or when a panic parks the cores.
+  // The first tick also attempts watchdog setup when the startup hook has not run.
   boot_reset_arm();
   uint32_t mode = 0;
   if (!PE_parse_boot_argn("log", &mode, sizeof mode) || mode != 1) return;
@@ -2955,6 +3070,11 @@ void boot_log_tick(unsigned now) {
   prof_rank = (uint64_t *)IOMalloc(2048 * sizeof(uint64_t));
   compose_spawn = (char *)IOMalloc(16384);
   export_lock = IOLockAlloc();
+  uint32_t checkpoint_mode = 0;
+  if (PE_parse_boot_argn("storage-probe", &checkpoint_mode, sizeof checkpoint_mode) && checkpoint_mode == 1) {
+    checkpoint_lock = IOLockAlloc();
+    checkpoint_buffer = IOMallocAligned(LogBlock, LogBlock);
+  }
 #if defined(NATIVE_BOOT_PROCESS_CAPTURE) && NATIVE_BOOT_PROCESS_CAPTURE
   uint32_t diag = 0;
   // The process stack worker: with diag=1, or on its own with boot-ui-trace=1 (the worker checks that switch).

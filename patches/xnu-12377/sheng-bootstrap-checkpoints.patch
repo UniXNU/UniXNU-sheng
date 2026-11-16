@@ -1,0 +1,117 @@
+diff --git a/osfmk/kern/startup.c b/osfmk/kern/startup.c
+--- a/osfmk/kern/startup.c
++++ b/osfmk/kern/startup.c
+@@ -1,4 +1,6 @@
+ #include <kern/boot_progress.h>
++extern void boot_log_checkpoint(const char *) __attribute__((weak_import));
++#define startup_checkpoint(x) do { if (&boot_log_checkpoint) boot_log_checkpoint(x); } while (0)
+ /*
+  * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
+  *
+@@ -923,21 +925,33 @@
+ 	 *	Start the user bootstrap.
+ 	 */
+ #ifdef  MACH_BSD
++	startup_checkpoint("bootstrap: bsd_init enter");
+ 	bsd_init();
++	startup_checkpoint("bootstrap: bsd_init returned");
+ #endif
+ 
+ 
+ 	/*
+ 	 * Get rid of pages used for early boot tracing.
+ 	 */
++	startup_checkpoint("bootstrap: kdebug_free_early_buf enter");
+ 	kdebug_free_early_buf();
+-
+-	serial_keyboard_init();         /* Start serial keyboard if wanted */
+-
++	startup_checkpoint("bootstrap: kdebug_free_early_buf returned");
++
++	startup_checkpoint("bootstrap: serial_keyboard_init enter");
++	serial_keyboard_init();
++	startup_checkpoint("bootstrap: serial_keyboard_init returned");         /* Start serial keyboard if wanted */
++
++	startup_checkpoint("bootstrap: vm_page_init_local_q enter");
+ 	vm_page_init_local_q(machine_info.max_cpus);
+-
++	startup_checkpoint("bootstrap: vm_page_init_local_q returned");
++
++	startup_checkpoint("bootstrap: thread_bind enter");
+ 	thread_bind(PROCESSOR_NULL);
++	startup_checkpoint("bootstrap: thread_bind returned");
++	startup_checkpoint("bootstrap: resume_cluster_powerdown enter");
+ 	resume_cluster_powerdown();
++	startup_checkpoint("bootstrap: resume_cluster_powerdown returned");
+ 
+ #if XNU_VM_HAS_DELAYED_PAGES
+ 	/*
+@@ -945,14 +959,19 @@
+ 	 * a background thread. Take this opportunity to initialize and free
+ 	 * any remaining vm_pages that were delayed earlier by pmap_startup().
+ 	 */
++	startup_checkpoint("bootstrap: vm_free_delayed_pages enter");
+ 	vm_free_delayed_pages();
++	startup_checkpoint("bootstrap: vm_free_delayed_pages returned");
+ #endif /* XNU_VM_HAS_DELAYED_PAGES */
+ 
++	startup_checkpoint("bootstrap: vm_pages_array_finalize enter");
+ 	vm_pages_array_finalize();
++	startup_checkpoint("bootstrap: vm_pages_array_finalize returned");
+ 
+ 	/*
+ 	 *	Become the pageout daemon.
+ 	 */
++	startup_checkpoint("bootstrap: vm_pageout enter");
+ 	vm_pageout();
+ 	/*NOTREACHED*/
+ }
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -1305,20 +1305,32 @@
+ {
+ 	proc_t p = current_proc();
+ 
++	bsd_init_checkpoint("pid1: process_name enter");
+ 	process_name("init", p);
++	bsd_init_checkpoint("pid1: process_name returned");
+ 
+ 	/* Set up exception-to-signal reflection */
++	bsd_init_checkpoint("pid1: ux_handler_setup enter");
+ 	ux_handler_setup();
++	bsd_init_checkpoint("pid1: ux_handler_setup returned");
+ 
+ #if CONFIG_MACF
+-	mac_cred_label_associate_user(proc_ucred_unsafe(p)); /* in init */
+-#endif
+-
++	bsd_init_checkpoint("pid1: mac_cred_label_associate_user enter");
++	mac_cred_label_associate_user(proc_ucred_unsafe(p));
++	bsd_init_checkpoint("pid1: mac_cred_label_associate_user returned"); /* in init */
++#endif
++
++	bsd_init_checkpoint("pid1: vm_init_before_launchd enter");
+ 	vm_init_before_launchd();
++	bsd_init_checkpoint("pid1: vm_init_before_launchd returned");
+ 
+ #if CONFIG_XNUPOST
++	bsd_init_checkpoint("pid1: bsd_list_tests enter");
+ 	int result = bsd_list_tests();
++	bsd_init_checkpoint("pid1: bsd_list_tests returned");
++	bsd_init_checkpoint("pid1: bsd_do_post enter");
+ 	result = bsd_do_post();
++	bsd_init_checkpoint("pid1: bsd_do_post returned");
+ 	if (result != 0) {
+ 		panic("bsd_do_post: Tests failed with result = 0x%08x", result);
+ 	}
+@@ -1326,7 +1338,9 @@
+ 
+ 	bsd_init_kprintf("bsd_do_post - done");
+ 
++	bsd_init_checkpoint("pid1: load_init_program enter");
+ 	load_init_program(p);
++	bsd_init_checkpoint("pid1: load_init_program returned");
+ 	lock_trace = 1;
+ }
+ 

@@ -18,3 +18,8 @@ zzzzzzzzzz-sheng-sigp-reinit-assert.patch
 sheng-appsync-runtime.patch
 sheng-appsync-user-trust.patch
 zzzzzzzzzzz-sheng-edge-matrix.patch
+zzzzzz-sheng-bsd-checkpoints.patch
+sheng-bootstrap-checkpoints.patch
+sheng-headless-startup-checkpoints.patch
+sheng-startup-failure-log.patch
+sheng-process-exit-log.patch

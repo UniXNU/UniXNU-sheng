@@ -141,6 +141,12 @@ if stock_config.exists():
 # EDK II metadata does not follow a symlinked package directory: place the generated tree as a real
 # directory in the firmware checkout (UNIXNU_UEFI; the release sets it for its scripts).
 uefi = Path(os.environ.get('UNIXNU_UEFI') or ROOT / 'uefi-sheng')
+guard_header = uefi / 'Platforms/Xiaomi/shengPkg/Include/BootResetCore.h'
+guard_header.parent.mkdir(parents=True, exist_ok=True)
+source_header = ROOT / 'kits/sheng/BootResetCore.h'
+if not source_header.is_file():
+    source_header = ROOT / 'package/BootResetCore.h'
+shutil.copyfile(source_header, guard_header)
 link = uefi / 'Binaries/sheng'
 generated = (output / 'manifest.json')
 if link.is_dir() and (link / 'manifest.json').is_file() and (link / 'manifest.json').read_bytes() == generated.read_bytes():

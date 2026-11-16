@@ -16,6 +16,7 @@ import json
 import os
 import re
 import select
+import shlex
 import struct
 import sys
 import termios
@@ -81,8 +82,10 @@ def unpack_export(blob, run, name='export'):
         import subprocess
         command=[sys.executable,str(Path(__file__).with_name('decode-sheng-latency.py')),
                  str(out/'files/kernel.latency.bin'),'--out',str(out/'latency.jsonl')]
-        for home in ('mobile','root'):
-            frames=out/f'files/private/var/{home}/Library/Caches/com.apple.backboardd/m2v/frames.trace'
+        for rel in ('private/var/tmp/NativeAdrenoMetal.trace/frames.trace',
+                    'private/var/mobile/Library/Caches/com.apple.backboardd/m2v/frames.trace',
+                    'private/var/root/Library/Caches/com.apple.backboardd/m2v/frames.trace'):
+            frames=out/'files'/rel
             if frames.exists():command+=['--frames',str(frames)];break
         if (out/'files/kernel.touch.bin').exists():command+=['--touch',str(out/'files/kernel.touch.bin')]
         subprocess.run(command,check=True)
@@ -118,7 +121,7 @@ def messages(blob, h):
     return area[at:] + area[:at]
 
 
-def decode(blob, out):
+def decode(blob, out, expected_tag=None):
     h = header(blob)
     if h['magic'] != b'SHLOG001':
         raise SystemExit(f'no log header (magic {h["magic"]!r}): nothing was written, or the window is not the log')
@@ -134,6 +137,20 @@ def decode(blob, out):
             value = value.split('\0')[0]
         lines.append(f'{key}={value}')
     (run / 'header.txt').write_text('\n'.join(lines) + '\n')
+    records = []
+    first_checkpoint = h['slot_first'] + h['slot_count'] * h['slot_blocks']
+    for block in range(first_checkpoint, min(h['window_blocks'], len(blob) // BLOCK)):
+        record = blob[block * BLOCK:(block + 1) * BLOCK].split(b'\0', 1)[0]
+        if record.startswith(b'SHSTG001\n'):
+            fields = dict(line.split('=', 1) for line in record.decode(errors='replace').splitlines() if '=' in line)
+            if fields.get('tag') == (expected_tag or tag):
+                records.append((int(fields.get('sequence', 0)), record))
+    if records:
+        records.sort(key=lambda item: item[0])
+        (run / 'startup-checkpoints.txt').write_bytes(b'\n\n'.join(record for _, record in records) + b'\n')
+        checkpoint = records[-1][1]
+        (run / 'startup-checkpoint.txt').write_bytes(checkpoint + b'\n')
+        print(checkpoint.decode(errors='replace'))
     msg = messages(blob, h)
     (run / 'msgbuf.txt').write_bytes(msg)
     count, written = h['slot_count'], h['slots_written']
@@ -155,20 +172,28 @@ def decode(blob, out):
 
 
 class Port:
-    def __init__(self, path):
+    def __init__(self, path, deadline=None):
+        self.deadline = deadline
         self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY)
         tty.setraw(self.fd)
         attrs = termios.tcgetattr(self.fd)
         attrs[2] |= termios.CLOCAL | termios.CREAD
         termios.tcsetattr(self.fd, termios.TCSANOW, attrs)
 
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
     def send(self, text):
         os.write(self.fd, text.encode())
 
     def read_until(self, marker, timeout):
-        data, end = bytearray(), time.time() + timeout
+        data, end = bytearray(), time.monotonic() + timeout
+        if self.deadline is not None:
+            end = min(end, self.deadline)
         while marker not in data:
-            if time.time() > end:
+            if time.monotonic() > end:
                 raise SystemExit(f'timed out waiting for {marker!r}; last output: {bytes(data[-300:])!r}')
             ready, _, _ = select.select([self.fd], [], [], 0.5)
             if ready:
@@ -189,29 +214,37 @@ def find_port(wait):
     raise SystemExit('no /dev/cu.usbmodem* port: is the log reader booted?')
 
 
-def fetch(port_path, out, reboot, retries=6):
-    port = Port(port_path)
-    time.sleep(0.5)
-    port.send('\n')
-    time.sleep(0.5)
-    port.send('stty -echo 2>/dev/null; echo R$((40+2))R\n')
-    port.read_until(b'R42R', 30)
+class Shell:
+    def __init__(self, port_path, deadline=None):
+        self.port = Port(port_path, deadline)
+        try:
+            time.sleep(0.5)
+            self.port.send('\n')
+            time.sleep(0.5)
+            self.port.send('stty -echo 2>/dev/null; echo R$((40+2))R\n')
+            self.port.read_until(b'R42R', 30)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        self.port.close()
 
     # The markers are computed by the shell, so the echoed command (if echo is still on) never contains them. '@' is not a base64 character.
-    def run(command, timeout=120):
-        port.send('echo @@B$((40+2))@@; ' + command + '; echo @@E$((40+2))@@\n')
-        data = port.read_until(b'@@E42@@', timeout)
+    def run(self, command, timeout=120):
+        self.port.send('echo @@B$((40+2))@@; ' + command + '; echo @@E$((40+2))@@\n')
+        data = self.port.read_until(b'@@E42@@', timeout)
         return data[data.rindex(b'@@B42@@') + 7:data.rindex(b'@@E42@@')].strip()
 
-    # One gzip of a file on the reader, then 64 KiB pieces, each with its own MD5 and retried alone: a single 1.7 MB base64 stream lost or
-    # gained characters on the serial line often enough that int-146's four whole-stream attempts all failed.
-    def pull(path, timeout=120):
-        summary = run(f'gzip -c {path} > /run/l.gz; wc -c < /run/l.gz; md5sum /run/l.gz', timeout).split()
+    # Transfer one gzip in 64 KiB pieces, each retried separately after checking its MD5.
+    def pull(self, path, timeout=120, retries=6):
+        path = shlex.quote(path)
+        summary = self.run(f'gzip -c {path} > /run/l.gz; wc -c < /run/l.gz; md5sum /run/l.gz', timeout).split()
         total, want = int(summary[0]), summary[1].decode()
         piece, data = 65536, bytearray()
         for n in range((total + piece - 1) // piece):
             for attempt in range(retries):
-                body = run(f'dd if=/run/l.gz bs={piece} skip={n} count=1 2>/dev/null | md5sum; dd if=/run/l.gz bs={piece} skip={n} count=1 2>/dev/null | base64', 60)
+                body = self.run(f'dd if=/run/l.gz bs={piece} skip={n} count=1 2>/dev/null | md5sum; dd if=/run/l.gz bs={piece} skip={n} count=1 2>/dev/null | base64', 60)
                 first, _, rest = body.partition(b'\n')
                 try:
                     chunk = base64.b64decode(re.sub(rb'[^A-Za-z0-9+/=]', b'', rest))
@@ -227,12 +260,21 @@ def fetch(port_path, out, reboot, retries=6):
             raise SystemExit('transfer does not match the reader\'s MD5')
         return bytes(data)
 
+
+def fetch(port_path, out, reboot, retries=6, expected_tag=None):
+    shell = Shell(port_path)
+    run = shell.run
+    def pull(path, timeout=120):
+        return shell.pull(path, timeout, retries)
+
     data = pull('/run/log.bin')
     (out / 'last-raw.gz').parent.mkdir(parents=True, exist_ok=True)
     (out / 'last-raw.gz').write_bytes(data)
     window = gzip.decompress(data)
-    run_dir = decode(window, out)
+    run_dir = decode(window, out, expected_tag)
     h = header(window)
+    if expected_tag and h['tag'].split(b'\0', 1)[0].decode(errors='replace') != expected_tag:
+        h['export_bytes'] = h['diag_bytes'] = 0
     # The export region below the window, read from userdata on the reader (the same partition lookup as its init).
     def region(first, size, name):
         blocks = (size + BLOCK - 1) // BLOCK
@@ -252,9 +294,12 @@ def fetch(port_path, out, reboot, retries=6):
         if h.get('diag_bytes') and h.get('export_below'):
             region(h['diag_first'], h['diag_bytes'], 'diag')
     finally:
-        if reboot:
-            port.send('/bin/rebootbl\n')
-            print('sent rebootbl: the tablet should come back in fastboot')
+        try:
+            if reboot:
+                shell.port.send('/bin/rebootbl\n')
+                print('sent rebootbl: the tablet should come back in fastboot')
+        finally:
+            shell.close()
     return run_dir
 
 
@@ -265,11 +310,12 @@ def main():
     ap.add_argument('--no-reboot', action='store_true')
     ap.add_argument('--wait', type=int, default=120)
     ap.add_argument('--decode', type=Path)
+    ap.add_argument('--expected-tag')
     a = ap.parse_args()
     if a.decode:
-        decode(a.decode.read_bytes(), a.out)
+        decode(a.decode.read_bytes(), a.out, a.expected_tag)
         return
-    fetch(a.port or find_port(a.wait), a.out, not a.no_reboot)
+    fetch(a.port or find_port(a.wait), a.out, not a.no_reboot, expected_tag=a.expected_tag)
 
 
 if __name__ == '__main__':
