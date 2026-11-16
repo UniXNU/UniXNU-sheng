@@ -329,7 +329,7 @@ result = "The 26C5035r Legacy backend compiles with 30 owned, 258 native and 214
 [[area.evidence]]
 kind = "host"
 reference = "reports/macos-cover-input.md"
-revision = "bda2678d88152ed9f2d73ac0a007616da0d27190"
+revision = "ac40d6811c15f775371db7d0aa1fccb3f099b8e6"
 command = "macOS cover host checks and guarded v0 desktop capture"
 result = "The cover candidate kernel compiled and prelinked. Desktop and General Settings remained visible through the retained 175-second photo; physical lid transitions remain pending."
 
@@ -403,7 +403,7 @@ result = "ShengNovatekTouch 69fdd6223ed2572aa8bd8351e77c53a238276130 compiles an
 [[area.evidence]]
 kind = "host"
 reference = "reports/macos-cover-input.md"
-revision = "bda2678d88152ed9f2d73ac0a007616da0d27190"
+revision = "ac40d6811c15f775371db7d0aa1fccb3f099b8e6"
 command = "macOS cover host checks and guarded v0 desktop capture"
 result = "The production touch-lid gate host checks passed and the integrated kernel reached the desktop. Physical lid transitions remain pending."
 
@@ -485,7 +485,7 @@ result = "The arm64e source input transport builds with GENI SPI. NativeHidInput
 [[area.evidence]]
 kind = "host"
 reference = "reports/macos-cover-input.md"
-revision = "bda2678d88152ed9f2d73ac0a007616da0d27190"
+revision = "ac40d6811c15f775371db7d0aa1fccb3f099b8e6"
 command = "macOS cover host checks and guarded v0 desktop capture"
 result = "WN8030, macOS HID and keyboard trace host checks passed. The device cover-service query returned ProductID 163; physical trackpad motion remains pending."
 
@@ -563,7 +563,7 @@ result = "Capture s4fa13-4bd7e1abb, boot DBCB42BF-E951-4E1D-91D9-CAFE40F2B363, u
 [[area.evidence]]
 kind = "host"
 reference = "reports/macos-cover-input.md"
-revision = "bda2678d88152ed9f2d73ac0a007616da0d27190"
+revision = "ac40d6811c15f775371db7d0aa1fccb3f099b8e6"
 command = "macOS cover host checks and guarded v0 desktop capture"
 result = "The replacement-kernel preparation produced a v0 desktop image with runtime 2bb0552b6e78724f9ab119c3370d20ed. Retained 120 to 175 second photos show complete widget and Settings backgrounds."
 
@@ -699,7 +699,7 @@ result = "The macOS USB build matches 299 original bindings for QcomDwc3Xdci and
 [[area.evidence]]
 kind = "host"
 reference = "reports/macos-cover-input.md"
-revision = "bda2678d88152ed9f2d73ac0a007616da0d27190"
+revision = "ac40d6811c15f775371db7d0aa1fccb3f099b8e6"
 command = "macOS cover host checks and guarded v0 desktop capture"
 result = "The macOS display archive passed its 299 original USB binding audit alongside the cover changes."
 
@@ -1029,9 +1029,9 @@ result = "Capture se8d01-1cc2adcce, boot 832CF234-6DC1-42CE-8DE1-E529B70BB950, r
 [[area.evidence]]
 kind = "host"
 reference = "reports/macos-cover-input.md"
-revision = "bda2678d88152ed9f2d73ac0a007616da0d27190"
+revision = "ac40d6811c15f775371db7d0aa1fccb3f099b8e6"
 command = "macOS cover host checks and guarded v0 desktop capture"
-result = "The combined replacement-kernel and GPU preparation completed; the guarded cycle returned to fastboot. The bounded cover-property selection retained ProductID 163 from the captured registry output."
+result = "The macOS HID checker passed 5119 checks. The exported toolchain built and prelinked the DEVELOPMENT kernel with initial cover timing publication; the kernel SHA-256 is 7a246e83410c23a60d23427ae85aac56aeb0e6345cc37b59e88495881458972f. The guarded desktop capture and bounded cover-property selection retained ProductID 163."
 
 [[area]]
 id = "diagnostics"
@@ -1140,7 +1140,7 @@ result = "The CI manifest retains autoreset=7200, uefi-watchdog=1 and diag-expor
 [[area.evidence]]
 kind = "host"
 reference = "reports/macos-cover-input.md"
-revision = "bda2678d88152ed9f2d73ac0a007616da0d27190"
+revision = "ac40d6811c15f775371db7d0aa1fccb3f099b8e6"
 command = "macOS cover host checks and guarded v0 desktop capture"
 result = "The production launch-policy initializer host checks passed, including enable-jobs. The device capture showed SSH enabled and completed the timed return and Linux retrieval."
 
