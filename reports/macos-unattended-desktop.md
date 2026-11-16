@@ -4,7 +4,7 @@ Xiaomi Pad 6S Pro (sheng, 8 GiB), macOS 27.3 build 26C5035r.
 
 Test and Linux reader images use Android boot header v0.
 
-The tools in [PR #114](https://github.com/UniXNU/UniXNU-sheng/pull/114), commit `b795973`, select a short return deadline and capture the tablet through the host camera.
+The tools in [PR #114](https://github.com/UniXNU/UniXNU-sheng/pull/114), commit `1e8a33f`, select a short return deadline and capture the tablet through the host camera.
 
 ```sh
 SERIAL=b714917c READER=/path/to/sheng-linux-log.img \
@@ -12,6 +12,8 @@ CORE=/path/to/UniXNU AUTORESET_SECONDS=180 \
 ADDON=/path/to/runtime-addon.bin OUT=/path/to/capture \
 scripts/run-sheng-unattended.sh /path/to/desktop.img 420
 ```
+
+`EXTRA_KERNEL_ARGS='icon-cb=1:2'` selects targeted diagnostics. The runner owns the return deadline, diagnostic export deadline and boot tag.
 
 `AUTORESET_SECONDS=180` selects a 180-second kernel return timer and a 150-second diagnostic export. `CORE` selects the kernel checkout used for repacking. `ADDON` selects the runtime addon. The runner resets the selected A/B slot's retry budget, RAM-boots the test image, retrieves its fresh tagged logs through Linux and checks that fastboot responds.
 
@@ -37,3 +39,6 @@ python3 scripts/make-macos-autologin-addon.py INPUT.bin OUTPUT.bin \
 The addon installs the selected automatic login credentials, sets `autoLoginUserScreenLocked=false`, keeps the screen and system awake and sets both sleep timers to zero. Capture `s0cbc8-674b3970`, boot session `7FE90579-835F-4ABB-A438-1D0F3AB3AAC1`, records console user `unixnu` (UID 501), Finder, Dock and caffeinate. The camera showed the desktop without input. The timed boot returned through Linux to responsive fastboot after 204.392 seconds; the reader completed in 18.479 seconds.
 
 Cold-start capture `sbd840-26c4b6aa6` used runner revision `ac5daa1710800d80adc8a385b65e55eb85ad5658`. Both images passed its v0 preflight. The camera again showed the desktop without input. The test returned after 204.555 seconds, retrieved its fresh Linux log and confirmed fastboot.
+
+
+Capture `s1b88c-bcd3d5c5` used runner `4f1dda3` with `EXTRA_KERNEL_ARGS='icon-cb=1:2'`. Both v0 images passed preflight. The exported graphics marker and icon command-buffer log identify boot `97012673-B5F9-45BF-A180-0223EF7CB77C`. The test returned after 206.982 seconds; Linux retrieval completed in 18.331 seconds and confirmed responsive fastboot. The camera showed incomplete Settings icons, so the integrated GPU remains under rendering investigation.
