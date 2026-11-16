@@ -951,7 +951,8 @@ command = "AUTORESET_SECONDS=180 ADDON=autologin-unlocked-addon.bin scripts/run-
 result = "The v0 desktop and reader images passed the runner preflight. Capture sbd840-26c4b6aa6 reached the desktop without input, returned after 204.555 seconds, exported a fresh log through Linux and finished in responsive fastboot. The test preserved Data."
 
 [[area.evidence]]
-kind = "hardware"
+kind = "device"
+revision = "4f1dda30cce03e5bd988534bb083b566abad7a11"
 reference = "reports/macos-unattended-desktop.md"
 result = "Runner commit 4f1dda3: capture s1b88c-bcd3d5c5 on sheng b714917c used EXTRA_KERNEL_ARGS=icon-cb=1:2, v0 images, autoreset=180 and diag-export=150. It retained the matching boot 97012673-B5F9-45BF-A180-0223EF7CB77C, returned after 206.982 seconds, retrieved the Linux log in 18.331 seconds and confirmed responsive fastboot."
 
