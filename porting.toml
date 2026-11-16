@@ -85,6 +85,20 @@ revision = "9ea98e5b491c96883e5ea55659d8e0b9feb7ab33"
 command = "python3 scripts/run-local-kernel.py --sdk SDK --tools TOOLS -- build kernel prelink -D DEVICE --os macos-27 --data-ramdisk installed-data.dbr --skip-preflight"
 result = "The exported Xcode 26.6 compiler, classic linker, SDK and kernel tools build the macOS arm64e kernel and prelink it locally. The current component selection also builds the signed Metal plugin and guarded 256 MiB lab payload."
 
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+command = "scripts/package.sh --os macos-27"
+result = "The macOS desktop release completed with the selected profile and local build inputs. The 972-byte boot argument string matches the manual desktop image."
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/actions/runs/43848064083"
+revision = "6a99956461d3808e36ba2047e18cf6083a6dcb82"
+command = "scripts/package.sh --os macos-27 --uefi ../uefi-sheng"
+result = "The Xcode 26.6 and Python 3.14 CI release completed. Its 972-byte kernel command line matches the local manual desktop build."
+
 [[area]]
 id = "firmware"
 status = "implemented"
@@ -252,6 +266,13 @@ revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
 command = "python3 scripts/run-local-kernel.py --sdk SDK --tools TOOLCHAIN -- build kernel prelink -D ../UniXNU-sheng --os macos-27 --data-ramdisk installed-data.dbr --skip-preflight"
 result = "The selected ShengUfs b6fe07b307eeddc5e258c9d5d4387b968a55e4e9 source compiles and links in the macOS 27.3 kernel; the validated integration mounts its sealed root and persistent Data volumes."
 
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+command = "scripts/package.sh --os macos-27"
+result = "The complete SourceStorage startup, authenticated root policies and native UFS runtime compile and link in the macOS kernel. The original Data seed and volume UUID are retained."
+
 [[area]]
 id = "display"
 status = "implemented"
@@ -281,6 +302,13 @@ reference = "https://github.com/rponeawa/UniXNU-sheng/blob/d4f97b86b7bcf239f03ab
 revision = "d4f97b86b7bcf239f03ab9fe34bfb1f295901400"
 command = "prepare-sheng-gpu-lab.py --preserve-data"
 result = "The source kernel links the macOS display adapter; the six-minute Core Animation scene builds with a preferred 120 Hz frame rate."
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+command = "scripts/package.sh --os macos-27"
+result = "The 26C5035r Legacy backend compiles with 30 owned, 258 native and 214 original bindings. Its source driver helper resolves the selected build tree and macOS profile."
 
 [[area]]
 id = "input"
@@ -414,6 +442,13 @@ reference = "https://github.com/rponeawa/UniXNU-sheng/blob/d4f97b86b7bcf239f03ab
 revision = "d4f97b86b7bcf239f03ab9fe34bfb1f295901400"
 command = "prepare-sheng-gpu-lab.py --preserve-data"
 result = "The keyboard integration compiles and links into the macOS 27.3 kernel image."
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+command = "scripts/package.sh --os macos-27"
+result = "The arm64e source input transport builds with GENI SPI. NativeHidInput and ShengKeyboardCover vtables match the original diversities, with 76 IOHIDDevice bindings."
 
 [[area]]
 id = "gpu"
@@ -599,6 +634,13 @@ revision = "d4f97b86b7bcf239f03ab9fe34bfb1f295901400"
 command = "prepare-sheng-gpu-lab.py --preserve-data"
 result = "The source-built kernel includes the QcomDwc3 connector-generation and data-role APIs."
 
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+command = "scripts/package.sh --os macos-27"
+result = "The macOS USB build matches 299 original bindings for QcomDwc3Xdci and QcomDwc3Xhci. The source-built guarded firmware completes with LLVM and LLD 22.1.8."
+
 [[area]]
 id = "network"
 status = "implemented"
@@ -690,6 +732,13 @@ reference = "scripts/read-sheng-log.py"
 command = "fastboot boot boot.img (adsp=2 audio=14); play music and record in Voice Memos; python3 scripts/read-sheng-log.py --wait 240"
 revision = "dea464ef093349dd746582691b0eaa3807fe1441"
 result = "Playback and recording smooth from the start. Host clock set to 19200000 Hz, IO thread period 409600 ticks. 4822 of 4843 IO cycles 15 to 25 ms apart. Write-ahead 16501 to 19638 frames, skew -474 to 1 frames, 0 late periods."
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+command = "scripts/package.sh --os macos-27"
+result = "ShengAudio.driver builds and passes strict code signature verification for arm64e-apple-macos27.0 using the host macOS SDK."
 
 [[area]]
 id = "power"
@@ -871,6 +920,20 @@ revision = "9a2ef561f225a440695f4304f608b62f90f208a3"
 command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT OUTPUT --tools TOOLS --plugin PLUGIN --video-fixture HEVC8 --video-fixture-10bit HEVC10 --bluetooth-runtime BLUETOOTH --refresh-payload --uefi UEFI --autoreset 600 --preserve-data"
 result = "The current ARM64e lab tools and source-built guarded firmware produce a 100921344-byte boot image within the board transport limit. The 256 MiB decoded payload retains the installed Data seed and includes both decoder fixtures."
 
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+command = "scripts/package.sh --os macos-27"
+result = "The standard release produces a 79413248-byte boot image, a 256 MiB logical payload and a 143835136-byte prelinked kernel. Boot arguments, Data seed and Metal source fingerprint match the manual desktop inputs."
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/actions/runs/43848064083"
+revision = "6a99956461d3808e36ba2047e18cf6083a6dcb82"
+command = "scripts/package.sh --os macos-27 --uefi ../uefi-sheng"
+result = "The CI release produces a 79351808-byte boot image, a 256 MiB logical payload and a 143835136-byte prelinked kernel, and publishes the packaged artifacts."
+
 [[area]]
 id = "diagnostics"
 status = "implemented"
@@ -959,6 +1022,20 @@ reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9a2ef561f225a440695f4
 revision = "9a2ef561f225a440695f4304f608b62f90f208a3"
 command = "gpu-correctness-probe --all; icon-probe icons.png"
 result = "On Apple M1 Pro, the source-compiled half kernel returns mix=0 and dot=32, missing-function lookup returns MTLLibraryErrorDomain code 5, both exact-heap layouts pass, and 16 persistent IOSurface CPU/GPU round trips pass. All 64 requested icons have finite source components; the RGBAh blur is finite."
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
+command = "scripts/package.sh --os macos-27"
+result = "The desktop runtime contains the manual-session marker and Shader Cache application entry. The boot profile retains autoreset=7200, uefi-watchdog=1 and diag-export=7140."
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/actions/runs/43848064083"
+revision = "6a99956461d3808e36ba2047e18cf6083a6dcb82"
+command = "scripts/package.sh --os macos-27 --uefi ../uefi-sheng"
+result = "The CI manifest retains autoreset=7200, uefi-watchdog=1 and diag-export=7140. Its 434 shader-library inventory paths match the local desktop build."
 
 [[area]]
 id = "arm64e-os"
