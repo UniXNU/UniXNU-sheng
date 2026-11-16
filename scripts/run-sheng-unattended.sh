@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run one timed image, retrieve its Linux log and confirm the final fastboot state.
-# Usage: SERIAL=<serial> READER=<reader.img> [USERDATA=<full.sparse>] [OUT=<directory>] run-sheng-unattended.sh IMAGE [wait_seconds=600]
+# Usage: SERIAL=<serial> READER=<reader.img> [AUTORESET_SECONDS=180] [ADDON=<runtime.bin>] [CORE=<checkout>] [EXTRA_KERNEL_ARGS="icon-cb=1:4"] [USERDATA=<full.sparse>] [OUT=<directory>] run-sheng-unattended.sh IMAGE [wait_seconds=600]
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 exec python3 - "$ROOT" "$@" <<'PY'
@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 import re
 import secrets
+import shlex
+import shutil
 import struct
 import subprocess
 import sys
@@ -35,6 +37,8 @@ for candidate in (image, reader):
         header = source.read(48)
     if len(header) < 48 or header[:8] != b'ANDROID!':
         sys.exit(f'{candidate}: require an Android boot image')
+    if struct.unpack_from('<I', header, 40)[0] != 0:
+        sys.exit(f'{candidate}: sheng unattended tests require boot header v0')
     if struct.unpack_from('<I', header, 16)[0] > maximum:
         sys.exit(f'{candidate}: encoded ramdisk exceeds the {maximum}-byte sheng limit')
 if sys.platform == 'darwin':
@@ -50,9 +54,11 @@ if not serial:
         sys.exit('set SERIAL when exactly one fastboot device is not present')
     serial = found[0]
 
-def wait_fastboot(seconds):
+def wait_fastboot(seconds, observe=None):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
+        if observe is not None:
+            observe()
         if serial in devices():
             try:
                 result = subprocess.run(['fastboot', '-s', serial, 'getvar', 'product'],
@@ -88,8 +94,26 @@ while tag in previous_tags:
 tagged_directory = tempfile.TemporaryDirectory(prefix='sheng-timed-boot-')
 tagged = Path(tagged_directory.name) / image.name
 (output / 'boot-attempt.json').write_text(json.dumps(dict(image=image.name, reader=reader.name, expected_tag=tag), indent=2) + '\n')
-subprocess.run([sys.executable, str(root / 'scripts/repack-sheng-boot.py'), str(image), str(tagged),
-                '--kernel-arg', 'build-tag=' + tag], check=True)
+repack = [sys.executable, str(root / 'scripts/repack-sheng-boot.py'), str(image), str(tagged),
+          '--kernel-arg', 'build-tag=' + tag]
+if os.environ.get('CORE'):
+    repack += ['--core', str(Path(os.environ['CORE']).resolve())]
+if os.environ.get('AUTORESET_SECONDS'):
+    seconds = int(os.environ['AUTORESET_SECONDS'])
+    if seconds < 60 or seconds + 120 > limit:
+        sys.exit('AUTORESET_SECONDS must be at least 60 and leave 120 seconds within the host wait')
+    repack += ['--kernel-arg', f'autoreset={seconds}', '--kernel-arg', f'diag-export={seconds - 30}']
+if os.environ.get('ADDON'):
+    addon = Path(os.environ['ADDON']).resolve()
+    with addon.open('rb') as source:
+        if source.read(8) != b'NGPUADD2':
+            sys.exit('ADDON must name a runtime addon')
+    repack += ['--payload-file', str(addon) + '=EFI/UniXNU/Payloads/kernel.macho.gpuaddon']
+for value in shlex.split(os.environ.get('EXTRA_KERNEL_ARGS', '')):
+    if value.split('=', 1)[0] in ('autoreset', 'diag-export', 'build-tag'):
+        sys.exit('EXTRA_KERNEL_ARGS uses diagnostics; the runner owns deadlines and the boot tag')
+    repack += ['--kernel-arg', value]
+subprocess.run(repack, check=True)
 wait_fastboot(30)
 if userdata is not None:
     def variable(name):
@@ -111,10 +135,27 @@ if userdata is not None:
         sys.exit('USERDATA must cover the complete reported userdata partition')
     print(f'{serial}: writing the complete {partition}-byte userdata partition', flush=True)
     subprocess.run(['fastboot', '-s', serial, 'flash', 'userdata', str(userdata)], check=True, timeout=3600)
+camera = Path(os.environ['CAMERA_FRAME']).resolve() if os.environ.get('CAMERA_FRAME') else None
+camera_times = sorted(set(int(value) for value in os.environ.get('CAMERA_KEEP_SECONDS', '120 150 175').split())) if camera else []
+if any(value <= 0 or value >= limit for value in camera_times):
+    sys.exit('CAMERA_KEEP_SECONDS must fall within the test wait')
 started = time.monotonic()
+started_wall = time.time()
+def capture_camera():
+    while camera_times and time.monotonic() - started >= camera_times[0]:
+        second = camera_times.pop(0)
+        destination = output / f'{tag}-camera-{second}s.jpg'
+        try:
+            if camera.stat().st_mtime >= started_wall:
+                shutil.copyfile(camera, destination)
+                print(f'{serial}: retained camera frame {destination.name}', flush=True)
+            else:
+                print(f'{serial}: camera frame at {second}s is stale', flush=True)
+        except OSError as error:
+            print(f'{serial}: camera frame at {second}s unavailable: {error}', flush=True)
 acknowledged = boot(tagged)
 time.sleep(2)
-wait_fastboot(limit)
+wait_fastboot(limit, capture_camera if camera else None)
 test_seconds = time.monotonic() - started
 print(f'{serial}: test image returned after {test_seconds:.3f}s; collecting its log', flush=True)
 reader_started = time.monotonic()
