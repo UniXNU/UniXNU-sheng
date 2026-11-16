@@ -1,7 +1,7 @@
 #!/bin/sh
 # Fixed desktop interaction and manual inspection views.
 set -u
-if [ -f /private/var/ngpu/test/share/manual-session ]; then
+if [ "$(/bin/cat /private/var/ngpu/test/share/manual-session 2>/dev/null)" = 1 ]; then
     /bin/echo "manual session boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)"
     exit 0
 fi

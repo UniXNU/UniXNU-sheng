@@ -1,7 +1,7 @@
 #!/bin/sh
 # Capture the memory, swap, storage and charger state of one timed boot.
 set -u
-if [ -f /private/var/ngpu/test/share/manual-session ]; then
+if [ "$(/bin/cat /private/var/ngpu/test/share/manual-session 2>/dev/null)" = 1 ]; then
     if [ -d '/Library/UniXNU/Shader Cache.app' ] && [ ! -e '/Applications/Shader Cache.app' ]; then
         /bin/ln -s '/Library/UniXNU/Shader Cache.app' '/Applications/Shader Cache.app'
     fi

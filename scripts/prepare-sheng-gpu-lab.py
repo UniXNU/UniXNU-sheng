@@ -115,8 +115,7 @@ def main():
             '-Wl,-segalign,0x4000', '-o', files / 'bin/gpu-correctness-probe')
         run('codesign', '--force', '--sign', '-', '--timestamp=none', '--pagesize', '4096', files / 'bin/gpu-correctness-probe')
         (files / 'share').mkdir(exist_ok=True)
-        if args.manual_session:
-            (files / 'share/manual-session').write_text('1\n')
+        (files / 'share/manual-session').write_text('1\n' if args.manual_session else '0\n')
         (files / 'share/icon-probe-path').write_text(args.icon_path+'\n' if args.icon_path else '')
         (files / 'share/graphics-comparison').write_text('shader-cache\n' if args.shader_cache_view else 'view\n' if args.graphics_view else '1\n' if args.graphics_comparison else '')
         for name in ('video-probe.mp4', 'video-probe-10bit.mp4'):
