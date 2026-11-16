@@ -107,6 +107,13 @@ revision = "ac5daa1710800d80adc8a385b65e55eb85ad5658"
 command = "AUTORESET_SECONDS=180 ADDON=autologin-unlocked-addon.bin scripts/run-sheng-unattended.sh sheng-macos27-desktop.img 420"
 result = "The v0 desktop and reader images passed the runner preflight. Capture sbd840-26c4b6aa6 reached the desktop without input, returned after 204.555 seconds, exported a fresh log through Linux and finished in responsive fastboot. The test preserved Data."
 
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/pull/118"
+revision = "855a9a65ff15a96b2c44429e0deed21c59cbf28a"
+command = "git diff --exit-code fd225e4d444b840e2749d60a71cc02a70ea3792e 855a9a65ff15a96b2c44429e0deed21c59cbf28a -- .github/workflows/macos-lab.yml"
+result = "The core_ref workflow source matches the dispatched CI version. The input selects the core checkout and defaults to main; the active macOS lab run selects core 6d059b16c2f09f2f6911d5a5c1ee0d8ee4c866f5."
+
 [[area]]
 id = "firmware"
 status = "implemented"
