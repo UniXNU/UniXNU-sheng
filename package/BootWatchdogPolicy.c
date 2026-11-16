@@ -67,7 +67,7 @@ char PE_builtin_boot_args[]="owner-staged-apps=1 owner-dataprotect=1 uefi-watchd
     " timebase-user=1 cs-lazy=1 keyboard-lone=1 armcpu-edge=1 boot-payload-release=1 thermal=1 thermal-ms=100 thermal-level=1 board-clock=7 gpu-pool=0"
 #endif
     ;
-static char policy[2048],jobs[200];
+static char policy[2048],jobs[200],enable_jobs[200];
 volatile int sheng_watchdog_policy_status=-1;
 
 // setup=1 or data-reset=2 (the install entry's "show Hello" choice): remove Setup's completion flags once, so this boot shows the Hello page.
@@ -87,25 +87,29 @@ static int sheng_boot_setup_reset(proc_t p,uint64_t scratch) {
  return 0;
 }
 
-// One comma-separated label at *c into the policy as a disabled key; advances *c past it.
-static int append_job(const char **cursor) {
+// Append one label with its launchd disabled state and advance past the comma.
+static int append_job_state(const char **cursor,int disabled) {
  const char *c=*cursor,*e=c;while(*e && *e!=',')++e;
  if(e>c) {
   if(strlcat(policy,"<key>",sizeof(policy))>=sizeof(policy))return EINVAL;
   size_t at=strlen(policy);if(at+(size_t)(e-c)+1>=sizeof(policy))return EINVAL;
   memcpy(policy+at,c,(size_t)(e-c));policy[at+(size_t)(e-c)]=0;
-  if(strlcat(policy,"</key><true/>",sizeof(policy))>=sizeof(policy))return EINVAL;
+  if(strlcat(policy,disabled?"</key><true/>":"</key><false/>",sizeof(policy))>=sizeof(policy))return EINVAL;
  }
  *cursor=*e?e+1:e;return 0;
 }
+
+static int append_job(const char **cursor) {return append_job_state(cursor,1);}
 
 int sheng_boot_watchdog_policy(void *process, uint64_t scratch) {
  proc_t p=process;
  int enabled=0,error=0,fd=-1;int32_t result=0;
  PE_parse_boot_argn("disable-watchdogd",&enabled,sizeof(enabled));
  if(!PE_parse_boot_argn("disable-jobs",jobs,sizeof(jobs)))jobs[0]=0;jobs[sizeof(jobs)-1]=0;
+ if(!PE_parse_boot_argn("enable-jobs",enable_jobs,sizeof(enable_jobs)))enable_jobs[0]=0;enable_jobs[sizeof(enable_jobs)-1]=0;
  int lite=0;PE_parse_boot_argn("lite",&lite,sizeof(lite));if(lite!=1 && lite!=2)lite=0;
  if(enabled!=1)enabled=0;
+ for(const char *c=enable_jobs;*c;++c)if(!((*c>='a'&&*c<='z')||(*c>='A'&&*c<='Z')||(*c>='0'&&*c<='9')||*c=='.'||*c=='-'||*c==','))return EINVAL;
  for(const char *c=jobs;*c;++c)if(!((*c>='a'&&*c<='z')||(*c>='A'&&*c<='Z')||(*c>='0'&&*c<='9')||*c=='.'||*c=='-'||*c==','))return EINVAL;
  int setup=0,reset=0;
  PE_parse_boot_argn("setup",&setup,sizeof(setup));
@@ -117,7 +121,7 @@ int sheng_boot_watchdog_policy(void *process, uint64_t scratch) {
   return error;
  }
  if(setup==1)printf("sheng setup flags reset: Hello page on this boot\n");
- if(!enabled && !jobs[0] && !lite)return 0;
+ if(!enabled && !jobs[0] && !enable_jobs[0] && !lite)return 0;
  policy[0]=0;strlcat(policy,policy_head,sizeof(policy));
  if(enabled)strlcat(policy,policy_watchdogd,sizeof(policy));
  if(lite)for(const char *c=lite_jobs;*c;) {if((error=append_job(&c)))return error;}
@@ -126,6 +130,7 @@ int sheng_boot_watchdog_policy(void *process, uint64_t scratch) {
   if((error=append_job(&icon_agent)))return error;
  }
  for(const char *c=jobs;*c;) {if((error=append_job(&c)))return error;}
+ for(const char *c=enable_jobs;*c;) {if((error=append_job_state(&c,0)))return error;}
  strlcat(policy,policy_tail,sizeof(policy));
  const char *directory="/private/var/db/com.apple.xpc.launchd";
  const char *path="/private/var/db/com.apple.xpc.launchd/disabled.plist";
