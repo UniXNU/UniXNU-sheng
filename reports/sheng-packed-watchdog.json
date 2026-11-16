@@ -1,0 +1,15 @@
+{
+  "fastboot_command_ready": true,
+  "elapsed_seconds": 76.221,
+  "encoded_ramdisk_bytes": 72935112,
+  "firmware_guard_seconds": 30,
+  "kernel_reset_fallback_seconds": 120,
+  "schema_version": 1,
+  "core_revision": "9113590c9384d75d63e01244e264ca7a9d9179bf",
+  "firmware_revision": "fb2b2ae1d2f8c855cc76bb24ee3bcd28e3ecacbb",
+  "firmware_sha256": "99c52a0f2034af3494ba865961895720117b38d23ad4c6804d2fa439de668380",
+  "ramdisk_encoding": "uefi-chunks",
+  "ramdisk_decoded_bytes": 199229440,
+  "image_sha256": "87ec58ebd3584fb1cca9f86f43d434804c85bf65acfa471ce41e0bcfa09ae629",
+  "image_bytes": 74104832
+}

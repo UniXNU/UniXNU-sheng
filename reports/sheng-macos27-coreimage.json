@@ -1,0 +1,64 @@
+{
+  "capture": "sd4e8d-99323ba9c",
+  "boot_session": "CC2AED9B-414D-41B8-B319-A2AB87352828",
+  "cycle": {
+    "image": "sheng-macos27-import-math-video.img",
+    "reader": "sheng-linux-log.img",
+    "boot_acknowledged": true,
+    "expected_tag": "sd4e8d",
+    "fresh_log": true,
+    "header_fresh": true,
+    "checkpoint_fresh": false,
+    "test_seconds": 628.865,
+    "reader_acknowledged": true,
+    "reader_seconds": 22.852,
+    "reader_exit": 0,
+    "final_fastboot": true
+  },
+  "source": {
+    "core": "6daef816037e93454edeabb93570aa7ac410d985",
+    "device": "b9e375948125095e414c605bdfdb5409dd26a0bf",
+    "adreno_metal": "ce8986f0065f49efce689965b39cee6449b0016a",
+    "kernel_adreno740": "14dea72cbaf52e3cce622efd69a4c3812d5bae3e"
+  },
+  "observations": {
+    "windowserver_abnormal_exit": false,
+    "iconservicesagent_fresh_crash": false,
+    "gpu_hangs": 0,
+    "gpu_restarts": 0,
+    "coreimage_blur_mps_0": "passed",
+    "coreimage_blur_mps_1": "passed",
+    "icon_requests": 64,
+    "icons_with_nonfinite_components": 30,
+    "nonfinite_components": 14316,
+    "icon_sheet": "missing icons and invalid colors",
+    "cached_iosurface_rounds": 16,
+    "cached_iosurface_cpu_to_gpu_errors": 0,
+    "cached_iosurface_gpu_to_cpu_errors": 0,
+    "exact_heap_optimized_0": "passed",
+    "exact_heap_optimized_1": "passed",
+    "compound_half_probe": "input container rejected before execution",
+    "hevc8_hardware": true,
+    "hevc8_submitted": 120,
+    "hevc8_decoded": 120,
+    "hevc8_dropped": 0,
+    "hevc8_errors": 0,
+    "hevc8_pixel_reference": "FFmpeg",
+    "hevc8_sampled_components": 1880,
+    "hevc8_maximum_absolute_error": 0
+  },
+  "qualification": {
+    "graphics": false,
+    "hevc8_640x360": true,
+    "hevc10_3840x2160": false,
+    "reason": "Icon float components are nonfinite; the compound half input did not execute. 4K 10-bit pixel validation remains pending."
+  },
+  "latest_kernel_failure": {
+    "capture": "s7aa3d-5b2862a91",
+    "uptime_s": 133,
+    "test_seconds": 208.258,
+    "panic": "ArmCpu: unexpected architectural IRQ 7 @ArmCpu.cpp:808",
+    "diagnostic_export": false,
+    "final_fastboot": true
+  }
+}

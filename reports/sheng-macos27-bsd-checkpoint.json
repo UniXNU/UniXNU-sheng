@@ -1,0 +1,43 @@
+{
+  "device": "sheng",
+  "os": "macOS 27.3 26C5035r",
+  "core_commit": "a6dbb332524f746d4968d9b80d29fd6b6484ffef",
+  "device_commit": "32bbe4546178aac7c1192286cb3cf595f9a8c318",
+  "kernel_sha256": "b7492265fd64b08cef9a6cece31a8ea0d24bc01c60e0d0941ec847b490a645d7",
+  "capture": "macos27-bsd-checkpoint/s6acc9-4b6bf76db",
+  "checkpoint": {
+    "tag": "s6acc9",
+    "stage": "bsd-iogpu-ready",
+    "physical": "20248147782",
+    "virtual": "20248147783",
+    "absolute": "25310184883",
+    "frequency": "19200000",
+    "timer_ctl": "1",
+    "timer_deadline": "20248339348",
+    "daif": "200",
+    "pending": "3ff",
+    "caller": "fffffff00bebaa94"
+  },
+  "observations": {
+    "completed": [
+      "APFS module load",
+      "mobile graphics module load",
+      "IOGPU module load"
+    ],
+    "virtual_timer_enabled": true,
+    "irq_masked": false,
+    "next_timer_ms": 9.97734375
+  },
+  "recovery": {
+    "boot_acknowledged": true,
+    "expected_tag": "s6acc9",
+    "fresh_log": true,
+    "header_fresh": true,
+    "checkpoint_fresh": true,
+    "test_seconds": 80.253,
+    "reader_acknowledged": true,
+    "reader_seconds": 15.806,
+    "reader_exit": 0,
+    "final_fastboot": true
+  }
+}

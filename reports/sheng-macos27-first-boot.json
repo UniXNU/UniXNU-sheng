@@ -1,0 +1,56 @@
+{
+  "device": "sheng",
+  "capture": "macos27-inherited-prime/untagged-170ec561e",
+  "os": {
+    "version": "27.3",
+    "build": "26C5035r"
+  },
+  "metal_component": "7496958da604f86356f238b7bbd75537472388e9",
+  "translator": "400efe7932f2a4accc7bfa74f4443281f46be54c",
+  "runtime": "97dc9478424a6febf81d087923e488a3",
+  "installation": {
+    "account": "unixnu",
+    "uid": 501,
+    "admin": true,
+    "data_filesystem": "apfs",
+    "data_writable": true,
+    "hw_memsize": 6914097152,
+    "swap_total_mib": 0,
+    "swap_used_mib": 0
+  },
+  "priming": {
+    "libraries": 329,
+    "eligible": 258,
+    "finished": 129,
+    "failed": 129,
+    "functions_refused": 8037,
+    "functions_finished": 19572,
+    "bad": 0,
+    "missing": 0,
+    "other_gpu_libraries": 71,
+    "complete": 2
+  },
+  "gpu": {
+    "context_switches_triggered": 91,
+    "context_switches_completed": 90,
+    "context_switch_faults": 1,
+    "timeout_counter": 653,
+    "recoveries": 1,
+    "display_flips": 201,
+    "display_gpu_copies": 0
+  },
+  "comparison": "pending shader priming completion",
+  "recovery": {
+    "diagnostic_bytes": 72721568,
+    "linux_reader_exit": 0,
+    "final_fastboot": true,
+    "persistent_boot_partition_modified": false
+  },
+  "power": {
+    "battery_percent": 97,
+    "usb_voltage_mv": 4865,
+    "usb_current_ma": 1109,
+    "gauge_auth_bits": 3,
+    "adapter_auth": 0
+  }
+}

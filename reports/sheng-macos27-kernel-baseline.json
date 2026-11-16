@@ -1,0 +1,35 @@
+{
+  "device": "sheng",
+  "os": "macOS 27.3 26C5035r",
+  "kernel": {
+    "core_commit": "cb2431b481b3a08b18d9f1a7d62ae5d11f85512d",
+    "sha256": "e3eb9a35ed06ae3a1d0532c85e0c79ec8ca9326de30ee3e7d9c5d9dd1691cc60",
+    "watchdog": "firmware timer serviced by the inherited kernel path"
+  },
+  "metal_component": "0e018dccd8ca525f7476f6217fbee2518cd7770f",
+  "runtime": "97dc9478424a6febf81d087923e488a3",
+  "capture": {
+    "directory": "macos27-success-kernel-current-metal/untagged-1e2980fb7",
+    "boot_id": 8096583607,
+    "runtime_boot_uuid": "7F6975AB-8981-42BA-8390-F4A768509A3D",
+    "uptime_s": 633,
+    "rounds": 315,
+    "diagnostic_bytes": 64059679,
+    "header_tag": ""
+  },
+  "observations": {
+    "user_session": "started the GPU lab agent",
+    "metal": "runtime policy and inputs=3 shader priming records identify the new boot UUID",
+    "shader_priming": "in progress at export",
+    "new_kernel_regression": "local rebuilt kernels stop after Data disk initialization; cause undetermined"
+  },
+  "recovery": {
+    "autoreset_s": 600,
+    "export_s": 480,
+    "shutdown": "Halt/Restart Timed Out at IOPlatformExpert.cpp:884",
+    "test_seconds": 700.606,
+    "reader_seconds": 23.096,
+    "final_fastboot": true,
+    "persistent_boot_partition_modified": false
+  }
+}

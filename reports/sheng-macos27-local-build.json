@@ -1,0 +1,38 @@
+{
+  "device": "sheng",
+  "os_profile": "macos-27.3-26C5035r",
+  "build": {
+    "location": "local",
+    "core_revision": "fbd98ba1c158353e9445280ddab6178f42d234e2",
+    "device_revision": "93d52181b47787f5918b1a4df593a24b199f2455",
+    "gpu_kernel_revision": "eb6d5af880e6adcd1c4495a29c06fb38d59adcd0",
+    "metal_revision": "0e018dccd8ca525f7476f6217fbee2518cd7770f",
+    "native_link": "success",
+    "prelink": "success",
+    "kernel_bytes": 143802368,
+    "kernel_sha256": "3174d51a3cb791496128a954801938ea72fc399e9070f2e57124725a63ca249f",
+    "sdk": "iPhoneOS26.5",
+    "cached_xnu_build": 43684813634
+  },
+  "gpu": {
+    "translator": "400efe7932f2a4accc7bfa74f4443281f46be54c",
+    "runtime": "97dc9478424a6febf81d087923e488a3",
+    "signed_diagnostic_images": 7,
+    "shader_checkpoints": "preserved",
+    "policy_input_revision": 3
+  },
+  "image": {
+    "bytes": 99909632,
+    "encoded_ramdisk_bytes": 98738328,
+    "logical_fat_bytes": 268435456,
+    "preserve_data": true,
+    "root_policy_signatures_verified": 3,
+    "kernel_policy_anchor": "matched"
+  },
+  "unattended": {
+    "fresh_capture": "unique build-tag required",
+    "reader": "Linux 7.3.4",
+    "return_target": "fastboot"
+  },
+  "hardware_qualification": "pending"
+}

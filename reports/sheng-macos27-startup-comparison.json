@@ -1,0 +1,63 @@
+{
+  "device": "sheng",
+  "os": "macOS 27.3 26C5035r",
+  "toolchain": {
+    "xcode": "26.6",
+    "build": "17F113",
+    "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+    "sdk": "iPhoneOS26.5",
+    "export_run": 43708351542
+  },
+  "reference": "reports/sheng-macos27-kernel-baseline.json",
+  "observations": [
+    {
+      "condition": "latest-drivers",
+      "core_commit": "a6dbb332524f746d4968d9b80d29fd6b6484ffef",
+      "kernel_sha256": "b20ba5712080889b1351c194f3f42eca0adce72560d6a2a648ec664002412b14",
+      "gpu_driver": "eb6d5af",
+      "cpu_driver": "1a3531d",
+      "metal_component": "0e018dccd8ca525f7476f6217fbee2518cd7770f",
+      "adt": "remote board configuration",
+      "capture": "macos27-matching-toolchain/s81f7f-998543889",
+      "tag": "s81f7f",
+      "fresh_log": true,
+      "last_kernel_checkpoint": "SourceStorage: Data disk started",
+      "rounds": 1,
+      "test_seconds": 80.271,
+      "final_fastboot": true
+    },
+    {
+      "condition": "gpu-reference",
+      "core_commit": "544707814d4549c7d7c555b8ea01edb3b389d933",
+      "kernel_sha256": "ec3dd7b4ff093a07f5ddd5cf7427b34963ff604e48cf37eac3dda30f72076c27",
+      "gpu_driver": "54b41b8",
+      "cpu_driver": "1a3531d",
+      "metal_component": "0e018dccd8ca525f7476f6217fbee2518cd7770f",
+      "adt": "remote board configuration",
+      "capture": "macos27-gpu-reference/sf8a37-3b897f6fc",
+      "tag": "sf8a37",
+      "fresh_log": true,
+      "last_kernel_checkpoint": "SourceStorage: Data disk started",
+      "rounds": 1,
+      "test_seconds": 80.21,
+      "final_fastboot": true
+    },
+    {
+      "condition": "cpu-and-gpu-reference",
+      "core_commit": "2b28d5554d2115a2111dbf6ffc2469c0e37dca7d",
+      "kernel_sha256": "7fffd1a9ac5c275182c17571bd29fa96fb118bcb0dc6b32975583f1488c8628c",
+      "gpu_driver": "54b41b8",
+      "cpu_driver": "d90e457",
+      "metal_component": "0e018dccd8ca525f7476f6217fbee2518cd7770f",
+      "adt": "remote board configuration",
+      "capture": "macos27-driver-reference/s13482-283f68b96",
+      "tag": "s13482",
+      "fresh_log": true,
+      "last_kernel_checkpoint": "SourceStorage: Data disk started",
+      "rounds": 1,
+      "test_seconds": 80.335,
+      "final_fastboot": true
+    }
+  ],
+  "conclusion": "The GPU-only and combined CPU/GPU reference selections reproduce the startup stall. Cause undetermined."
+}
