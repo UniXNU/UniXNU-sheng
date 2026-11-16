@@ -35,6 +35,8 @@ for candidate in (image, reader):
         header = source.read(48)
     if len(header) < 48 or header[:8] != b'ANDROID!':
         sys.exit(f'{candidate}: require an Android boot image')
+    if struct.unpack_from('<I', header, 40)[0] != 0:
+        sys.exit(f'{candidate}: sheng unattended tests require boot header v0')
     if struct.unpack_from('<I', header, 16)[0] > maximum:
         sys.exit(f'{candidate}: encoded ramdisk exceeds the {maximum}-byte sheng limit')
 if sys.platform == 'darwin':
