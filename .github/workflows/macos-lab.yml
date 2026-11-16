@@ -48,7 +48,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: UniXNU/UniXNU
-          ref: 3cfed016af35af1e4e1464766ba4e240e2057d6b
+          ref: 3986dbd71a2b977ec6b3484d8333c1f9b6eaeea7
           path: UniXNU
           submodules: recursive
       - name: Check out firmware sources
@@ -129,6 +129,7 @@ jobs:
           key: ${{ steps.kernel-sdk.outputs.key }}-${{ github.run_id }}
           restore-keys: ${{ steps.kernel-sdk.outputs.key }}-
           path: |
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/xnu-inputs.json
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/xnu-work
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/fakeroot
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/xnu
@@ -221,6 +222,7 @@ jobs:
         with:
           key: ${{ steps.kernel-sdk.outputs.key }}-${{ github.run_id }}
           path: |
+            UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/xnu-inputs.json
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/xnu-work
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/.cache/fakeroot
             UniXNU/out/sheng/macos-27.3-26C5035r/sheng_macos/tree/build/xnu
