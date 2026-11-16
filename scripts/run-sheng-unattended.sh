@@ -65,12 +65,27 @@ def wait_fastboot(seconds):
     raise SystemExit(f'{serial}: fastboot did not appear within {seconds}s; evidence retained in {output}')
 
 def boot(path):
-    try:
-        subprocess.run(['fastboot', '-s', serial, 'boot', str(path)], check=True, timeout=120)
-    except subprocess.TimeoutExpired:
-        print(f'{serial}: boot acknowledgement timed out; waiting for the image return timer', flush=True)
-        return False
-    return True
+    for attempt in range(2):
+        try:
+            result = subprocess.run(['fastboot', '-s', serial, 'boot', str(path)],
+                                    capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            print(f'{serial}: boot acknowledgement timed out; waiting for the image return timer', flush=True)
+            return False
+        if result.stdout:
+            print(result.stdout, end='', flush=True)
+        if result.stderr:
+            print(result.stderr, end='', file=sys.stderr, flush=True)
+        if result.returncode == 0:
+            return True
+        if attempt == 0 and 'Load Error' in result.stdout + result.stderr and serial in devices():
+            print(f'{serial}: bootloader refused the image; restarting bootloader before one reload', flush=True)
+            subprocess.run(['fastboot', '-s', serial, 'reboot', 'bootloader'], check=True, timeout=15)
+            time.sleep(2)
+            wait_fastboot(45)
+            continue
+        result.check_returncode()
+
 
 output.mkdir(parents=True, exist_ok=True)
 previous_tags = {line[4:] for path in output.glob('*/header.txt')
@@ -80,6 +95,7 @@ while tag in previous_tags:
     tag = 's' + secrets.token_hex(3)[:5]
 tagged_directory = tempfile.TemporaryDirectory(prefix='sheng-timed-boot-')
 tagged = Path(tagged_directory.name) / image.name
+(output / 'boot-attempt.json').write_text(json.dumps(dict(image=image.name, reader=reader.name, expected_tag=tag), indent=2) + '\n')
 subprocess.run([sys.executable, str(root / 'scripts/repack-sheng-boot.py'), str(image), str(tagged),
                 '--kernel-arg', 'build-tag=' + tag], check=True)
 wait_fastboot(30)
