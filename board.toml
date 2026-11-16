@@ -105,6 +105,7 @@ CI_ENABLE_METAL_GPU = "0"
 "dtb_node" = [{ "path" = "/reserved-memory/splash_region", "props" = [{ "name" = "label", "type" = "s", "value" = "cont_splash_region" }, { "name" = "reg", "type" = "x", "value" = ["0x0", "0xb8000000", "0x0", "0x2b00000"] }] }]
 
 ["bootimg"."image"]
+header_version = 0
 ramdisk_compression = "uefi-chunks"
 ramdisk_max_bytes = 199229440
 
