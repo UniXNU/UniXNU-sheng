@@ -292,7 +292,7 @@ result = "The complete SourceStorage startup, authenticated root policies and na
 id = "display"
 status = "implemented"
 components = ["GopFramebuffer"]
-paths = ["package/*Display*", "package/*Framebuffer*", "package/*Backlight*", "package/AppleARMBacklight.cpp", "package/GeniI2c*", "scripts/*display*", "scripts/*gop*", "scripts/*framebuffer*"]
+paths = ["package/*Display*", "package/*Framebuffer*", "package/*Backlight*", "package/AppleARMBacklight.cpp", "package/GeniI2c*", "scripts/*display*", "scripts/*gop*", "scripts/*framebuffer*", "package/LidClamshell.h"]
 inputs = ["UEFI GOP framebuffer, stride, pixel format, splash reservation and board panel/backlight controls."]
 configuration = ["Select GopFramebuffer; CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y; artwork-display-gamut = sRGB.", "vsync=120 requests board display timing.", "dpu-scanout=2 lets the display pipes fetch the compositor surface through a stage 1 window of the display bank (TCR2 SEP 7); off by default. The flip waits for the GPU fence of the frame (always on).", "backlight=1 starts the backlight driver; backlight-control=0 leaves out backlight-control and the AppleARMBacklight metaclass answer."]
 procedure = ["Verify GOP address, dimensions, stride and pixel layout before enabling presentation.", "Build the late display archive with the selected OS ABI records, then check display publication and frame presentation."]
@@ -324,6 +324,14 @@ reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9890389dd7c7a1ec0f7dc
 revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
 command = "scripts/package.sh --os macos-27"
 result = "The 26C5035r Legacy backend compiles with 30 owned, 258 native and 214 original bindings. Its source driver helper resolves the selected build tree and macOS profile."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-cover-input.md"
+revision = "336f61fdce347527b0a56d32dfdd5906f9218db1"
+command = "macOS cover host checks and guarded v0 desktop capture"
+result = "The cover candidate kernel compiled and prelinked. Desktop and General Settings remained visible through the retained 175-second photo; physical lid transitions remain pending."
 
 [[area]]
 id = "input"
@@ -391,11 +399,19 @@ revision = "ef015993fb686b29d915a64463a4adaf03dbf77e"
 command = "python3 scripts/run-local-kernel.py --sdk SDK --tools TOOLCHAIN -- build kernel prelink -D ../UniXNU-sheng --os macos-27 --data-ramdisk installed-data.dbr --skip-preflight"
 result = "ShengNovatekTouch 69fdd6223ed2572aa8bd8351e77c53a238276130 compiles and links against the selected SM8550 interfaces in the macOS 27.3 integration."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-cover-input.md"
+revision = "336f61fdce347527b0a56d32dfdd5906f9218db1"
+command = "macOS cover host checks and guarded v0 desktop capture"
+result = "The production touch-lid gate host checks passed and the integrated kernel reached the desktop. Physical lid transitions remain pending."
+
 [[area]]
 id = "keyboard"
 status = "device-verified"
 components = []
-paths = ["package/Keyboard*", "package/Wn8030*", "package/tests/wn8030*", "scripts/check-wn8030-host.py", "package/tests/keyboard*", "scripts/check-keyboard-*-host.py", "scripts/build-gop-legacy-display-27.py"]
+paths = ["package/Keyboard*", "package/Wn8030*", "package/tests/wn8030*", "scripts/check-wn8030-host.py", "package/tests/keyboard*", "scripts/check-keyboard-*-host.py", "scripts/build-gop-legacy-display-27.py", "package/LidClamshell.h"]
 inputs = ["Nanosic WN8030 keyboard controller on I2C9 (QUP2 SE1 at 0x884000, client 0x4c, GIC SPI 583); interrupt GPIO 62, reset GPIO 58, sleep GPIO 57, status GPIO 56, supplies vreg_l12b_1p8 and vreg_l13b_3p3, from sm8550-xiaomi-sheng.dts of https://github.com/ianchb/sm8550-mainline.", "Lid and tablet-mode hall sensors on GPIO 171 and 172, active low.", "The controller RAM image nanosic/MCU_Upgrade.bin pinned in proprietary-files.txt.", "SmartCoverServiceFilter.plugin and the IOHIDFamily-2238.120.5 event driver of iPadOS 27.0.1 (24A446)."]
 configuration = ["keyboard=1 starts the driver. keyboard-khz selects 1000 (default), 400 or 100 kHz; keyboard-backlight sets the backlight from 0 (default) to 100.", "The supplies use active TCS 2 of the apps RSC under AppsSmmuLock, as the microphone and USB rails do.", "The iPadOS 27 build compiles KeyboardCover.cpp with the source interface command of NativeHidInput and embeds the pinned image."]
 procedure = ["Run scripts/extract-files.py --section Keyboard before building.", "Run scripts/check-wn8030-host.py, scripts/check-keyboard-cover-host.py, scripts/check-keyboard-service-host.py and scripts/check-geni-i2c-host.py.", "Boot with the cover attached, type, use the touchpad, fold the cover behind the tablet, close it and detach it, then read the K row of the boot log."]
@@ -464,6 +480,14 @@ reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9890389dd7c7a1ec0f7dc
 revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
 command = "scripts/package.sh --os macos-27"
 result = "The arm64e source input transport builds with GENI SPI. NativeHidInput and ShengKeyboardCover vtables match the original diversities, with 76 IOHIDDevice bindings."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-cover-input.md"
+revision = "336f61fdce347527b0a56d32dfdd5906f9218db1"
+command = "macOS cover host checks and guarded v0 desktop capture"
+result = "WN8030, macOS HID and keyboard trace host checks passed. The device cover-service query returned ProductID 163; physical trackpad motion remains pending."
 
 [[area]]
 id = "gpu"
@@ -534,6 +558,14 @@ revision = "63354480e52ca4e0e7c93f43d0f6654be7c4f387"
 command = "AUTORESET_SECONDS=180 ADDON=latest-uniform-icons-login-addon.bin CAMERA_FRAME=observations/latest.jpg CAMERA_KEEP_SECONDS='60 90 120 150 175' scripts/run-sheng-unattended.sh sheng-latest-uniform-icons.img 420"
 reference = "reports/metal-upstream-rendering.md"
 result = "Capture s4fa13-4bd7e1abb, boot DBCB42BF-E951-4E1D-91D9-CAFE40F2B363, used AdrenoMetal 840e10fc and upstream be905fd8 with the uniform array capacity correction. All pixels of the 56-source atlas match the main reference. CB 4 passes 2, 4 and 5 match the reference statistics with RGB minimum zero. The v0 image returned after 206.204 seconds; Linux retrieval took 19.213 seconds and fastboot responded."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-cover-input.md"
+revision = "336f61fdce347527b0a56d32dfdd5906f9218db1"
+command = "macOS cover host checks and guarded v0 desktop capture"
+result = "The replacement-kernel preparation produced a v0 desktop image with runtime 2bb0552b6e78724f9ab119c3370d20ed. Retained 120 to 175 second photos show complete widget and Settings backgrounds."
 
 [[area]]
 id = "bluetooth"
@@ -662,6 +694,14 @@ reference = "https://github.com/UniXNU/UniXNU-sheng/commit/9890389dd7c7a1ec0f7dc
 revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
 command = "scripts/package.sh --os macos-27"
 result = "The macOS USB build matches 299 original bindings for QcomDwc3Xdci and QcomDwc3Xhci. The source-built guarded firmware completes with LLVM and LLD 22.1.8."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-cover-input.md"
+revision = "336f61fdce347527b0a56d32dfdd5906f9218db1"
+command = "macOS cover host checks and guarded v0 desktop capture"
+result = "The macOS display archive passed its 299 original USB binding audit alongside the cover changes."
 
 [[area]]
 id = "network"
@@ -985,6 +1025,14 @@ command = "CAMERA_FRAME=observations/latest.jpg CAMERA_KEEP_SECONDS='120 150 175
 reference = "reports/macos-unattended-desktop.md"
 result = "Capture se8d01-1cc2adcce, boot 832CF234-6DC1-42CE-8DE1-E529B70BB950, retained all three Settings camera frames and runtime messages. The v0 image returned after 205.388 seconds; Linux retrieval took 18.696 seconds and fastboot responded."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-cover-input.md"
+revision = "336f61fdce347527b0a56d32dfdd5906f9218db1"
+command = "macOS cover host checks and guarded v0 desktop capture"
+result = "The combined replacement-kernel and GPU preparation completed; the guarded cycle returned to fastboot. The bounded cover-property selection retained ProductID 163 from the captured registry output."
+
 [[area]]
 id = "diagnostics"
 status = "implemented"
@@ -1087,6 +1135,14 @@ reference = "https://github.com/UniXNU/UniXNU-sheng/actions/runs/43848064083"
 revision = "6a99956461d3808e36ba2047e18cf6083a6dcb82"
 command = "scripts/package.sh --os macos-27 --uefi ../uefi-sheng"
 result = "The CI manifest retains autoreset=7200, uefi-watchdog=1 and diag-export=7140. Its 434 shader-library inventory paths match the local desktop build."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-cover-input.md"
+revision = "336f61fdce347527b0a56d32dfdd5906f9218db1"
+command = "macOS cover host checks and guarded v0 desktop capture"
+result = "The production launch-policy initializer host checks passed, including enable-jobs. The device capture showed SSH enabled and completed the timed return and Linux retrieval."
 
 [[area]]
 id = "arm64e-os"
