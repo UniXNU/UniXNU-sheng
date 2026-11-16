@@ -61,9 +61,10 @@ def main():
     parser.add_argument('--payload-file', action='append', default=[], metavar='SOURCE=FAT_PATH')
     parser.add_argument('--kernel-tree', type=Path, help='Apply the payload entry/panic probes and POST seal from this resolved build tree to the replacement kernel')
     parser.add_argument('--uefi', type=Path, help='UEFI checkout providing the panic font')
+    parser.add_argument('--core', type=Path, help='resolved UniXNU tree providing the payload codec')
     args = parser.parse_args()
     board = tomllib.loads((Path(__file__).resolve().parents[1] / 'board.toml').read_text())
-    core = (Path(__file__).resolve().parents[1] / board['package']['unixnu']).resolve()
+    core = (args.core or Path(__file__).resolve().parents[1] / board['package']['unixnu']).resolve()
     sys.path.insert(0, str(core / 'scripts'))
     from unixnu import ramdisk as codec
     if args.output.exists() or args.input.resolve() == args.output.resolve():
