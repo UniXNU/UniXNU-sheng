@@ -6,10 +6,12 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 
-ROOT = Path(__file__).resolve().parents[2] / 'UniXNU'
+DEVICE = Path(__file__).resolve().parents[1]
+ROOT = (DEVICE / tomllib.loads((DEVICE / 'board.toml').read_text())['package']['unixnu']).resolve()
 sys.path.insert(0, str(ROOT / 'scripts'))
-from unixnu.cli import parser, prepare
+from unixnu.cli import parser as cli_parser, prepare
 from unixnu.config import Context
 from unixnu.ipsw import Ipsw
 from unixnu.userdata import disk_blocks, image_size
@@ -23,13 +25,15 @@ def main():
                                       'scripts/extract-files.py')], check=True)
     subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] /
                                       'drivers/Ath12kWifi/tools/fetch-sources.py')], check=True)
-    ctx = Context(parser().parse_args(['build', 'kernel', '-D', str(Path(__file__).resolve().parents[1]),
+    ctx = Context(cli_parser().parse_args(['build', 'kernel', '-D', str(Path(__file__).resolve().parents[1]),
                                       '--os', 'macos-27']))
     prepare(ctx, ['kernel'])
     source = Ipsw(ctx)
     runtime = ctx.work / 'runtime'
     runtime.mkdir(parents=True, exist_ok=True)
-    seed = runtime / 'data.dbr'
+    seed = Path(ctx.args.data_ramdisk).expanduser().resolve() if ctx.args.data_ramdisk else runtime / 'data.dbr'
+    if ctx.args.data_ramdisk and not seed.is_file():
+        raise SystemExit(f'Preserved Data seed not found: {seed}')
     if not seed.exists():
         password = os.environ['UNIXNU_LAB_PASSWORD']
         subprocess.run(['sudo', sys.executable, str(ROOT / 'scripts/make-macos-data-seed.py'),
