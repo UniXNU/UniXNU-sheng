@@ -42,3 +42,16 @@ Cold-start capture `sbd840-26c4b6aa6` used runner revision `ac5daa1710800d80adc8
 
 
 Capture `s1b88c-bcd3d5c5` used runner `4f1dda3` with `EXTRA_KERNEL_ARGS='icon-cb=1:2'`. Both v0 images passed preflight. The exported graphics marker and icon command-buffer log identify boot `97012673-B5F9-45BF-A180-0223EF7CB77C`. The test returned after 206.982 seconds; Linux retrieval completed in 18.331 seconds and confirmed responsive fastboot. The camera showed incomplete Settings icons, so the integrated GPU remains under rendering investigation.
+
+
+## Selected Settings icons
+
+```sh
+python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img \
+  --core /path/to/UniXNU --plugin /path/to/plugin-build --tools /path/to/tools \
+  --icon-path settings --icon-dump-cb 3:8 --preserve-data --autoreset 180
+```
+
+The selected flow requests the Settings sidebar icons through IconServices with cache bypass, exports `icons.png` and records the requested command-buffer range. `graphics-state.log` includes process state and available runtime stderr. Compare icon backgrounds, glyphs and edges with the reference image.
+
+Capture `sf0ff4-22d059986` collected 56 sources and the icon atlas under boot `8D8D6012-53DA-4C8B-A8FD-FCEF1D52624E`, using main GPU component `26d4902c588d0d0c23993cc4f32ebe9062d5c377`. The image returned after 206.938 seconds; Linux retrieval completed in 19.012 seconds and confirmed fastboot.
