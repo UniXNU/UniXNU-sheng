@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run one timed image, retrieve its Linux log and confirm the final fastboot state.
-# Usage: SERIAL=<serial> READER=<reader.img> [AUTORESET_SECONDS=180] [ADDON=<runtime.bin>] [CORE=<checkout>] [USERDATA=<full.sparse>] [OUT=<directory>] run-sheng-unattended.sh IMAGE [wait_seconds=600]
+# Usage: SERIAL=<serial> READER=<reader.img> [AUTORESET_SECONDS=180] [ADDON=<runtime.bin>] [CORE=<checkout>] [EXTRA_KERNEL_ARGS="icon-cb=1:4"] [USERDATA=<full.sparse>] [OUT=<directory>] run-sheng-unattended.sh IMAGE [wait_seconds=600]
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 exec python3 - "$ROOT" "$@" <<'PY'
@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 import secrets
+import shlex
 import struct
 import subprocess
 import sys
@@ -105,6 +106,8 @@ if os.environ.get('ADDON'):
         if source.read(8) != b'NGPUADD2':
             sys.exit('ADDON must name a runtime addon')
     repack += ['--payload-file', str(addon) + '=EFI/UniXNU/Payloads/kernel.macho.gpuaddon']
+for value in shlex.split(os.environ.get('EXTRA_KERNEL_ARGS', '')):
+    repack += ['--kernel-arg', value]
 subprocess.run(repack, check=True)
 wait_fastboot(30)
 if userdata is not None:
