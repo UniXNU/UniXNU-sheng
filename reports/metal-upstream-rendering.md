@@ -8,9 +8,10 @@ The comparison uses the General pane in System Settings and a 1024 by 896 atlas 
 | --- | --- | --- |
 | Main reference, component `26d4902c588d0d0c23993cc4f32ebe9062d5c377` | `555b13d57e09bff70996a88cff64f1275256d5cf` | Complete icon backgrounds. |
 | Main consumer optimizations, component `89d7942e06dad93b5a5a52f817aa8c19fd899b37` | `842fd73b71f4c595810651bb61d8a0c48f486845` | All atlas pixels match the reference. CB 4 pass 2 and its downstream attachments match the reference statistics, with RGB minimum zero. |
+| Native half contraction, component `e717879a905089bc65d34851fb795bb9fb505fdb` | `f3c9f748ce94ede0bddb3626654e1d8b0bb31797` | All atlas pixels and selected attachment statistics match the reference, with RGB minimum zero. |
 | Integrated diagnostic runtime, component `f3103ad1e5f4b6b53ba5669db9d63dac0cb9d271` | `39dc65850326a5c69ad8bdf87a6fd58c8d188108` | Cropped backgrounds and colored edges. CB 4 pass 2 has RGB minima near -0.95. |
 
-The verified checkpoint used runtime `39e9f68dfc733c7ed14d071dc942889b`. Capture `s0b48c-4e5a211d2`, boot `858FC70F-F213-4059-A1F5-4C3C9BA41D44`, retained the 120, 150 and 175 second Settings photos. The image returned after 205.311 seconds; Linux log retrieval took 18.830 seconds and fastboot responded. The reference atlas is from `sf0ff4-22d059986`; its CB 4 trace is from `s57b45-14bbf54d9`. The integrated diagnostic capture is `se8d01-1cc2adcce`.
+The verified checkpoint uses runtime `d73fec839bf2d75f128ef98afa91054f`. Capture `s83043-39144a937` retained the 120, 150 and 175 second photos, including General Settings at 150 seconds. The image returned after 205.322 seconds; Linux log retrieval took 18.919 seconds and fastboot responded. The reference atlas is from `sf0ff4-22d059986`; its CB 4 trace is from `s57b45-14bbf54d9`. The integrated diagnostic capture is `se8d01-1cc2adcce`.
 
 ## Capture
 
