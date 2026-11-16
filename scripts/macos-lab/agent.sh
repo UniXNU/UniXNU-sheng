@@ -27,7 +27,7 @@ if [ -s /private/var/ngpu/test/share/graphics-comparison ]; then
     /private/var/ngpu/test/bin/gpu-scene --reset-session
     /bin/sleep 15
     if [ "$(/bin/cat /private/var/ngpu/test/share/graphics-comparison)" = shader-cache ]; then
-        /usr/bin/open '/Library/UniXNU/Shader Cache.app'
+        /usr/bin/open '/Library/GPUBundles/Shader Cache.app'
         /bin/sleep 900
         exit 0
     fi

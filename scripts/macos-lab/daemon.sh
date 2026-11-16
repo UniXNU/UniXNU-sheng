@@ -2,8 +2,8 @@
 # Capture the memory, swap, storage and charger state of one timed boot.
 set -u
 if [ "$(/bin/cat /private/var/ngpu/test/share/manual-session 2>/dev/null)" = 1 ]; then
-    if [ -d '/Library/UniXNU/Shader Cache.app' ] && [ ! -e '/Applications/Shader Cache.app' ]; then
-        /bin/ln -s '/Library/UniXNU/Shader Cache.app' '/Applications/Shader Cache.app'
+    if [ -d '/Library/GPUBundles/Shader Cache.app' ] && [ ! -e '/Applications/Shader Cache.app' ]; then
+        /bin/ln -s '/Library/GPUBundles/Shader Cache.app' '/Applications/Shader Cache.app'
     fi
     /bin/echo "manual session boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)"
     exit 0
@@ -11,7 +11,7 @@ fi
 /bin/mkdir -p /Users/Shared/unixnu-test
 /bin/chmod 1777 /Users/Shared/unixnu-test
 /bin/rm -f /Users/Shared/unixnu-test/benchmark.done /Users/Shared/unixnu-test/reboot-requested
-application='/Library/UniXNU/Shader Cache.app'
+application='/Library/GPUBundles/Shader Cache.app'
 if [ -d "$application" ] && [ ! -e '/Applications/Shader Cache.app' ]; then
     /bin/ln -s "$application" '/Applications/Shader Cache.app'
 fi
@@ -100,8 +100,8 @@ graphics_state() {
         /bin/date -u
         /bin/echo "boot=$boot"
         /bin/ps -axo pid,ppid,etime,pcpu,rss,comm | /usr/bin/awk 'NR == 1 || /WindowServer|loginwindow|Wallpaper|iconservices|icon-probe|video-probe|VTDecoder|KeyboardSetupAssistant|ShaderCache/'
-        if [ -x '/Library/UniXNU/Shader Cache.app/Contents/MacOS/ShaderCache' ]; then
-            '/Library/UniXNU/Shader Cache.app/Contents/MacOS/ShaderCache' --status
+        if [ -x '/Library/GPUBundles/Shader Cache.app/Contents/MacOS/ShaderCache' ]; then
+            '/Library/GPUBundles/Shader Cache.app/Contents/MacOS/ShaderCache' --status
         fi
         /usr/sbin/ioreg -r -c AppleVideoToolboxParavirtualizationDriver -l
         /usr/sbin/ioreg -r -c NativeUfsBlock -l -d 1
