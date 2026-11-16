@@ -105,7 +105,7 @@ graphics_state() {
         fi
         /usr/sbin/ioreg -r -c AppleVideoToolboxParavirtualizationDriver -l
         /usr/sbin/ioreg -r -c NativeUfsBlock -l -d 1
-        /usr/sbin/ioreg -r -c ShengKeyboardCover -l -d 1
+        /usr/sbin/ioreg -r -c ShengKeyboardCover -l -d 1 | /usr/bin/awk '/<class ShengKeyboardCover|"ShengTouchpadTiming"|"Product"|"VendorID"|"ProductID"/'
         /bin/launchctl print-disabled system | /usr/bin/grep -F com.openssh.sshd
         /sbin/mount | /usr/bin/awk '/Cryptexes\/App|AppCryptex/'
         /bin/ls -ld /Applications/Safari.app /System/Applications/Safari.app /System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app
