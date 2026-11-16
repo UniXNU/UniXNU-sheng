@@ -217,6 +217,7 @@ ramdisk_max_bytes = 199229440
 
 ["os_overrides"."macos-27.3-26C5035r"."kernel"]
 "config_fragments" = ["arch:configs/common.config", "os:configs/macos.config"]
+"archives" = ["build-corecrypto-14.py", "build-corecrypto-14.py --namespace", "component:ArmDTPlatform", "component:ArmCpu", "build-libpthread-kernel.py", "component:ShengUfs", "component:RamBlock", "component:Adreno740", "fetch-sheng-dts.py", "fetch-adreno-inputs.py", "prepare-sheng-gmu.py", "prepare-sheng-gpu-smmu.py", "prepare-sheng-gmu-votes.py", "build-adreno740-kits.py", "build-adreno740-accelerator.py", "component:SoftwareAES", "component:AppleKeyStoreState", "build-gop-legacy-display-27.py"]
 
 ["os_overrides"."macos-27.3-26C5035r"."payload"]
 "timeout" = 1
