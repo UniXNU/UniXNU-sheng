@@ -26,7 +26,7 @@ if len(sys.argv) not in (2, 3):
 out = Path(sys.argv[1]).resolve()
 target = sys.argv[2] if len(sys.argv) == 3 else 'arm64-apple-ios17.0'
 macos = '-apple-macos' in target
-ios = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
+ios = None if macos else subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
 mac = subprocess.check_output(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], text=True).strip()
 bundle = out / 'ShengAudio.driver'
 shutil.rmtree(bundle, ignore_errors=True)
