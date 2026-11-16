@@ -1,6 +1,10 @@
 #!/bin/sh
 # Fixed desktop interaction and manual inspection views.
 set -u
+if [ -f /private/var/ngpu/test/share/manual-session ]; then
+    /bin/echo "manual session boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)"
+    exit 0
+fi
 /bin/rm -f /Users/Shared/unixnu-test/desktop-180.png /Users/Shared/unixnu-test/desktop-270.png
 (
     /bin/sleep 180

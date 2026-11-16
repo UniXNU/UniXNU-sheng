@@ -36,6 +36,7 @@ def main():
     graphics.add_argument('--graphics-comparison', action='store_true', help='run the fixed desktop interaction capture')
     graphics.add_argument('--graphics-view', action='store_true', help='open System Settings for manual inspection')
     graphics.add_argument('--shader-cache-view', action='store_true', help='open Shader Cache for manual inspection')
+    graphics.add_argument('--manual-session', action='store_true', help='boot the desktop for manual use with the firmware return timer')
     parser.add_argument('--kernel-arg', action='append', default=[], help='additional kernel argument for this capture')
     parser.add_argument('--preserve-data', action='store_true')
     parser.add_argument('--bluetooth-runtime', type=Path, help='signed runtime report from build-bluetooth-userspace.py')
@@ -114,6 +115,8 @@ def main():
             '-Wl,-segalign,0x4000', '-o', files / 'bin/gpu-correctness-probe')
         run('codesign', '--force', '--sign', '-', '--timestamp=none', '--pagesize', '4096', files / 'bin/gpu-correctness-probe')
         (files / 'share').mkdir(exist_ok=True)
+        if args.manual_session:
+            (files / 'share/manual-session').write_text('1\n')
         (files / 'share/icon-probe-path').write_text(args.icon_path+'\n' if args.icon_path else '')
         (files / 'share/graphics-comparison').write_text('shader-cache\n' if args.shader_cache_view else 'view\n' if args.graphics_view else '1\n' if args.graphics_comparison else '')
         for name in ('video-probe.mp4', 'video-probe-10bit.mp4'):
@@ -200,7 +203,9 @@ def main():
             ctx.uefi = args.uefi.resolve()
             spec = ctx.board['payload']
             spec['size_mib'], spec['timeout'] = args.payload_mib, 1
-            removed = {'exec-log', 'vc-text', 'storage-probe', 'data-reset', 'icon-cb'}
+            removed = {'exec-log', 'vc-text', 'storage-probe', 'data-reset', 'icon-cb', 'gpu-prime'}
+            if args.manual_session:
+                removed.add('gpu-perf')
             if args.graphics_comparison or args.graphics_view or args.shader_cache_view:
                 removed.update(('log-video', 'log-bluetooth'))
             if args.icon_dump_cb:
@@ -210,7 +215,7 @@ def main():
                 'uefi-watchdog=1', 'diag=1', 'gpu-trace=1', 'log-gpu=1',
                 'log-video=1', 'log-bluetooth=3', 'build-tag=s00000', 'ci-mps=0']
             capture = args.icon_dump_cb + (':' + args.icon_skip_draws if args.icon_skip_draws else '') if args.icon_dump_cb else None
-            options.kernel_arg += ['icon-cb='+capture] if capture else ['gpu-perf=1']
+            options.kernel_arg += ['icon-cb='+capture] if capture else [] if args.manual_session else ['gpu-perf=1']
             if args.graphics_comparison or args.graphics_view or args.shader_cache_view:
                 options.kernel_arg = [value for value in options.kernel_arg
                                       if value.split('=', 1)[0] not in ('log-video', 'log-bluetooth')]
@@ -255,7 +260,9 @@ def main():
             if (args.graphics_comparison or args.graphics_view or args.shader_cache_view) and value.split('=', 1)[0] in ('log-video', 'log-bluetooth'):
                 continue
             command += ['--kernel-arg', value]
-        if args.icon_dump_cb:
+        if args.manual_session:
+            command += ['--remove-arg', 'gpu-perf']
+        elif args.icon_dump_cb:
             capture = args.icon_dump_cb + (':' + args.icon_skip_draws if args.icon_skip_draws else '')
             command += ['--remove-arg', 'gpu-perf', '--kernel-arg', 'icon-cb='+capture]
         else:

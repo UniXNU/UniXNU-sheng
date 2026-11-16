@@ -1,6 +1,13 @@
 #!/bin/sh
 # Capture the memory, swap, storage and charger state of one timed boot.
 set -u
+if [ -f /private/var/ngpu/test/share/manual-session ]; then
+    if [ -d '/Library/UniXNU/Shader Cache.app' ] && [ ! -e '/Applications/Shader Cache.app' ]; then
+        /bin/ln -s '/Library/UniXNU/Shader Cache.app' '/Applications/Shader Cache.app'
+    fi
+    /bin/echo "manual session boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)"
+    exit 0
+fi
 /bin/mkdir -p /Users/Shared/unixnu-test
 /bin/chmod 1777 /Users/Shared/unixnu-test
 /bin/rm -f /Users/Shared/unixnu-test/benchmark.done /Users/Shared/unixnu-test/reboot-requested
