@@ -1,0 +1,44 @@
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -10118,6 +10118,8 @@
+ #else
+ 	int data_error = native_owner_data_prepare(p, (user_addr_t)scratch_addr);
+ #endif
++	extern void boot_log_startup_result(const char *, int) __attribute__((weak_import));
++	if (&boot_log_startup_result) boot_log_startup_result("Data mount returned", data_error);
+ 	boot_progress_stage("Data mount returned");
+ 	if (data_error) panic("offline scratch Data mount failed: %d", data_error);
+ #if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+@@ -10130,14 +10132,18 @@
+ 	/* Without BootProgress (iPadOS 27): the same launchd job policy, from the source storage archive. */
+ 	extern int sheng_boot_watchdog_policy(void *, uint64_t) __attribute__((weak_import));
+ 	if (sheng_boot_watchdog_policy) {
++		boot_progress_stage("launch policy enter");
+ 		int policy_error = sheng_boot_watchdog_policy(p, (uint64_t)scratch_addr);
++		if (&boot_log_startup_result) boot_log_startup_result("launch policy returned", policy_error);
+ 		/* A full or unwritable Data volume (ENOSPC) only loses the job policy: boot on instead of a panic. */
+ 		if (policy_error) printf("sheng watchdog launch policy failed: %d (continuing)\n", policy_error);
+ 	}
+ #endif
+ #endif
+ #if CONFIG_MEMORYSTATUS
++	boot_progress_stage("boot snapshot enter");
+ 	(void) memorystatus_init_at_boot_snapshot();
++	boot_progress_stage("boot snapshot returned");
+ #endif /* CONFIG_MEMORYSTATUS */
+ 
+ #if (DEBUG || DEVELOPMENT) && defined(XNU_NATIVE_AIR_INIT) && XNU_NATIVE_AIR_INIT
+diff --git a/osfmk/kern/debug.c b/osfmk/kern/debug.c
+--- a/osfmk/kern/debug.c
++++ b/osfmk/kern/debug.c
+@@ -1252,6 +1252,9 @@
+     uint64_t panic_options_mask, void *panic_data_ptr, unsigned long panic_caller, const char *panic_initiator)
+ {
+ #pragma clang diagnostic pop
++	extern void boot_log_panic_record(const char *, va_list *, unsigned long) __attribute__((weak_import));
++	if (&boot_log_panic_record) boot_log_panic_record(panic_format_str, panic_args, panic_caller);
++
+ 
+ #if defined(__x86_64__) && (DEVELOPMENT || DEBUG)
+ 	read_lbr();

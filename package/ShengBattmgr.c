@@ -275,12 +275,14 @@ void sheng_battmgr_snapshot(const ShengBattmgr *b, ShengBatterySnapshot *s)
     s->time_to_empty_min = HAS(BmTimeToEmpty) && V(BmTimeToEmpty) > 0 && V(BmTimeToEmpty) < 100 * 3600 ? V(BmTimeToEmpty) / 60 : -1;
     s->time_to_full_min = HAS(BmTimeToFull) && V(BmTimeToFull) > 0 && V(BmTimeToFull) < 100 * 3600 ? V(BmTimeToFull) / 60 : -1;
     if (s->external) {
-        s->adapter_family = family(HAS(BmUsbType) ? V(BmUsbType) : 0);
+        const int adapter = HAS(BmUsbAdapter) && V(BmUsbAdapter) > 0 ? V(BmUsbAdapter) : HAS(BmUsbType) ? V(BmUsbType) : 0;
+        s->adapter_family = family(adapter);
         s->adapter_mv = HAS(BmUsbVoltage) ? V(BmUsbVoltage) / 1000 : 0;
-        s->adapter_ma = HAS(BmUsbCurrent) ? V(BmUsbCurrent) / 1000 : 0;
+        s->adapter_ma = HAS(BmUsbMax) && V(BmUsbMax) > 0 ? V(BmUsbMax) / 1000 : HAS(BmUsbCurrent) ? V(BmUsbCurrent) / 1000 : 0;
         if (s->adapter_mv < 0) s->adapter_mv = 0;
         if (s->adapter_ma < 0) s->adapter_ma = -s->adapter_ma;
-        s->adapter_watts = (int)(((int64_t)s->adapter_mv * s->adapter_ma + 500000) / 1000000);
+        s->adapter_watts = HAS(BmPowerMax) && V(BmPowerMax) > 0 ? V(BmPowerMax) :
+            (int)(((int64_t)s->adapter_mv * s->adapter_ma + 500000) / 1000000);
     } else {
         s->adapter_family = 0;
         s->adapter_mv = s->adapter_ma = s->adapter_watts = 0;

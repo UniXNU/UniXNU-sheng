@@ -1,0 +1,17 @@
+diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
+--- a/bsd/kern/kern_exit.c
++++ b/bsd/kern/kern_exit.c
+@@ -2081,6 +2081,13 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
+ 	boot_progress_exit(proc_getpid(p),p->p_name,rv,
+ 	    p->p_exit_reason ? p->p_exit_reason->osr_namespace : 0,
+ 	    p->p_exit_reason ? p->p_exit_reason->osr_code : 0);
++	extern void boot_log_process_exit(int, const char *, int, unsigned, uint64_t, const char *, unsigned) __attribute__((weak_import));
++	if (&boot_log_process_exit) {
++		boot_log_process_exit(proc_getpid(p), p->p_name, rv,
++		    p->p_exit_reason ? p->p_exit_reason->osr_namespace : 0,
++		    p->p_exit_reason ? p->p_exit_reason->osr_code : 0,
++		    p->p_exit_reason ? exit_reason_get_string_desc(p->p_exit_reason) : NULL, proc_getcsflags(p));
++	}
+ 
+ 	if (p->p_crash_behavior != 0 || p == initproc) {
+ 		proc_handle_critical_exit(p, rv);

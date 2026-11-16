@@ -10,6 +10,7 @@
 #include <pexpert/pexpert.h>
 #include <IOKit/IOLib.h>
 #include <kern/thread.h>
+#include "BootTime.h"
 
 extern kmod_info_t g_kernel_kmod_info;
 extern "C" void source_storage_base_init(void) __asm__("__GLOBAL__sub_I_IOBlockStorageDevice.cpp");
@@ -30,8 +31,24 @@ extern "C" void boot_reset_install_platform(void);
 extern "C" __attribute__((weak)) void boot_progress_poll(void) {}
 // Starts the log writer (BootLog.c); the board page calls it when that page is built in.
 extern "C" void boot_log_tick(unsigned now);
+extern "C" void boot_log_checkpoint(const char *);
 extern "C" volatile uint32_t boot_log_state, boot_log_rounds, boot_log_errors;
 extern "C" const char *volatile boot_log_open_refusal;
+static uint32_t startup_probe_enabled;
+
+static void startup_mark(const char *stage)
+{
+    if (!startup_probe_enabled) return;
+    printf("SourceStorage: startup %s\n", stage);
+    boot_log_checkpoint(stage);
+}
+
+static void startup_probe_start()
+{
+    PE_parse_boot_argn("storage-probe", &startup_probe_enabled, sizeof startup_probe_enabled);
+    if (startup_probe_enabled != 1) startup_probe_enabled = 0;
+    if (startup_probe_enabled) thread_set_thread_name(current_thread(), "sheng_startup");
+}
 
 // Without the board page nothing shows the writer's state, so a log that cannot be written stops the boot
 // with the reason on the panic screen instead of leaving an unattended run without a log.
@@ -84,8 +101,7 @@ struct BenchWorker {
   uint32_t hist[kBenchBuckets];
   volatile uint32_t *done;
 };
-uint64_t benchFreq;
-uint64_t benchNs(uint64_t ticks) { return ticks * 1000000000ULL / benchFreq; }
+uint64_t benchNs(uint64_t ticks) { return boot_mach_ns(ticks); }
 void benchWork(void *arg, wait_result_t)
 {
   BenchWorker *w = static_cast<BenchWorker *>(arg);
@@ -114,7 +130,10 @@ void benchTest(BenchWorker *workers, uint32_t lun, uint64_t first, uint64_t bloc
                const char *tag = "")
 {
   volatile uint32_t done = 0;
-  const uint64_t start = mach_absolute_time() + benchFreq / 20, deadline = start + 3 * benchFreq;
+  uint64_t delay=0,span=0;
+  nanoseconds_to_absolutetime(50000000ULL,&delay);
+  nanoseconds_to_absolutetime(3000000000ULL,&span);
+  const uint64_t start = mach_absolute_time() + delay, deadline = start + span;
   for (uint32_t i = 0; i < qd; ++i) {
     BenchWorker &w = workers[i];
     uint8_t *buffer = w.buffer;
@@ -126,6 +145,7 @@ void benchTest(BenchWorker *workers, uint32_t lun, uint64_t first, uint64_t bloc
     else __atomic_add_fetch(&done, 1, __ATOMIC_RELEASE);
   }
   while (__atomic_load_n(&done, __ATOMIC_ACQUIRE) < qd) IOSleep(10);
+  const uint64_t finished=mach_absolute_time();
   uint32_t *hist = static_cast<uint32_t *>(IOMallocZero(sizeof(uint32_t) * kBenchBuckets));   // allocated: the kernel's __DATA is fixed
   if (!hist) return;
   uint64_t ops = 0, sum = 0, max = 0, errors = 0;
@@ -134,9 +154,10 @@ void benchTest(BenchWorker *workers, uint32_t lun, uint64_t first, uint64_t bloc
     if (workers[i].maxNs > max) max = workers[i].maxNs;
     for (unsigned b = 0; b < kBenchBuckets; ++b) hist[b] += workers[i].hist[b];
   }
-  const uint64_t avg = ops ? sum / ops : 0, mbps = ops * bytes / 3 * 1000 / 1000000;
+  const uint64_t elapsed=finished>start?benchNs(finished-start):1;
+  const uint64_t avg = ops ? sum / ops : 0, mbps = ops * bytes * 1000000ULL / elapsed;
   printf("ufsbench %s%s bs=%llu qd=%u ops=%llu iops=%llu MBps=%llu.%03llu avg_us=%llu.%03llu p50_us=%llu p99_us=%llu max_us=%llu err=%llu\n",
-         random ? "rand" : "seq ", tag, (unsigned long long)bytes, qd, (unsigned long long)ops, (unsigned long long)(ops / 3),
+         random ? "rand" : "seq ", tag, (unsigned long long)bytes, qd, (unsigned long long)ops, (unsigned long long)(ops * 1000000000ULL / elapsed),
          (unsigned long long)(mbps / 1000), (unsigned long long)(mbps % 1000), (unsigned long long)(avg / 1000),
          (unsigned long long)(avg % 1000), (unsigned long long)(benchPercentile(hist, ops, 500) / 1000),
          (unsigned long long)(benchPercentile(hist, ops, 990) / 1000), (unsigned long long)(max / 1000), (unsigned long long)errors);
@@ -148,8 +169,6 @@ void ufsBench(void)
   if (!PE_parse_boot_argn("ufs-bench", &on, sizeof on) || on != 1) return;
   if (!&native_ufs_part_find || !&native_ufs_part_read) { printf("ufsbench: driver exports missing\n"); return; }
   for (unsigned waited = 0; waited < 300 && !boot_log_rounds; ++waited) IOSleep(100);   // the log writer is running
-  __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(benchFreq));
-  if (!benchFreq) benchFreq = 19200000;
   uint32_t lun = 0; uint64_t part = 0, partBlocks = 0;
   if (!native_ufs_part_find("userdata", &lun, &part, &partBlocks)) { printf("ufsbench: no userdata\n"); return; }
   uint8_t *probe = static_cast<uint8_t *>(IOMallocAligned(4096, 4096));
@@ -270,53 +289,3 @@ extern "C" void native_source_storage_start(void)
     if (!PE_parse_boot_argn("native-source-storage", &enabled, sizeof(enabled)) || enabled != 1 || attempted)
         return;
     attempted = true;
-#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
-    boot_reset_install_platform();
-#endif
-    OSReturn status = OSKextLoadKextWithIdentifier("com.apple.iokit.IOStorageFamily");
-    if (status != kOSReturnSuccess)
-        panic("SourceStorage: IOStorageFamily load failed %x", status);
-    const OSSymbol *name = OSSymbol::withCString("IOBlockStorageDevice");
-    storageParent = name ? OSMetaClass::getMetaClassWithName(name) : nullptr;
-    if (name) name->release();
-    if (!storageParent || storageParent->getClassSize() != sizeof(IOBlockStorageDevice))
-        panic("SourceStorage: original base layout %u differs from source %lu",
-              storageParent ? storageParent->getClassSize() : 0, sizeof(IOBlockStorageDevice));
-
-    // Authenticate policies before registering hardware-facing classes. The
-    // firmware hands off the envelope; the trusted anchor is compiled in.
-    if (!native_source_root_policies_load())
-        panic("SourceStorage: root policy handoff or authentication failed");
-    status = OSKextLoadKextWithIdentifier("com.apple.filesystems.apfs");
-    if (status != kOSReturnSuccess)
-        panic("SourceStorage: APFS load failed %x", status);
-    void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
-    if (!handle) panic("SourceStorage: cannot begin class registration");
-    source_storage_base_init();
-    source_storage_ufs_init();
-    source_storage_ram_init();
-    status = OSMetaClass::postModLoad(handle);
-    if (status != kOSReturnSuccess)
-        panic("SourceStorage: class registration failed %x", status);
-
-    OSDictionary *matching = IOService::serviceMatching("IOPlatformExpertDevice");
-    IOService *provider = matching ? IOService::waitForMatchingService(matching, 5000000000ULL) : nullptr;
-    if (!provider) panic("SourceStorage: platform root unavailable");
-    storageDriver = native_ufs_source_create();
-    if (!storageDriver) panic("SourceStorage: cannot allocate UFS service");
-    const char *step = !storageDriver->init() ? "init" : !storageDriver->attach(provider) ? "attach" :
-                       !storageDriver->start(provider) ? "start" : nullptr;
-    if (step)
-        panic("SourceStorage: UFS %s failed (root step %u: %s)", step, native_ufs_root_step,
-              native_ufs_root_failure ? native_ufs_root_failure : "no reason recorded");
-    printf("SourceStorage: UFS started through public IOStorageFamily interface\n");
-    start_data_disk(provider);
-    // The UFS log area exists from here on; the writer only runs with log=1.
-    boot_log_tick(0);
-    unsigned log = 0;
-    thread_t check;
-    if (PE_parse_boot_argn("log", &log, sizeof(log)) && log == 1 &&
-        kernel_thread_start(boot_log_check, nullptr, &check) == KERN_SUCCESS)
-        thread_deallocate(check);
-    ufsBench();
-}

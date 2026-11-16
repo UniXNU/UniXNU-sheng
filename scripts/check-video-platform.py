@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Exercise the SM8550 video clock controller sequences and the apps SMMU domain with register models."""
 from pathlib import Path
-import hashlib, json, subprocess
+import argparse, hashlib, json, subprocess
 root = Path(__file__).resolve().parents[1]
-soc = root.parent / 'UniXNU-sm8550-common/kits/Sm8550Platform'
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--tree', type=Path, default=Path.cwd(), help='resolved UniXNU tree with selected kits')
+soc = parser.parse_args().tree.resolve() / 'kits/Sm8550Platform'
 out = root / 'out/video-platform-test'
 out.mkdir(parents=True, exist_ok=True)
 sources = [soc / 'Sm8550VideoCc.c', soc / 'Sm8550AppsSmmu.c', root / 'package/tests/video_platform.c']
