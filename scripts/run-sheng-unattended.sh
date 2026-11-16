@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import secrets
 import shlex
+import shutil
 import struct
 import subprocess
 import sys
@@ -53,9 +54,11 @@ if not serial:
         sys.exit('set SERIAL when exactly one fastboot device is not present')
     serial = found[0]
 
-def wait_fastboot(seconds):
+def wait_fastboot(seconds, observe=None):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
+        if observe is not None:
+            observe()
         if serial in devices():
             try:
                 result = subprocess.run(['fastboot', '-s', serial, 'getvar', 'product'],
@@ -132,10 +135,27 @@ if userdata is not None:
         sys.exit('USERDATA must cover the complete reported userdata partition')
     print(f'{serial}: writing the complete {partition}-byte userdata partition', flush=True)
     subprocess.run(['fastboot', '-s', serial, 'flash', 'userdata', str(userdata)], check=True, timeout=3600)
+camera = Path(os.environ['CAMERA_FRAME']).resolve() if os.environ.get('CAMERA_FRAME') else None
+camera_times = sorted(set(int(value) for value in os.environ.get('CAMERA_KEEP_SECONDS', '120 150 175').split())) if camera else []
+if any(value <= 0 or value >= limit for value in camera_times):
+    sys.exit('CAMERA_KEEP_SECONDS must fall within the test wait')
 started = time.monotonic()
+started_wall = time.time()
+def capture_camera():
+    while camera_times and time.monotonic() - started >= camera_times[0]:
+        second = camera_times.pop(0)
+        destination = output / f'{tag}-camera-{second}s.jpg'
+        try:
+            if camera.stat().st_mtime >= started_wall:
+                shutil.copyfile(camera, destination)
+                print(f'{serial}: retained camera frame {destination.name}', flush=True)
+            else:
+                print(f'{serial}: camera frame at {second}s is stale', flush=True)
+        except OSError as error:
+            print(f'{serial}: camera frame at {second}s unavailable: {error}', flush=True)
 acknowledged = boot(tagged)
 time.sleep(2)
-wait_fastboot(limit)
+wait_fastboot(limit, capture_camera if camera else None)
 test_seconds = time.monotonic() - started
 print(f'{serial}: test image returned after {test_seconds:.3f}s; collecting its log', flush=True)
 reader_started = time.monotonic()
