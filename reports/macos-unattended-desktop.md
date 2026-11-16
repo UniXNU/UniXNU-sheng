@@ -35,3 +35,5 @@ python3 scripts/make-macos-autologin-addon.py INPUT.bin OUTPUT.bin \
 ```
 
 The addon installs the selected automatic login credentials, sets `autoLoginUserScreenLocked=false`, keeps the screen and system awake and sets both sleep timers to zero. Capture `s0cbc8-674b3970`, boot session `7FE90579-835F-4ABB-A438-1D0F3AB3AAC1`, records console user `unixnu` (UID 501), Finder, Dock and caffeinate. The camera showed the desktop without input. The timed boot returned through Linux to responsive fastboot after 204.392 seconds; the reader completed in 18.479 seconds.
+
+Cold-start capture `sbd840-26c4b6aa6` used runner revision `ac5daa1710800d80adc8a385b65e55eb85ad5658`. Both images passed its v0 preflight. The camera again showed the desktop without input. The test returned after 204.555 seconds, retrieved its fresh Linux log and confirmed fastboot.
