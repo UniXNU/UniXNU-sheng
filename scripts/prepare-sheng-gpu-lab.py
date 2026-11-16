@@ -33,8 +33,9 @@ def main():
     parser.add_argument('--icon-dump-cb', help='bounded FIRST:COUNT command-buffer dump for the isolated icon service')
     parser.add_argument('--icon-skip-draws', help='omit PASS:FIRST:LAST draws in the isolated icon service')
     graphics = parser.add_mutually_exclusive_group()
-    graphics.add_argument('--graphics-comparison', action='store_true', help='run the fixed desktop interaction capture with background priming paused')
-    graphics.add_argument('--graphics-view', action='store_true', help='open System Settings for manual inspection with background priming paused')
+    graphics.add_argument('--graphics-comparison', action='store_true', help='run the fixed desktop interaction capture')
+    graphics.add_argument('--graphics-view', action='store_true', help='open System Settings for manual inspection')
+    graphics.add_argument('--shader-cache-view', action='store_true', help='open Shader Cache for manual inspection')
     parser.add_argument('--kernel-arg', action='append', default=[], help='additional kernel argument for this capture')
     parser.add_argument('--preserve-data', action='store_true')
     parser.add_argument('--bluetooth-runtime', type=Path, help='signed runtime report from build-bluetooth-userspace.py')
@@ -56,7 +57,7 @@ def main():
         _, first, last = map(int, args.icon_skip_draws.split(':'))
         if first > last:
             parser.error('--icon-skip-draws requires FIRST <= LAST')
-    if (args.graphics_comparison or args.graphics_view) and args.icon_dump_cb:
+    if (args.graphics_comparison or args.graphics_view or args.shader_cache_view) and args.icon_dump_cb:
         parser.error('--graphics-comparison uses the frame trace without detailed attachment readbacks')
     core = (ROOT / tomllib.loads((ROOT / 'board.toml').read_text())['package']['unixnu']).resolve()
     sys.path.insert(0, str(core / 'scripts'))
@@ -114,7 +115,7 @@ def main():
         run('codesign', '--force', '--sign', '-', '--timestamp=none', '--pagesize', '4096', files / 'bin/gpu-correctness-probe')
         (files / 'share').mkdir(exist_ok=True)
         (files / 'share/icon-probe-path').write_text(args.icon_path+'\n' if args.icon_path else '')
-        (files / 'share/graphics-comparison').write_text('view\n' if args.graphics_view else '1\n' if args.graphics_comparison else '')
+        (files / 'share/graphics-comparison').write_text('shader-cache\n' if args.shader_cache_view else 'view\n' if args.graphics_view else '1\n' if args.graphics_comparison else '')
         for name in ('video-probe.mp4', 'video-probe-10bit.mp4'):
             (files / 'share' / name).write_bytes(b'')
         if args.video_fixture:
@@ -145,7 +146,10 @@ def main():
                 bluetooth_dirs += [addon_prefix, args.bluetooth_runtime / directory]
             hashes.extend(item['cdhash'] for item in report['files'].values())
         code = args.plugin / 'NativeAdrenoMetal.bundle/Contents/MacOS'
-        for path in sorted(files.rglob('*')) + sorted(code.iterdir()):
+        application_code = args.plugin / 'Shader Cache.app/Contents/MacOS'
+        if not application_code.is_dir():
+            parser.error('missing Shader Cache app in the macOS GPU build')
+        for path in sorted(files.rglob('*')) + sorted(code.iterdir()) + sorted(application_code.iterdir()):
             if not path.is_file():
                 continue
             with path.open('rb') as source:
@@ -197,7 +201,7 @@ def main():
             spec = ctx.board['payload']
             spec['size_mib'], spec['timeout'] = args.payload_mib, 1
             removed = {'exec-log', 'vc-text', 'storage-probe', 'data-reset', 'icon-cb'}
-            if args.graphics_comparison or args.graphics_view:
+            if args.graphics_comparison or args.graphics_view or args.shader_cache_view:
                 removed.update(('log-video', 'log-bluetooth'))
             if args.icon_dump_cb:
                 removed.add('gpu-perf')
@@ -207,11 +211,9 @@ def main():
                 'log-video=1', 'log-bluetooth=3', 'build-tag=s00000', 'ci-mps=0']
             capture = args.icon_dump_cb + (':' + args.icon_skip_draws if args.icon_skip_draws else '') if args.icon_dump_cb else None
             options.kernel_arg += ['icon-cb='+capture] if capture else ['gpu-perf=1']
-            if args.graphics_comparison or args.graphics_view:
+            if args.graphics_comparison or args.graphics_view or args.shader_cache_view:
                 options.kernel_arg = [value for value in options.kernel_arg
                                       if value.split('=', 1)[0] not in ('log-video', 'log-bluetooth')]
-                if not any(value.startswith('gpu-prime=') for value in args.kernel_arg):
-                    options.kernel_arg += ['gpu-prime=0']
             options.kernel_arg += args.kernel_arg
             fd = firmware.fd_path(ctx, ctx.uefi, 'DEBUG')
             # The template carries every firmware module built for this candidate.
@@ -250,7 +252,7 @@ def main():
         for value in (f'autoreset={args.autoreset}', 'uefi-watchdog=1', 'diag=1', f'diag-export={args.autoreset-60}',
                       'gpu-trace=1', 'log-gpu=1', 'log-video=1', 'log-bluetooth=3',
                       'build-tag=s00000', 'ci-mps=0'):
-            if (args.graphics_comparison or args.graphics_view) and value.split('=', 1)[0] in ('log-video', 'log-bluetooth'):
+            if (args.graphics_comparison or args.graphics_view or args.shader_cache_view) and value.split('=', 1)[0] in ('log-video', 'log-bluetooth'):
                 continue
             command += ['--kernel-arg', value]
         if args.icon_dump_cb:
@@ -259,10 +261,8 @@ def main():
         else:
             command += ['--kernel-arg', 'gpu-perf=1']
         command += ['--remove-arg', 'gpu-prime']
-        if args.graphics_comparison or args.graphics_view:
+        if args.graphics_comparison or args.graphics_view or args.shader_cache_view:
             command += ['--remove-arg', 'log-video', '--remove-arg', 'log-bluetooth']
-            if not any(value.startswith('gpu-prime=') for value in args.kernel_arg):
-                command += ['--kernel-arg', 'gpu-prime=0']
         for value in args.kernel_arg:
             command += ['--kernel-arg', value]
         if args.preserve_data:

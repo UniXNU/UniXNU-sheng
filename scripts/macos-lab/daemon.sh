@@ -4,6 +4,10 @@ set -u
 /bin/mkdir -p /Users/Shared/unixnu-test
 /bin/chmod 1777 /Users/Shared/unixnu-test
 /bin/rm -f /Users/Shared/unixnu-test/benchmark.done /Users/Shared/unixnu-test/reboot-requested
+application='/Library/UniXNU/Shader Cache.app'
+if [ -d "$application" ] && [ ! -e '/Applications/Shader Cache.app' ]; then
+    /bin/ln -s "$application" '/Applications/Shader Cache.app'
+fi
 session=/Users/Shared/unixnu-test
 for name in icon-probe.log video-probe.log icons.png; do
     if [ -s "$session/$name" ]; then
@@ -48,14 +52,6 @@ predicate='process == "WindowServer" OR process == "System Settings" OR process 
 /usr/bin/log stream --style compact --level info --timeout 120m --predicate "$predicate" >> "$session/graphics-events.log" 2>&1 &
 graphics_log=$!
 trap '/bin/kill "$graphics_log" 2>/dev/null || :' EXIT
-preserve_prime_progress() {
-    cache=/private/var/tmp/NativeAdrenoMetal.cache
-    if [ -d "$cache" ]; then
-        /usr/bin/touch "$cache/prime-resume"
-        /usr/sbin/chown "$(/usr/bin/stat -f '%u:%g' "$cache")" "$cache/prime-resume"
-    fi
-}
-trap 'preserve_prime_progress; exit 0' TERM HUP
 video_probe() {
     /bin/sleep 90
     tool=/private/var/ngpu/test
@@ -96,7 +92,10 @@ graphics_state() {
     {
         /bin/date -u
         /bin/echo "boot=$boot"
-        /bin/ps -axo pid,ppid,etime,pcpu,rss,comm | /usr/bin/awk 'NR == 1 || /WindowServer|loginwindow|Wallpaper|iconservices|icon-probe|video-probe|VTDecoder|KeyboardSetupAssistant/'
+        /bin/ps -axo pid,ppid,etime,pcpu,rss,comm | /usr/bin/awk 'NR == 1 || /WindowServer|loginwindow|Wallpaper|iconservices|icon-probe|video-probe|VTDecoder|KeyboardSetupAssistant|ShaderCache/'
+        if [ -x '/Library/UniXNU/Shader Cache.app/Contents/MacOS/ShaderCache' ]; then
+            '/Library/UniXNU/Shader Cache.app/Contents/MacOS/ShaderCache' --status
+        fi
         /usr/sbin/ioreg -r -c AppleVideoToolboxParavirtualizationDriver -l
         /usr/sbin/ioreg -r -c NativeUfsBlock -l -d 1
         /sbin/mount | /usr/bin/awk '/Cryptexes\/App|AppCryptex/'
@@ -136,7 +135,6 @@ snapshot
 capture_and_reboot() {
     graphics_state
     snapshot
-    preserve_prime_progress
     /usr/sbin/sysctl -w kern.unixnu_diag_request=1 || return 1
     for wait in $(/usr/bin/seq 1 60); do
         status=$(/usr/sbin/sysctl -n kern.unixnu_diag_status)
@@ -166,7 +164,7 @@ for attempt in $(/usr/bin/seq 1 230); do
             percent=$((capacity * 100 / maximum))
             /bin/echo "battery=$percent%"
             if [ "$percent" -lt 15 ]; then
-                /bin/echo 'Returning to fastboot to recharge before continuing priming.'
+                /bin/echo 'Returning to fastboot at low battery.'
                 capture_and_reboot
                 exit $?
             fi

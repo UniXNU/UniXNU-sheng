@@ -1,5 +1,5 @@
 #!/bin/sh
-# Fixed window sequence after the current boot's shader priming pass.
+# Fixed desktop interaction and manual inspection views.
 set -u
 /bin/rm -f /Users/Shared/unixnu-test/desktop-180.png /Users/Shared/unixnu-test/desktop-270.png
 (
@@ -22,6 +22,11 @@ if [ -s /private/var/ngpu/test/share/graphics-comparison ]; then
     /usr/bin/caffeinate -du -t 900 &
     /private/var/ngpu/test/bin/gpu-scene --reset-session
     /bin/sleep 15
+    if [ "$(/bin/cat /private/var/ngpu/test/share/graphics-comparison)" = shader-cache ]; then
+        /usr/bin/open '/Library/UniXNU/Shader Cache.app'
+        /bin/sleep 900
+        exit 0
+    fi
     if [ "$(/bin/cat /private/var/ngpu/test/share/graphics-comparison)" = view ]; then
         /bin/echo "inspection start boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid) time=$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
         /usr/bin/open 'x-apple.systempreferences:com.apple.systempreferences.GeneralSettings'
@@ -105,32 +110,6 @@ if [ -s /private/var/ngpu/test/share/icon-probe-path ]; then
     exit $?
 fi
 cache=/private/var/tmp/NativeAdrenoMetal.cache/prime.log
-boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)
-ready=0
-for attempt in $(/usr/bin/seq 1 105); do
-    /bin/date -u
-    if [ -r "$cache" ]; then
-        state=$(/usr/bin/awk -v boot="$boot" '
-            /^list / {current = index($0, " boot=" boot " ") && index($0, " scope=2 "); state = ""}
-            /^pass / && current {state = $0}
-            END {print state}
-        ' "$cache")
-        /bin/echo "$state"
-        case "$state" in
-            *' complete=1 '*) ready=1; break ;;
-            *' complete=2 '*)
-                /bin/echo 'Whole-system shader priming finished with failures.'
-                /usr/bin/touch /Users/Shared/unixnu-test/reboot-requested
-                exit 1 ;;
-        esac
-    fi
-    /bin/sleep 60
-done
-if [ "$ready" != 1 ]; then
-    /bin/echo 'Priming is incomplete; the comparison scene remains pending.'
-    /usr/bin/touch /Users/Shared/unixnu-test/reboot-requested
-    exit 1
-fi
 /bin/date -u
 tool=/private/var/ngpu/test
 export VK_LAYER_PATH="$tool/etc/vulkan/explicit_layer.d"
