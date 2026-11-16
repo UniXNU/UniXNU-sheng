@@ -3,8 +3,11 @@
 [source."AvailabilityVersions"]
 commit = "149b1777f3e8c2133042d8e188f72e3adf6a7110"
 
+[source."IOHIDFamily"]
+commit = "e31e90a24c27ad6cbe981650d12a1a4124065b03"
+
 [source."IOStorageFamily"]
-commit = "e45fbe30a7879e0b16e26dddb78538f1b00e0bff"
+commit = "7edb88fbae296fb7c8ce2f64e115e116e566d51c"
 
 [source."corecrypto-2023"]
 commit = "11fba65b12d8830630e248dfa8344caf8b065f26"

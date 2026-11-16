@@ -174,13 +174,8 @@ constexpr unsigned MaxReplay = 16;
 constexpr uint32_t MaxReplayBytes = 16 << 20;
 constexpr uint32_t ShedMs = 500;
 constexpr uint32_t DbufPauseMs = 500;
-// Frame thinning. The lock screen's aerials are 4K HEVC at 240 frames a second (idleassetsd's 4KSDR240FPS); its player decodes
-// every frame and shows about 30 of them a second, and nothing in AVFoundation asks for fewer (ReducedFrameDelivery is set by no
-// one but VideoToolbox's own callers). A pixel buffer and a 4K copy for each of the 240 is ten times what this path does, so the
-// player falls behind, fills MaxInputs and starts over. A frame whose presentation time is less than ThinUs after the last one
-// handed over with pixels goes back as dropped (kVTDecodeInfo_FrameDropped, no pixel buffer): the references it is to the
-// stream stay in the device's decoder, which is the only place they are needed.
-constexpr int64_t ThinUs = 31000;   // a 30 Hz picture, less a little: every 8th frame of 240
+// vt-max-fps=N selects an explicit delivery limit. Sessions otherwise deliver
+// decoded frames at the stream's rate. Reference pictures remain in the decoder.
 constexpr unsigned FrameTimes = 256;   // frames given to the device and not yet out: OUTPUT + the codec's delay + CAPTURE   // Qualcomm's AVC decoder asks 21 output slots at 720p
 constexpr uint32_t OutputBytes = 2u << 20;
 
@@ -345,8 +340,11 @@ struct Session {
     int64_t lastInputUs = INT64_MIN, minStepUs = INT64_MAX;   // the frame period, the least step between two inputs' times
     unsigned steps = 0;
     bool skipLogged = false;
-    uint8_t parameterSets[512] = {};
-    uint32_t parameterSetsSize = 0;
+    uint8_t *parameterSets = nullptr;
+    uint32_t parameterSetsSize = 0, parameterSetsCapacity = 0;
+    ~Session() {
+        if (parameterSets) IOFree(parameterSets, parameterSetsCapacity);
+    }
     bool parametersSent = false;
 
     unsigned device = ~0u;
@@ -375,6 +373,7 @@ struct Session {
     // last frame handed over with pixels (INT64_MIN: none yet).
     struct FrameTime { int64_t frame = -1, ptsUs = -1; } frameTimes[FrameTimes];
     int64_t lastShownUs = INT64_MIN;
+    uint32_t deliveryLimitFps = 0;
     unsigned inputHead = 0, inputTail = 0;
     // An outstanding dfin: its request, answered when pendingFrames is 0 or at finishDeadline.
     bool finishWanted = false, draining = false;
@@ -626,7 +625,18 @@ bool parameterSets(Session *s, const ImageDescription &d) {
     const uint8_t start[4] = {0, 0, 0, 1};
     s->parameterSetsSize = 0;
     auto add = [&](const uint8_t *nal, uint32_t n) {
-        if (s->parameterSetsSize + 4 + n > sizeof s->parameterSets) return false;
+        if (s->parameterSetsSize > OutputBytes - 4 || n > OutputBytes - 4 - s->parameterSetsSize) return false;
+        const uint32_t required = s->parameterSetsSize + 4 + n;
+        if (required > s->parameterSetsCapacity) {
+            uint32_t capacity = s->parameterSetsCapacity ? s->parameterSetsCapacity : 512;
+            while (capacity < required) capacity = capacity > OutputBytes / 2 ? OutputBytes : capacity * 2;
+            uint8_t *bytes = static_cast<uint8_t *>(IOMalloc(capacity));
+            if (!bytes) return false;
+            if (s->parameterSetsSize) memcpy(bytes, s->parameterSets, s->parameterSetsSize);
+            if (s->parameterSets) IOFree(s->parameterSets, s->parameterSetsCapacity);
+            s->parameterSets = bytes;
+            s->parameterSetsCapacity = capacity;
+        }
         memcpy(s->parameterSets + s->parameterSetsSize, start, 4);
         memcpy(s->parameterSets + s->parameterSetsSize + 4, nal, n);
         s->parameterSetsSize += 4 + n;
@@ -939,9 +949,9 @@ bool emitFrame(Session *s, unsigned index, int64_t frame, uint32_t bytesused) {
     uint8_t message[256];
     const Session::FrameTime &time = s->frameTimes[uint64_t(frame) % FrameTimes];
     const int64_t pts = time.frame == frame ? time.ptsUs : -1;
-    if (bytesused && pts >= 0) {
-        // Shown when ThinUs have passed since the last shown, or when time went back (a loop, a seek, a new segment).
-        if (s->lastShownUs != INT64_MIN && pts >= s->lastShownUs && pts - s->lastShownUs < ThinUs) {
+    if (s->deliveryLimitFps && bytesused && pts >= 0) {
+        const int64_t intervalUs = 1000000 / s->deliveryLimitFps;
+        if (s->lastShownUs != INT64_MIN && pts >= s->lastShownUs && pts - s->lastShownUs < intervalUs) {
             handOverDropped(s, frame);
             return false;
         }
@@ -1209,16 +1219,15 @@ void requeueCapture(Session *s, unsigned index) {
     else s->capture[index].queued = true;
 }
 
-// The highest temporal layer given to the device: the least that still makes about 30 frames a second, layers taken as halving
-// the rate (the aerials' do), once 16 steps between inputs' times have shown the frame period; every layer till then.
+// Select temporal layers from the requested delivery limit and measured period.
 bool hevcSession(const Session *s);
 unsigned keptLayer(const Session *s) {
     if (!hevcSession(s) || s->temporalLayers < 2) return 7;
     unsigned kept = s->temporalLayers - 1;
-    if (s->steps >= 16 && s->minStepUs > 0 && s->minStepUs != INT64_MAX) {
+    if (s->deliveryLimitFps && s->steps >= 16 && s->minStepUs > 0 && s->minStepUs != INT64_MAX) {
         const int64_t rate = 1000000 / s->minStepUs;
         unsigned drop = 0;
-        while (drop + 1 < s->temporalLayers && (rate >> (drop + 1)) >= 30) ++drop;
+        while (drop + 1 < s->temporalLayers && (rate >> (drop + 1)) >= s->deliveryLimitFps) ++drop;
         kept = s->temporalLayers - 1 - drop;
     }
     return kept > s->shed ? kept - s->shed : 0;
@@ -2282,6 +2291,8 @@ void createDecoder(Client *c, const Header &h, const uint8_t *m, uint32_t n) {
             return;
         }
         s->client = c;
+        PE_parse_boot_argn("vt-max-fps", &s->deliveryLimitFps, sizeof s->deliveryLimitFps);
+        if (s->deliveryLimitFps > 1000) s->deliveryLimitFps = 0;
         memcpy(s->uuid, h.uuid, 16);
         IOLockLock(c->listLock);
         s->next = c->sessions;
@@ -2478,7 +2489,13 @@ int startSession(Session *s, const uint8_t *m, uint32_t n, bool fresh) {
     if (d.codec != cc("avc1") && d.codec != cc("hvc1") && d.codec != cc("hev1")) return -12906;
     if (d.codec != cc("avc1") && !hevcOffered()) return -12906;   // not listed: VideoToolbox decodes it itself
     if (!decodableFormat(d)) return -12910;   // kVTVideoDecoderUnsupportedDataFormatErr
-    if (!parameterSets(s, d)) return -12909;
+    if (!parameterSets(s, d)) {
+        trace("vt configuration refused: codec %08x extensions %u copied %u capacity %u",
+              d.codec, d.extensionsSize, s->parameterSetsSize, s->parameterSetsCapacity);
+        return -12909;
+    }
+    trace("vt configuration: codec %08x NAL bytes %u length %u temporal layers %u delivery limit %u",
+          d.codec, s->parameterSetsSize, s->nalLength, s->temporalLayers, s->deliveryLimitFps);
     teardown(s);
     s->lastInputAt = mach_absolute_time();
     s->width = d.width;

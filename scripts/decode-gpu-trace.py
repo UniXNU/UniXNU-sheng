@@ -26,6 +26,7 @@ FIELDS = {
  44: ('turnip_attachment', 'pass index mode image format view_swap view_mutable tile_mode load_store_unpadded samples mrt_buf_info'),
  63: ('thread', 'thread role name0 name1 name2 name3'),
  65: ('problem', 'part'),
+ 70: ('recovery', 'fence completed replayed flags dead_reason guilty_ring loaded status fsr far fsynr ttbr0'),
 }
 LATENCY_RECORD = struct.Struct('<QQII6Q')
 LATENCY_FIELDS = {

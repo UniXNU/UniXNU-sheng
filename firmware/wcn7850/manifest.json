@@ -1,4 +1,7 @@
 {
+  "repository": "https://gitlab.com/kernel-firmware/linux-firmware",
+  "revision": "a4ce85e98a33fa1021c31d1887fc2dffed27e8dd",
+  "directory": "ath12k/WCN7850/hw2.0",
   "files": {
     "amss.bin": {
       "sha256": "43aadfd3df887f27de74020273aee484bac6a31dd53068f91baf2a9b094d6a68",

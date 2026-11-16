@@ -30,6 +30,9 @@ def main():
     for name in ('boot', 'busybox', 'rebootbl', 'out'):
         ap.add_argument('--' + name, required=True, type=Path)
     ap.add_argument('--module', action='append', default=[], type=Path)
+    ap.add_argument('--file', action='append', default=[], metavar='TARGET=SOURCE',
+                    help='add a relative initramfs path, preserving the source executable bit')
+    ap.add_argument('--append', action='append', default=[], help='additional kernel command-line argument')
     a = ap.parse_args()
     boot = a.boot.read_bytes()
     if boot[:8] != b'ANDROID!':
@@ -43,12 +46,34 @@ def main():
     entries += [('dev/console', 0o20600, b''), ('init', 0o100755, (HERE / 'init').read_bytes()),
                 ('bin/busybox', 0o100755, a.busybox.read_bytes()), ('bin/rebootbl', 0o100755, a.rebootbl.read_bytes())]
     entries += [('lib/modules/' + m.name, 0o100644, m.read_bytes()) for m in a.module]
+    present = {name for name, _, _ in entries}
+    additions = []
+    for spec in a.file:
+        name, separator, source = spec.partition('=')
+        target = Path(name)
+        if not separator or not name or target.is_absolute() or '..' in target.parts or name in present:
+            ap.error(f'--file {spec}: require a new relative TARGET=SOURCE path')
+        path = Path(source)
+        if not path.is_file():
+            ap.error(f'--file {spec}: source is not a file')
+        for parent in reversed(target.parents):
+            folder = parent.as_posix()
+            if folder != '.' and folder not in present:
+                entries.append((folder, 0o40755, b''))
+                present.add(folder)
+        mode = 0o100755 if path.stat().st_mode & 0o111 else 0o100644
+        additions.append((name, mode, path.read_bytes()))
+        present.add(name)
+    entries += additions
     ramdisk = gzip.compress(cpio(entries), 9, mtime=0)
     pad = lambda b: b + b'\0' * (-len(b) % page)
     header = bytearray(page)
     header[:8] = b'ANDROID!'
     struct.pack_into('<10I', header, 8, len(kernel), kernel_addr, len(ramdisk), 0x01000000, 0, 0x00f00000, tags, page, 0, os_version)
-    header[64:64 + len(CMDLINE)] = CMDLINE
+    cmdline = b' '.join([CMDLINE, *(value.encode() for value in a.append)])
+    if len(cmdline) >= 512:
+        ap.error('kernel command line exceeds the boot header field')
+    header[64:64 + len(cmdline)] = cmdline
     digest = hashlib.sha1()
     for blob in (kernel, ramdisk, b''):
         digest.update(blob)

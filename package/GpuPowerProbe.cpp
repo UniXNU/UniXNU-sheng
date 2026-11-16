@@ -1539,7 +1539,7 @@ void registerExecObserver() {
 // IPI k<sent by the kernel> t<self-test sent> r<received in total> m<cores that answered, bit = core index>
 extern "C" unsigned int processor_avail_count;
 volatile unsigned gIpiRuns;
-// Self-SGI probe (system registers only): row 2 ends with s<cores that ran a probe> p<INTIDs 0..15 that became pending as Group 1>/<as Group 0>,
+// Self-SGI probe: row 2 ends with s<cores that ran a probe> p<owned SGIs pending as Group 1>/<as Group 0>,
 // accumulated over every IPI test run. Row 3 is the boot core's GIC readback after enabling: g<IGROUPR0> e<ISENABLER0> c<GICD_CTLR> t<GICD_TYPER>
 // m<IGRPMODR0> and the ICC registers of the last probing core P<PMR> I<IGRPEN1> S<SRE> C<CTLR> R<RPR>.
 unsigned gSelfTried, gSelfPend1, gSelfPend0;

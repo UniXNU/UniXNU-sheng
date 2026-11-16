@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Check production GIC dispatch and shared GCC voting used by Bluetooth."""
 from pathlib import Path
-import hashlib,json,subprocess
-root=Path(__file__).resolve().parents[1];cpu=root.parent/'UniXNU/drivers/ArmCpu/ArmCpu.cpp';soc=root.parent/'UniXNU-sm8550-common/kits/Sm8550Platform'
+import argparse,hashlib,json,subprocess
+root=Path(__file__).resolve().parents[1]
+parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--tree',type=Path,default=Path.cwd(),help='resolved UniXNU tree with selected drivers and kits')
+tree=parser.parse_args().tree.resolve()
+cpu=tree/'drivers/ArmCpu/ArmCpu.cpp';soc=tree/'kits/Sm8550Platform'
 s=cpu.read_text();a=s[s.index('#define ARMCPU_SPI_SLOTS'):s.index('IOService *ArmCpu::probe')]
 b=s[s.index('static IOReturn spiAttachUnlocked'):s.index('extern "C" uint64_t armcpu_spi_count')]
 gcc=(soc/'Sm8550Gcc.c').read_text().replace('#include <IOKit/IOLocks.h>','')
