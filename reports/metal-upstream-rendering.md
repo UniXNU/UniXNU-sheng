@@ -10,7 +10,8 @@ The comparison uses the General pane in System Settings and a 1024 by 896 atlas 
 | Last matching checkpoint, component `898c786c0d7087ab62eb1886b96240597caadc2d` | `188606728a57db94f94395ba03144fccbe05a91d` | All atlas pixels and selected attachment statistics match the main reference. |
 | Shared uniform ranges, component `5e881fea2086ccd959c85b846ada42e8c59f3b6a` | `1b5a527f5e00abe64036db54c445d2a0e91325c1` | Green widget artifacts, cropped Settings icons and changed atlas RGB pixels. CB 4 pass 2 has RGB minima near -0.95. |
 | Corrected uniform array capacity, component `79a2d579af8e1e559391ca03874ca7cbadc360bf` | `1b5a527f5e00abe64036db54c445d2a0e91325c1` | All 56-source atlas pixels and CB 4 passes 2, 4 and 5 statistics match the main reference, with RGB minimum zero. Retained widget and Settings photos show complete backgrounds. |
-| Current development with the capacity correction, component `840e10fce0a40622b9c28b0f9da010a6402a84d5` | `be905fd8992417edf146792036d666c126baa093` | All atlas pixels and selected attachment statistics match the main reference. Photos through 175 seconds show complete widget and Settings backgrounds. |
+| Qualified development with the capacity correction, component `840e10fce0a40622b9c28b0f9da010a6402a84d5` | `be905fd8992417edf146792036d666c126baa093` | All atlas pixels and selected attachment statistics match the main reference. Photos through 175 seconds show complete widget and Settings backgrounds. |
+| Scheduler and rebind checkpoint, component `a4590c23b319a1ae14332d71c0a4a2fabf729aaa` | `cda5fd8f027f29f1213961de4eb11a7726c61bf6` | All atlas pixels and selected attachment statistics match the main reference. Photos through 175 seconds show complete widget and Settings backgrounds. Full CI is pending. |
 
 ## Uniform array capacity
 
@@ -39,3 +40,5 @@ OUT=/path/to/capture scripts/run-sheng-unattended.sh OUTPUT.img 420
 ```
 
 Compare the retained Settings photos, the decoded atlas pixels and the matching command-buffer attachments.
+
+The scheduler and rebind capture is `s079b0-42da33372`, boot `BE80FAD6-5A74-44A0-A165-F01E26E6B089`, runtime `ab279cc610ed93f137b1668e3f751450`. The local release build and signing passed. Return took 205.927 seconds and Linux retrieval took 19.800 seconds, with fastboot responding. The 4096-pixel half-blur probe had no nonfinite values. The candidate is [AdrenoMetal #55](https://github.com/UniXNU/AdrenoMetal/pull/55) and [UniXNU #292](https://github.com/UniXNU/UniXNU/pull/292); its complete CI is [43987841609](https://github.com/UniXNU/UniXNU-sheng/actions/runs/43987841609).
