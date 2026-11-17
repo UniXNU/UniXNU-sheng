@@ -605,6 +605,14 @@ revision = "365890c8965e2698100804b41b079b32d3419055"
 command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --graphics-comparison --autoreset 180 --auto-login-user unixnu --password-stdin --preserve-data < account-password; SERIAL=b714917c READER=LINUX_READER CORE=CORE AUTORESET_SECONDS=180 scripts/run-sheng-unattended.sh OUTPUT.img 420"
 result = "Both reference and candidate one-pass v0 images passed signing and packaging with the short comparison timing. A740 reference capture sa9df1-14c2a47f6 completed all four pane requests and settling with the animation, returned after 195.718 seconds, and Linux collection confirmed fastboot after 25.033 seconds."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-unattended-desktop.md"
+revision = "fd964ee46eb855543482e2f7261bf49df3d22178"
+command = "python3 scripts/audit-gpu-desktop-comparison.py REFERENCE_CAPTURE CANDIDATE_CAPTURE --output comparison.json"
+result = "The ordered arm64e scene and both signed v0 packages compiled locally. Reference capture sc3cc5-70185657 completed all pane requests and settling with Settings in front of the animation, then returned to fastboot. Candidate sf2a4f-76733c08 restarted WindowServer during the workload; the report command rejected it with status 2. The candidate runtime remains unmerged."
+
 [[area]]
 id = "bluetooth"
 status = "device-verified"
@@ -1109,6 +1117,14 @@ revision = "365890c8965e2698100804b41b079b32d3419055"
 command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --graphics-comparison --autoreset 180 --auto-login-user unixnu --password-stdin --preserve-data < account-password; SERIAL=b714917c READER=LINUX_READER CORE=CORE AUTORESET_SECONDS=180 scripts/run-sheng-unattended.sh OUTPUT.img 420"
 result = "Both reference and candidate one-pass v0 images passed signing and packaging with the short comparison timing. A740 reference capture sa9df1-14c2a47f6 completed all four pane requests and settling with the animation, returned after 195.718 seconds, and Linux collection confirmed fastboot after 25.033 seconds."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-unattended-desktop.md"
+revision = "fd964ee46eb855543482e2f7261bf49df3d22178"
+command = "python3 scripts/audit-gpu-desktop-comparison.py REFERENCE_CAPTURE CANDIDATE_CAPTURE --output comparison.json"
+result = "The ordered arm64e scene and both signed v0 packages compiled locally. Reference capture sc3cc5-70185657 completed all pane requests and settling with Settings in front of the animation, then returned to fastboot. Candidate sf2a4f-76733c08 restarted WindowServer during the workload; the report command rejected it with status 2. The candidate runtime remains unmerged."
+
 [[area]]
 id = "diagnostics"
 status = "implemented"
@@ -1250,6 +1266,14 @@ reference = "reports/macos-unattended-desktop.md"
 revision = "365890c8965e2698100804b41b079b32d3419055"
 command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --graphics-comparison --autoreset 180 --auto-login-user unixnu --password-stdin --preserve-data < account-password; SERIAL=b714917c READER=LINUX_READER CORE=CORE AUTORESET_SECONDS=180 scripts/run-sheng-unattended.sh OUTPUT.img 420"
 result = "Both reference and candidate one-pass v0 images passed signing and packaging with the short comparison timing. A740 reference capture sa9df1-14c2a47f6 completed all four pane requests and settling with the animation, returned after 195.718 seconds, and Linux collection confirmed fastboot after 25.033 seconds."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-unattended-desktop.md"
+revision = "fd964ee46eb855543482e2f7261bf49df3d22178"
+command = "python3 scripts/audit-gpu-desktop-comparison.py REFERENCE_CAPTURE CANDIDATE_CAPTURE --output comparison.json"
+result = "The ordered arm64e scene and both signed v0 packages compiled locally. Reference capture sc3cc5-70185657 completed all pane requests and settling with Settings in front of the animation, then returned to fastboot. Candidate sf2a4f-76733c08 restarted WindowServer during the workload; the report command rejected it with status 2. The candidate runtime remains unmerged."
 
 [[area]]
 id = "arm64e-os"
