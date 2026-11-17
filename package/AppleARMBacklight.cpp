@@ -28,6 +28,10 @@
 #include <pexpert/pexpert.h>
 #include "GeniI2c.h"
 #include "LidClamshell.h"
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+#include <IOKit/IOMessage.h>
+#include <IOKit/pwr_mgt/RootDomain.h>
+#endif
 
 // [0] stage (1 mapped, 2 engines ready, 3 published, 4 published as AppleARMBacklight, negative: the step that failed), [1] brightness requests, [2] last level written,
 // [3] level read back from engine a at start, [4] from engine b, [5] transfer errors, [6] last M_IRQ status of a failed transfer,
