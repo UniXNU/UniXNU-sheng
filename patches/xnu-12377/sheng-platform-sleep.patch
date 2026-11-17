@@ -40,7 +40,20 @@ diff --git a/osfmk/arm64/cpu.c b/osfmk/arm64/cpu.c
 diff --git a/osfmk/arm/cpu_common.c b/osfmk/arm/cpu_common.c
 --- a/osfmk/arm/cpu_common.c
 +++ b/osfmk/arm/cpu_common.c
-@@ -934,6 +934,26 @@
+@@ -416,7 +416,11 @@
+ bool
+ sheng_sigp_recover(cpu_data_t *target_proc)
+ {
+-	if ((os_atomic_load(&target_proc->cpu_flags, relaxed) & (InitState | StartedState)) != (InitState | StartedState)) {
++	/* sheng: not a core on its way down. ml_cpu_down clears cpu_running first, then sets SIGPdisabled itself and asserts it is the
++	 * only bit left; clearing it there tripped that assertion (machine_routines.c:948) when a platform sleep took the cores down
++	 * while another core signalled one of them. A core that lost its start-up self-IPI has cpu_running set (cpu_init) already. */
++	if ((os_atomic_load(&target_proc->cpu_flags, relaxed) & (InitState | StartedState)) != (InitState | StartedState) ||
++	    !os_atomic_load(&target_proc->cpu_running, relaxed)) {
+ 		return false;
+ 	}
+ 	os_atomic_andnot(&target_proc->cpu_signal, SIGPdisabled, acq_rel);
+@@ -934,6 +938,26 @@
  	assert(ml_get_interrupts_enabled());
  	cpu_data_t *cpu_data_ptr = getCpuDatap();
  
