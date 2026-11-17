@@ -4,6 +4,7 @@ decode it; then, unless --no-reboot, run /bin/rebootbl so the tablet returns to 
 
 usage: read-sheng-log.py [--port /dev/cu.usbmodemXXXX] [--out build/sheng-logs] [--no-reboot] [--wait 120]
        read-sheng-log.py --decode log.bin [--out DIR]       (decode a saved window only)
+       read-sheng-log.py --prev prev.bin [--out DIR]        (decode the previous run's copy: sysctl -b kern.unixnu_prev_log)
 Output: DIR/<tag>-<boot id>/ log.bin, header.txt, msgbuf.txt, slots.txt (every slot of the run, oldest first) and latest.txt; with a
 header that names an export, also export.bin and export/ (the render server's pipeline-cache directory, files plus manifest.json). A version
 3 export lies in the region below the log window and is fetched from the reader on its own; --decode reports it but cannot unpack it."""
@@ -119,6 +120,26 @@ def messages(blob, h):
         return area[:head]
     at = head % cap
     return area[at:] + area[:at]
+
+
+PREV = struct.Struct('<8s4I')   # kern.unixnu_prev_log: magic, version, extent count, window blocks, reserved; then the extents
+
+
+def prev_window(blob):
+    """The window that kern.unixnu_prev_log (package/BootLog.c prev_log_copy) copied from: its extents back at their blocks, the rest
+    zero, so that decode() reads it as the full window."""
+    magic, version, extents, window_blocks, _ = PREV.unpack_from(blob, 0)
+    if magic != b'SHPREV01' or version != 1:
+        raise SystemExit(f'not a previous-run copy (magic {magic!r}, version {version})')
+    table = struct.unpack_from(f'<{2 * extents}I', blob, PREV.size)
+    window = bytearray(window_blocks * BLOCK)
+    at = 4096
+    for first, count in zip(table[0::2], table[1::2]):
+        if first + count > window_blocks or at + count * BLOCK > len(blob):
+            raise SystemExit('previous-run copy: an extent lies outside the window or the copy')
+        window[first * BLOCK:(first + count) * BLOCK] = blob[at:at + count * BLOCK]
+        at += count * BLOCK
+    return bytes(window)
 
 
 def decode(blob, out, expected_tag=None):
@@ -310,10 +331,14 @@ def main():
     ap.add_argument('--no-reboot', action='store_true')
     ap.add_argument('--wait', type=int, default=120)
     ap.add_argument('--decode', type=Path)
+    ap.add_argument('--prev', type=Path, help="kern.unixnu_prev_log output: the previous run's log, copied by the next run")
     ap.add_argument('--expected-tag')
     a = ap.parse_args()
     if a.decode:
         decode(a.decode.read_bytes(), a.out, a.expected_tag)
+        return
+    if a.prev:
+        decode(prev_window(a.prev.read_bytes()), a.out, a.expected_tag)
         return
     fetch(a.port or find_port(a.wait), a.out, not a.no_reboot, expected_tag=a.expected_tag)
 

@@ -34,6 +34,11 @@ extern "C" {
 #include "Wn8030.h"
 #include "QcomRpmh.h"
 #include "TouchBoard.h"
+#include "KeyboardTrace.h"
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+#include <IOKit/pwr_mgt/RootDomain.h>
+#include "LidClamshell.h"
+#endif
 }
 
 extern kmod_info_t g_kernel_kmod_info;
@@ -58,12 +63,32 @@ extern "C" const uint32_t native_keyboard_firmware_size;
 // [11] I2C failures, [12] engine interrupts, [13] last I2C error | its M_IRQ status << 8, [14] commands sent, [15] authentication
 // requests | other frames << 16, [16] touching palms sent as lifted
 extern "C" {volatile int32_t native_keyboard_stats[17];}
+// 1 while the lid hall sensor sees the cover closed over the screen; the macOS touchscreen drops its reports then (TouchLid.h). Written
+// only once the thread serves the cover (stage 7), so a cover that never comes up leaves it 0 and the touchscreen as it was.
+extern "C" {volatile uint32_t native_keyboard_lid_closed;}
 // The cover's last accelerometer sample (x, y, z in 1/256 g, tablet axes) and the number of samples.
 extern "C" {volatile int32_t native_keyboard_accel[4];}
 // The range of the controller's own touchpad coordinates over every touching contact: X min, X max, Y min, Y max (-1 before the first).
 extern "C" {volatile int32_t native_keyboard_touch_range[4] = {-1, -1, -1, -1};}
 
 namespace {
+// Keep immutable cover diagnostics in the macOS read-only data segment.
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+#define KEYBOARD_CONST __attribute__((section("__DATA_CONST,__const")))
+#else
+#define KEYBOARD_CONST
+#endif
+static const char kLidLog[] KEYBOARD_CONST = "sheng keyboard: lid %s\n";
+static const char kClamshellLog[] KEYBOARD_CONST = "sheng keyboard: clamshell %s sent to the power manager\n";
+static const char kCoverLog[] KEYBOARD_CONST = "sheng keyboard: cover %s; frame %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x; before it %s, ms since a frame %d, "
+          "input %d, accelerometer %d; frames %d, controller interrupts %d, i2c failures %d, last i2c error 0x%x, auth %d, attaches %d, "
+          "reloads %u\n";
+static const char kKeepAwakeFailureLog[] KEYBOARD_CONST = "sheng keyboard: keep-awake command failed, waking the controller (i2c failures %d, last i2c error 0x%x)\n";
+static const char kControllerReloadLog[] KEYBOARD_CONST = "sheng keyboard: controller reload %u (read failures %u, command failures %u, i2c failures %d, last i2c error 0x%x, "
+              "frames %d)\n";
+static const char kControllerReloadResultLog[] KEYBOARD_CONST = "sheng keyboard: controller reload %u %s (stage %d, detail %d)\n";
+#undef KEYBOARD_CONST
+
 constexpr uint64_t kGcc = 0x00100000ULL, kTlmm = 0x0f100000ULL, kSe = 0x00884000ULL, kRsc = 0x17a20000ULL, kCmdDb = 0x81c60000ULL;
 constexpr uint32_t kCmdDbSize = 0x20000, kRscTcs = 0xd00, kTcs = 2;
 // gcc-sm8550.c: QUP2 branch votes in 0x52010 (bit 0 wrap2 core, 1 S AHB, 2 M AHB, 3 core 2x, 5 SE1), their halt registers, the SE1 RCG.
@@ -120,6 +145,8 @@ struct Keyboard {
     bool classRegistered;
     uint8_t frame[WN8030_FRAME_BYTES];
     uint8_t command[1 + WN8030_DATA_COMMAND_BYTES];
+    kb_trace trace;               // the last frames, for the attach and detach log lines (KeyboardTrace.h)
+    uint32_t reloads;             // controller reloads started by the service
 };
 Keyboard *gKb;
 volatile uint32_t gWake;      // the thread's event
@@ -471,11 +498,40 @@ void detachCover() {
     native_keyboard_stats[8] = native_keyboard_stats[8] & ~0xff;
 }
 
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+lid_clamshell gClamshell = LID_CLAMSHELL_INIT;   // the keyboard thread's only
+#endif
+}  // namespace
+extern "C" void sheng_backlight_lid(bool closed) __attribute__((weak_import));   // AppleARMBacklight.cpp
+namespace {
+
+void publishLid(bool closed, bool changed) {
+    __atomic_store_n(&native_keyboard_lid_closed, closed ? 1u : 0u, __ATOMIC_RELEASE);
+    if (changed) IOLog(kLidLog, closed ? "closed" : "open");
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+    // macOS's power manager follows the lid (LidClamshell.h): closed, WindowServer turns the built-in display off. The root domain
+    // queues the message, so this thread does not wait on it.
+    IOPMrootDomain *root = IOService::getPMRootDomain();
+    if (!root) return;
+    const lid_clamshell_message message = lid_clamshell_step(&gClamshell, closed);
+    if (message == LidClamshellNone) return;
+    // An open lid is sent with kIOPMSetValue (1 << 16, IOPMPrivate.h): the power manager then counts it as user input, which turns a dark
+    // wake from platform sleep into a full one and wakes the display, as a lid opening does on a Mac.
+    constexpr uint32_t kSetValue = 1u << 16;
+    root->receivePowerNotification(message == LidClamshellClosed ? kIOPMClamshellClosed : kIOPMClamshellOpened | kSetValue);
+    IOLog(kClamshellLog, message == LidClamshellClosed ? "closed" : "open");
+    // macOS leaves the built-in panel to the clamshell sleep, and the panel has no power switch: the backlight driver darkens it (LidClamshell.h).
+    if (sheng_backlight_lid) sheng_backlight_lid(message == LidClamshellClosed);
+#endif
+}
+
 void readHall() {
     Keyboard *kb = gKb;
+    const bool wasLid = kb->lid;
     kb->lid = !level(PinLid);
     kb->tablet = !level(PinTablet);
     native_keyboard_stats[9] = (native_keyboard_stats[9] & ~3) | (kb->lid ? 1 : 0) | (kb->tablet ? 2 : 0);
+    publishLid(kb->lid, kb->lid != wasLid);
     const bool enabled = !kb->lid && !kb->tablet;
     if (enabled == kb->inputEnabled) return;
     kb->inputEnabled = enabled;
@@ -485,12 +541,47 @@ void readHall() {
     kb->service.statePending = true;
 }
 
+kb_trace_kind traceKind(int kind) {
+    switch (kind) {
+    case Wn8030Keyboard: return KbTraceKeyboard;
+    case Wn8030Consumer: return KbTraceConsumer;
+    case Wn8030Touchpad: return KbTraceTouchpad;
+    case Wn8030Attach: return KbTraceAttach;
+    case Wn8030Accel: return KbTraceAccel;
+    case Wn8030AuthRequest: case Wn8030AuthInit: case Wn8030AuthChallenge: return KbTraceAuth;
+    case Wn8030Invalid: return KbTraceInvalid;
+    default: return KbTraceOther;
+    }
+}
+
+// One line per attach frame that changes the state or reports a change in progress: what the controller sent, the frames before it
+// and how long ago they came, and the controller's I2C health. Input and accelerometer frames up to the detach with no I2C failures:
+// the controller kept working and lost the cover. A quiet controller or I2C failures: the controller side.
+void logAttach(const char *what, uint32_t now) {
+    Keyboard *kb = gKb;
+    kb_trace_summary s;
+    kb_trace_summarize(&kb->trace, now, &s);
+    const uint8_t *b = kb->frame;
+    const int32_t *k = const_cast<const int32_t *>(native_keyboard_stats);
+    IOLog(kCoverLog, what, b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15], b[16], s.kinds,
+          (int32_t)s.since_any, (int32_t)s.since_input, (int32_t)s.since_accel, k[6], k[5], k[11], k[13], k[15] & 0xffff,
+          (k[8] >> 8) & 0xffff, kb->reloads);
+}
+
 bool handleFrame() {
     Keyboard *kb = gKb;
     if (!readFrame()) return false;
     bump(6);
     Wn8030Frame f;
-    switch (wn8030_parse(kb->frame, &f)) {
+    const int kind = wn8030_parse(kb->frame, &f);
+    const uint32_t now = static_cast<uint32_t>(nowMs());
+    if (kind == Wn8030Attach) {
+        if (f.attached == 1 && !kb->attached) logAttach("attached", now);
+        else if (f.attached == 0 && kb->attached) logAttach("detached", now);
+        else if (f.attached < 0) logAttach("changing", now);
+    }
+    kb_trace_push(&kb->trace, now, traceKind(kind));
+    switch (kind) {
     case Wn8030Keyboard: case Wn8030Consumer: case Wn8030Touchpad:
         if (kb->hid && kb->inputEnabled) {
             uint8_t touchpad[WN8030_TOUCHPAD_REPORT];
@@ -563,10 +654,22 @@ struct KeyboardIO {
     bool apply() const {return applyInputState();}
     void release() const {releaseInputs();}
     void wake() const {
+        IOLog(kKeepAwakeFailureLog,
+              native_keyboard_stats[11], native_keyboard_stats[13]);
         setOutput(PinSleep, false); IOSleep(10);
         setOutput(PinSleep, true); IOSleep(25);
     }
-    bool recover() const {return recoverController();}
+    // A reload is the service's answer to three failed reads or commands in a row: the controller side stopped answering.
+    bool recover() const {
+        Keyboard *kb = gKb;
+        ++kb->reloads;
+        IOLog(kControllerReloadLog, kb->reloads, kb->service.readFailures, kb->service.controlFailures, native_keyboard_stats[11],
+              native_keyboard_stats[13], native_keyboard_stats[6]);
+        const bool ok = recoverController();
+        IOLog(kControllerReloadResultLog, kb->reloads, ok ? "done" : "failed",
+              native_keyboard_stats[0], native_keyboard_stats[1]);
+        return ok;
+    }
 };
 
 void serve() {
@@ -631,6 +734,7 @@ void keyboardThread(void *, wait_result_t) {
     if (!loadImage()) return;
     sheng_keyboard_cover_output_sink(ledRequest, nullptr);
     stage(7);
+    publishLid(kb->lid, kb->lid);   // the state read at stage 4; serve() reads the sensor again within kHallPollMs
     serve();
 }
 }  // namespace

@@ -290,7 +290,7 @@ extern "C" void native_source_storage_start(void)
         return;
     attempted = true;
     startup_probe_start();
-    startup_mark("storage-start");
+    startup_mark("storage-family");
 #if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
     boot_reset_install_platform();
 #endif
@@ -306,11 +306,14 @@ extern "C" void native_source_storage_start(void)
 
     // Authenticate policies before registering hardware-facing classes. The
     // firmware hands off the envelope; the trusted anchor is compiled in.
+    startup_mark("root-policies");
     if (!native_source_root_policies_load())
         panic("SourceStorage: root policy handoff or authentication failed");
+    startup_mark("apfs-family");
     status = OSKextLoadKextWithIdentifier("com.apple.filesystems.apfs");
     if (status != kOSReturnSuccess)
         panic("SourceStorage: APFS load failed %x", status);
+    startup_mark("storage-classes");
     void *handle = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
     if (!handle) panic("SourceStorage: cannot begin class registration");
     source_storage_base_init();
@@ -320,9 +323,11 @@ extern "C" void native_source_storage_start(void)
     if (status != kOSReturnSuccess)
         panic("SourceStorage: class registration failed %x", status);
 
+    startup_mark("platform-provider");
     OSDictionary *matching = IOService::serviceMatching("IOPlatformExpertDevice");
     IOService *provider = matching ? IOService::waitForMatchingService(matching, 5000000000ULL) : nullptr;
     if (!provider) panic("SourceStorage: platform root unavailable");
+    startup_mark("ufs-start");
     storageDriver = native_ufs_source_create();
     if (!storageDriver) panic("SourceStorage: cannot allocate UFS service");
     const char *step = !storageDriver->init() ? "init" : !storageDriver->attach(provider) ? "attach" :
@@ -331,13 +336,18 @@ extern "C" void native_source_storage_start(void)
         panic("SourceStorage: UFS %s failed (root step %u: %s)", step, native_ufs_root_step,
               native_ufs_root_failure ? native_ufs_root_failure : "no reason recorded");
     printf("SourceStorage: UFS started through public IOStorageFamily interface\n");
+    startup_mark("data-start");
     start_data_disk(provider);
     // The UFS log area exists from here on; the writer only runs with log=1.
+    startup_mark("log-start");
     boot_log_tick(0);
+    startup_mark("log-check");
     unsigned log = 0;
     thread_t check;
     if (PE_parse_boot_argn("log", &log, sizeof(log)) && log == 1 &&
         kernel_thread_start(boot_log_check, nullptr, &check) == KERN_SUCCESS)
         thread_deallocate(check);
+    startup_mark("storage-benchmark");
     ufsBench();
+    startup_mark("storage-return");
 }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include "../KeyboardCover.cpp"
+extern "C" {volatile int32_t native_keyboard_stats[17];}   // KeyboardProbe.cpp's controller counters
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -72,8 +73,46 @@ int main() {
     first.join(); second.join();
     CHECK(reports.size() == 3001 && allocations == allocated);
     for (unsigned i = 2001; i < reports.size(); ++i) CHECK(reports[i].size() == (reports[i][0] == 5 ? 9 : 3));
+#if NATIVE_COVER_POINTER
+    // The touchpad report carries no time; the device stamps each one as it arrives. A finger whose lift was never reported and
+    // that lands far away after a pause starts from there instead of moving the pointer by the whole distance.
+    auto touch = [&](uint64_t ms, uint16_t x) {
+        uint8_t pad[WN8030_TOUCHPAD_REPORT] = {WN8030_TOUCHPAD_ID, 0, 7, 3, uint8_t(x), uint8_t(x >> 8), 0xe8, 0x03};
+        pad[WN8030_TOUCHPAD_REPORT - 1] = 1;
+        hostClockNs = ms * 1000000;
+        const size_t before = reports.size();
+        cover->submit(pad, sizeof pad);
+        return reports.size() == before ? 0 : int16_t(reports.back()[2] | reports.back()[3] << 8);
+    };
+    CHECK(touch(1000, 1000) == 0);
+    CHECK(touch(1013, 1013) == 13);
+    CHECK(touch(1163, 2500) == 0);   // 150 ms later, 1487 counts away
+    CHECK(touch(1176, 2504) == 4);
+    CHECK(reports.back().size() == WN8030_POINTER_REPORT && reports.back()[0] == WN8030_POINTER_ID);
+    // The timing record goes out with the first touchpad report and then at most once a second of report time, as 32-bit
+    // little-endian words: layout 1, reports, pointer reports sent, restarts, the gap buckets, then the controller's counters.
+    auto record = [&] {
+        const auto &bytes = cover->dataProperties.at("ShengTouchpadTiming");
+        std::vector<uint32_t> words(bytes.size() / 4);
+        std::memcpy(words.data(), bytes.data(), words.size() * 4);
+        return words;
+    };
+    auto words = record();
+    CHECK(words.size() == 4 + WN8030_GAP_BUCKETS + 17 && words[0] == 1 && words[1] == 1 && words[2] == 0);
+    native_keyboard_stats[6] = 1234;
+    CHECK(touch(2200, 2510) == 0);   // over a second after the first record, and 1024 ms after the last report: a new touch
+    words = record();
+    CHECK(words[1] == 5 && words[2] == 2 && words[3] == 2);
+    CHECK(words[4 + 1] == 2 && words[4 + 6] == 1 && words[4 + 7] == 1);   // 13 ms twice, 150 ms, 1024 ms
+    CHECK(words[4 + WN8030_GAP_BUCKETS + 6] == 1234);
+    CHECK(touch(2213, 2516) == 6);
+    CHECK(record()[1] == 5);         // within the second: the record is not sent again
+    const size_t stamped = reports.size();
+#else
+    const size_t stamped = 3001;
+#endif
     cover->stop(&provider); cover->submit(key, sizeof key);
-    CHECK(reports.size() == 3001 && allocations == allocated);
+    CHECK(reports.size() == stamped && allocations == allocated);
     cover->release(); CHECK(liveObjects == baseline);
     std::printf("PASS keyboard HID (%s): %u checks\n", NATIVE_COVER_POINTER ? "macOS" : "iPadOS", checks);
 }

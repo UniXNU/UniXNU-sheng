@@ -3,7 +3,12 @@
 kernel and appended DTB reused byte for byte, as linux-ref does) plus an initramfs with busybox, the init next to this file, rebootbl and
 nvmem-reboot-mode.ko from the same release's linux-xiaomi-sheng.deb. Nothing on UFS is mounted or written. Inputs and output stay outside Git.
 
-usage: build-linux-log-boot.py --boot boot_sheng_singleboot.img --busybox busybox --rebootbl rebootbl --module nvmem-reboot-mode.ko --out log.img"""
+usage: build-linux-log-boot.py --boot boot_sheng_singleboot.img --busybox busybox --rebootbl rebootbl --module nvmem-reboot-mode.ko --out log.img
+                              [--os-version 0x220001a8]
+
+--os-version sets the header's os_version word (version << 11 | patch level). The release image leaves it 0, and a bootloader with
+anti-rollback refuses that (it returns to fastboot within a second); 0x220001a8 (17.0.0, patch 2026-08) is the value of the v0 image
+the 12 GiB unit accepted (the CrossDarwin recovery template)."""
 import argparse
 import gzip
 import hashlib
@@ -33,6 +38,7 @@ def main():
     ap.add_argument('--file', action='append', default=[], metavar='TARGET=SOURCE',
                     help='add a relative initramfs path, preserving the source executable bit')
     ap.add_argument('--append', action='append', default=[], help='additional kernel command-line argument')
+    ap.add_argument('--os-version', type=lambda v: int(v, 0), help='header os_version word (default: the release image\'s)')
     a = ap.parse_args()
     boot = a.boot.read_bytes()
     if boot[:8] != b'ANDROID!':
@@ -69,6 +75,8 @@ def main():
     pad = lambda b: b + b'\0' * (-len(b) % page)
     header = bytearray(page)
     header[:8] = b'ANDROID!'
+    if a.os_version is not None:
+        os_version = a.os_version
     struct.pack_into('<10I', header, 8, len(kernel), kernel_addr, len(ramdisk), 0x01000000, 0, 0x00f00000, tags, page, 0, os_version)
     cmdline = b' '.join([CMDLINE, *(value.encode() for value in a.append)])
     if len(cmdline) >= 512:

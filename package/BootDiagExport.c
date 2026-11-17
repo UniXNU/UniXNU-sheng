@@ -22,6 +22,19 @@ SYSCTL_INT(_kern, OID_AUTO, unixnu_diag_request, CTLFLAG_RW | CTLFLAG_LOCKED,
            &boot_diag_request, 0, "Request one enabled diagnostic export");
 SYSCTL_INT(_kern, OID_AUTO, unixnu_diag_status, CTLFLAG_RD | CTLFLAG_LOCKED,
            (int *)&boot_diag_status, 0, "Diagnostic export state");
+// The previous run's UFS log (BootLog.c prev_log_copy): its header, message area, newest slots and startup checkpoints, copied before
+// this run's writer first wrote over them; ENOENT when nothing was kept. Read with `sysctl -b kern.unixnu_prev_log > prev.bin` and
+// decode with scripts/read-sheng-log.py --prev prev.bin. Readable by every local user, like the board's other diagnostics.
+extern uint8_t *volatile boot_log_prev;
+extern volatile uint32_t boot_log_prev_bytes;
+static int unixnu_prev_log SYSCTL_HANDLER_ARGS {
+#pragma unused(oidp, arg1, arg2)
+  const uint8_t *blob = __atomic_load_n(&boot_log_prev, __ATOMIC_ACQUIRE);
+  if (!blob) return ENOENT;
+  return SYSCTL_OUT(req, blob, boot_log_prev_bytes);
+}
+SYSCTL_PROC(_kern, OID_AUTO, unixnu_prev_log, CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_LOCKED, NULL, 0, unixnu_prev_log, "S",
+            "The previous run's UFS log, copied before this run's log writer started");
 
 extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
 /* Opt-in capture of the cache loader's own error log. Runs on the log writer,

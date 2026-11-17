@@ -25,6 +25,21 @@ extern int vsnprintf(char *, size_t, const char *, va_list);
 #include <pexpert/pexpert.h>
 #include <kern/misc_protos.h>
 #include <IOKit/IOLib.h>
+
+// Board diagnostic formats use the collection's read-only constant segment.
+static const char boot_log_touch_cost_format[] __attribute__((section("__DATA_CONST,__const"))) = "[touch cost] irq armed=%u n=%u spurious=%u | wakes=%u peeks=%u stale=%u bad=%u reads=%u frames=%u | ms peek=%u read=%u process=%u";
+static const char boot_log_cpu_gov_format[] __attribute__((section("__DATA_CONST,__const"))) = "[cpu gov] d0 changes=%u mhz=%u busy=%u%% | d1 changes=%u mhz=%u busy=%u%% | d2 changes=%u mhz=%u busy=%u%% | boosts=%u frame=%u/%uw";
+static const char boot_log_cpu_ramp_format[] __attribute__((section("__DATA_CONST,__const"))) = "[cpu ramp] 10s windows 90%% busy/below top vote, run %% of vote: d0 %u/%u %u%% | d1 %u/%u %u%% | d2 %u/%u %u%%";
+static const char boot_log_touch_spi_format[] __attribute__((section("__DATA_CONST,__const"))) = "[touch spi] wait=%u attach=%x irqs=%u slept=%u by irq=%u by deadline=%u polled after wake mean=%uus max=%uus";
+static const char boot_log_bluetooth_format[] __attribute__((section("__DATA_CONST,__const"))) = "[bluetooth] state=%llu error=%lld phase=%llu baud=%llu tx=%llu rx=%llu irq=%llu timeout=%llu sleep=%llu smmu=%llu/%llu fsr=%llx fw=%llx qup=%llx votes=%llx soc=%llx rompatch=%llx power=%llx owners=%llx";
+static const char boot_log_bluetooth_uart_format[] __attribute__((section("__DATA_CONST,__const"))) = "[bluetooth uart] fault=%llx/%llx/%llx/%llx malformed=%llu unmatched=%llu dma=%llu/%llu errors=%llu/%llu loop=%llx/%llx";
+static const char boot_log_bluetooth_ibs_format[] __attribute__((section("__DATA_CONST,__const"))) = "[bluetooth ibs] wake_ind=%llu wake_ack=%llu sleep_ind=%llu reverts=%llu refused=%llu unarmed=%llu cancel_timeouts=%llu wakes=%llu";
+static const char boot_log_bluetooth_scan_format[] __attribute__((section("__DATA_CONST,__const"))) = "[bluetooth scan] sent/reply/status inquiry=%u/%u/%u legacy-param=%u/%u/%u legacy-enable=%u/%u/%u ext-param=%u/%u/%u ext-enable=%u/%u/%u reports=%u/%u/%u";
+static const char boot_log_bluetooth_boot_format[] __attribute__((section("__DATA_CONST,__const"))) = "[bluetooth boot] pins=%x/%x pre-tx-rx=%u status=%x m=%x s=%x tx=%x rx=%x fifo=%x rxlen=%u tlv=%x final=%x";
+static const char boot_log_touch_hold_format[] __attribute__((section("__DATA_CONST,__const"))) = "[touch hold] bridged=%u lifts none=%u far=%u weak=%u palm=%u taken=%u frames t2=%u t4=%u merges=%u peaks=%u full=%u ref=%u";
+static const char boot_log_adsp_format[] __attribute__((section("__DATA_CONST,__const"))) = "[adsp] st=%d err=%d irq=%d slave=%x items=%x qmp=%x rsc=%x fw=%dK rdy=%dms rx=%d tx=%d ch=%x unk=%d scm=%d/%x votes=%x";
+static const char boot_log_battery_format[] __attribute__((section("__DATA_CONST,__const"))) = "[battery] st=%d pct=%d mv=%d ma=%d temp=%d fl=%x cyc=%d ans=%d to=%x ntf=%d usb=%d full=%d design=%d cycles=%d drop=%x refuse=%d";
+
 extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
 extern void boot_cache_loader_log_capture(unsigned) __attribute__((weak_import));
 extern uint32_t boot_cache_input_ready(void) __attribute__((weak_import));
@@ -34,6 +49,7 @@ extern void boot_process_start(void);
 #endif
 
 extern int native_ufs_log_open(uint64_t *, uint64_t *, const char **) __attribute__((weak_import));
+extern int native_ufs_part_read(uint32_t, uint64_t, uint32_t, void *) __attribute__((weak_import));
 extern int native_ufs_log_write(uint64_t, uint32_t, const void *) __attribute__((weak_import));
 extern uint64_t native_ufs_export_blocks(void) __attribute__((weak_import));
 extern int native_ufs_export_write(uint64_t, uint32_t, const void *) __attribute__((weak_import));
@@ -139,6 +155,11 @@ extern volatile uint64_t native_ufs_block_reads __attribute__((weak_import)), na
     native_ufs_verify_ticks __attribute__((weak_import));
 extern volatile int native_staged_apps_stage __attribute__((weak_import));
 extern volatile int32_t native_buttons_stats[10] __attribute__((weak_import));
+// Platform sleep: ShengSleep.cpp's counters and ArmCpu's (drivers/ArmCpu/ArmCpuSleep.h layout).
+extern volatile int32_t sheng_sleep_stats[8] __attribute__((weak_import));
+struct armcpu_sleep_stats {uint32_t phase, entries, spurious, last_intid, last_reason, cpu_off_failures; uint64_t asleep_ticks;
+                           uint32_t masked, ticks, unarmed;};
+extern volatile struct armcpu_sleep_stats armcpu_sleep_stats __attribute__((weak_import));
 extern volatile int32_t native_keyboard_stats[17] __attribute__((weak_import));
 extern volatile int32_t native_keyboard_accel[4] __attribute__((weak_import));
 extern volatile int32_t native_keyboard_hid_stats[6] __attribute__((weak_import));
@@ -802,6 +823,23 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     snprintf(row, sizeof row, "B st=%d irq=%d rep=%d mask=%x apid=%d/%d off=%d pdc=%x err=%d spur=%d", native_buttons_stats[0], native_buttons_stats[1],
              native_buttons_stats[2], native_buttons_stats[3], native_buttons_stats[4], native_buttons_stats[5], native_buttons_stats[6],
              native_buttons_stats[7], native_buttons_stats[8], native_buttons_stats[9]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // Platform sleep (ShengSleep.cpp): the board's stage (2 registered), sleeps prepared, lid and power key wakes, lid reads closed while
+  // asleep, registration answer, will-sleep and has-powered-on notifications; then ArmCpu's: the phase reached (1 in the hook, 2 the other
+  // cores off, 3 waiting, 4 woken, 5 restored), sleeps, spurious wakes, storming lines masked, board ticks, sleeps with nothing armed,
+  // the waking INTID and reason (1 source, 2 timer, 3 storm), failed CPU_OFFs. The rows written before a sleep and after a wake show
+  // where a sleep that never came back stopped.
+  if (&sheng_sleep_stats && sheng_sleep_stats[0]) {
+    char row[220];
+    int n = snprintf(row, sizeof row, "SL st=%d n=%d lid=%d pwr=%d lidc=%d reg=%d will=%d on=%d", sheng_sleep_stats[0], sheng_sleep_stats[1],
+                     sheng_sleep_stats[2], sheng_sleep_stats[3], sheng_sleep_stats[4], sheng_sleep_stats[5], sheng_sleep_stats[6],
+                     sheng_sleep_stats[7]);
+    if (&armcpu_sleep_stats && n > 0 && (size_t)n < sizeof row) {
+      snprintf(row + n, sizeof row - (size_t)n, " ph=%u n=%u spur=%u mask=%u tick=%u unarm=%u id=%u why=%u off=%u", armcpu_sleep_stats.phase,
+               armcpu_sleep_stats.entries, armcpu_sleep_stats.spurious, armcpu_sleep_stats.masked, armcpu_sleep_stats.ticks,
+               armcpu_sleep_stats.unarmed, armcpu_sleep_stats.last_intid, armcpu_sleep_stats.last_reason, armcpu_sleep_stats.cpu_off_failures);
+    }
     at = put(out, at, cap, row, sizeof row);
   }
   // Keyboard cover (KeyboardProbe.cpp): stage (7 serving, negative the failed step) and its detail, engine protocol and clock, boot ROM
@@ -1504,7 +1542,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   if (&native_touch_cost && &native_touch_irq_stats) {
     const volatile uint32_t *c = native_touch_cost;
     char row[220];
-    snprintf(row, sizeof row, "[touch cost] irq armed=%u n=%u spurious=%u | wakes=%u peeks=%u stale=%u bad=%u reads=%u frames=%u | ms peek=%u read=%u process=%u",
+    snprintf(row, sizeof row, boot_log_touch_cost_format,
              native_touch_irq_stats[0], native_touch_irq_stats[1], native_touch_irq_stats[2], c[0], c[1], c[2], c[3], c[4], c[5],
              c[6] / 1000, c[7] / 1000, c[8] / 1000);
     at = put(out, at, cap, row, sizeof row);
@@ -1599,7 +1637,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_gpu_perf_vote ? native_gpu_perf_vote[1] : 0);
     at = put(out, at, cap, row, sizeof row);
     if (&native_cpufreq_gov && (native_cpufreq_gov[1] || native_cpufreq_gov[4] || native_cpufreq_gov[7])) {
-      snprintf(row, sizeof row, "[cpu gov] d0 changes=%u mhz=%u busy=%u%% | d1 changes=%u mhz=%u busy=%u%% | d2 changes=%u mhz=%u busy=%u%% | boosts=%u frame=%u/%uw",
+      snprintf(row, sizeof row, boot_log_cpu_gov_format,
                native_cpufreq_gov[0], native_cpufreq_gov[1], native_cpufreq_gov[2], native_cpufreq_gov[3], native_cpufreq_gov[4],
                native_cpufreq_gov[5], native_cpufreq_gov[6], native_cpufreq_gov[7], native_cpufreq_gov[8],
                &native_cpufreq_boosts ? native_cpufreq_boosts : 0, &native_cpufreq_frame ? native_cpufreq_frame[0] : 0,
@@ -1613,7 +1651,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       }
       if (&native_cpufreq_ramp) {
         const volatile uint32_t *r = native_cpufreq_ramp;
-        snprintf(row, sizeof row, "[cpu ramp] 10s windows 90%% busy/below top vote, run %% of vote: d0 %u/%u %u%% | d1 %u/%u %u%% | d2 %u/%u %u%%",
+        snprintf(row, sizeof row, boot_log_cpu_ramp_format,
                  r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]);
         at = put(out, at, cap, row, sizeof row);
       }
@@ -1662,7 +1700,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     // interrupt and by the deadline, then the time polled after the last wake of a transfer: mean and longest.
     if (&native_touch_spi_wait && native_touch_spi_wait[0]) {
       const volatile uint32_t *w = native_touch_spi_wait;
-      snprintf(row, sizeof row, "[touch spi] wait=%u attach=%x irqs=%u slept=%u by irq=%u by deadline=%u polled after wake mean=%uus max=%uus",
+      snprintf(row, sizeof row, boot_log_touch_spi_format,
                w[0], w[1], w[2], w[3], w[4], w[5], w[3] ? w[6] / w[3] : 0, w[7]);
       at = put(out, at, cap, row, sizeof row);
     }
@@ -1675,10 +1713,10 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   if (&native_bluetooth_stats && (native_bluetooth_stats[0] || native_bluetooth_stats[14])) {
     const volatile uint64_t *b=native_bluetooth_stats;char row[300];
-    snprintf(row,sizeof row,"[bluetooth] state=%llu error=%lld phase=%llu baud=%llu tx=%llu rx=%llu irq=%llu timeout=%llu sleep=%llu smmu=%llu/%llu fsr=%llx fw=%llx qup=%llx votes=%llx soc=%llx rompatch=%llx power=%llx owners=%llx",
+    snprintf(row,sizeof row,boot_log_bluetooth_format,
         b[0],(long long)b[1],b[14],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13],b[18],b[19],b[20],b[21]);
     at=put(out,at,cap,row,sizeof row);
-    snprintf(row,sizeof row,"[bluetooth uart] fault=%llx/%llx/%llx/%llx malformed=%llu unmatched=%llu dma=%llu/%llu errors=%llu/%llu loop=%llx/%llx",
+    snprintf(row,sizeof row,boot_log_bluetooth_uart_format,
         b[22],b[23],b[24],b[25],b[26],b[27],b[28],b[29],b[15],b[16],b[30],b[31]);
     at=put(out,at,cap,row,sizeof row);
     if(&qbt_transport_activity) {
@@ -1688,14 +1726,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
     if(&native_bluetooth_ibs) {
       const volatile uint64_t *w=native_bluetooth_ibs;
-      snprintf(row,sizeof row,"[bluetooth ibs] wake_ind=%llu wake_ack=%llu sleep_ind=%llu reverts=%llu refused=%llu unarmed=%llu cancel_timeouts=%llu wakes=%llu",
+      snprintf(row,sizeof row,boot_log_bluetooth_ibs_format,
           (unsigned long long)w[0],(unsigned long long)w[1],(unsigned long long)w[2],(unsigned long long)w[3],(unsigned long long)w[4],
           (unsigned long long)w[5],(unsigned long long)w[6],(unsigned long long)w[7]);
       at=put(out,at,cap,row,sizeof row);
     }
     if(&native_bluetooth_discovery) {
       const volatile uint32_t *d=native_bluetooth_discovery;
-      snprintf(row,sizeof row,"[bluetooth scan] sent/reply/status inquiry=%u/%u/%u legacy-param=%u/%u/%u legacy-enable=%u/%u/%u ext-param=%u/%u/%u ext-enable=%u/%u/%u reports=%u/%u/%u",
+      snprintf(row,sizeof row,boot_log_bluetooth_scan_format,
           d[0],d[1],d[2],d[3],d[4],d[5],d[6],d[7],d[8],d[9],d[10],d[11],d[12],d[13],d[14],d[15],d[16],d[17]);
       at=put(out,at,cap,row,sizeof row);
     }
@@ -1706,7 +1744,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
     if(&native_bluetooth_boot_state && native_bluetooth_boot_state[0]) {
       volatile uint32_t *s=native_bluetooth_boot_state;
-      snprintf(row,sizeof row,"[bluetooth boot] pins=%x/%x pre-tx-rx=%u status=%x m=%x s=%x tx=%x rx=%x fifo=%x rxlen=%u tlv=%x final=%x",
+      snprintf(row,sizeof row,boot_log_bluetooth_boot_format,
           s[0],s[2],s[1],s[3],s[4],s[5],s[6],s[7],s[8],s[9],s[10],s[11]);
       at=put(out,at,cap,row,sizeof row);
     }
@@ -1981,7 +2019,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // Touch noise before the fuzz filter: resting or slow frames, mean step (x + y) and largest single-axis step, in 0.1 px.
   if (&native_touch_hold && native_touch_hold[7]) {
     char row[200];
-    snprintf(row, sizeof row, "[touch hold] bridged=%u lifts none=%u far=%u weak=%u palm=%u taken=%u frames t2=%u t4=%u merges=%u peaks=%u full=%u ref=%u",
+    snprintf(row, sizeof row, boot_log_touch_hold_format,
              native_touch_hold[0], native_touch_hold[1], native_touch_hold[2], native_touch_hold[3], native_touch_hold[4], native_touch_hold[5],
              native_touch_hold[6], native_touch_hold[7], native_touch_hold[10], native_touch_hold[11], native_touch_hold[12], native_touch_hold[13]);
     at = put(out, at, cap, row, sizeof row);
@@ -2008,7 +2046,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // adsp.mbn KiB, ms to ready, GLINK messages in/out, channels up, opens nobody serves, last SCM result, rail votes; then its note.
   if (&native_adsp_stats && native_adsp_stats[0]) {
     char row[200];
-    snprintf(row, sizeof row, "[adsp] st=%d err=%d irq=%d slave=%x items=%x qmp=%x rsc=%x fw=%dK rdy=%dms rx=%d tx=%d ch=%x unk=%d scm=%d/%x votes=%x",
+    snprintf(row, sizeof row, boot_log_adsp_format,
              native_adsp_stats[0], native_adsp_stats[1], native_adsp_stats[2], native_adsp_stats[3], native_adsp_stats[4], native_adsp_stats[5],
              native_adsp_stats[6], native_adsp_stats[7], native_adsp_stats[8], native_adsp_stats[9], native_adsp_stats[10], native_adsp_stats[11],
              native_adsp_stats[12], native_adsp_stats[13], native_adsp_stats[14], native_adsp_stats[15]);
@@ -2059,7 +2097,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       snprintf(row, sizeof row, "[usb host] role=%x n=%u xhci=%x cmd=%x sts=%x port=%x/%x hcs=%x dev=%u last=%x", native_usb_stats[44], native_usb_stats[45], native_usb_stats[46], native_usb_stats[47], native_usb_stats[48], native_usb_stats[49], native_usb_stats[50], native_usb_stats[51], native_usb_stats[52], native_usb_stats[53]);
       at = put(out, at, cap, row, sizeof row);
     }
-    snprintf(row, sizeof row, "[battery] st=%d pct=%d mv=%d ma=%d temp=%d fl=%x cyc=%d ans=%d to=%x ntf=%d usb=%d full=%d design=%d cycles=%d drop=%x refuse=%d",
+    snprintf(row, sizeof row, boot_log_battery_format,
              native_battery_stats[0], native_battery_stats[1], native_battery_stats[2], native_battery_stats[3], native_battery_stats[4],
              native_battery_stats[5], native_battery_stats[6], native_battery_stats[7], native_battery_stats[8], native_battery_stats[9],
              native_battery_stats[10], native_battery_stats[11], native_battery_stats[12], native_battery_stats[13], native_battery_stats[14],
@@ -2763,6 +2801,66 @@ static void round_watch_start(void) {
   if (kernel_thread_start_priority(round_watch, NULL, BASEPRI_KERNEL, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
 
+// The previous run's log (kern.unixnu_prev_log, BootDiagExport.c). Every run opens the same window and starts writing at once, so the
+// run before it, such as one that hung and was restarted by hand, would be gone. Before its first write the writer copies that run's
+// header and message area, its newest PrevSlots slots and the startup checkpoints after the slots, when the header on the medium
+// describes this very window, into one buffer: a PrevPrefix-byte prefix (magic "SHPREV01", version 1, the extent count, the window
+// size, then each extent's first block and block count) and the blocks of each extent in order. scripts/read-sheng-log.py --prev
+// puts them back in place. read(rel, blocks, dst) reads blocks of the window; alloc and release give and take LogBlock-aligned memory.
+// Returns the buffer (its size in *bytes), or NULL when the medium holds no log of this window or a read fails.
+enum {PrevSlots = 64, PrevPrefix = 4096, PrevExtents = PrevSlots + 2};
+struct prev_log_prefix {char magic[8]; uint32_t version, extents, window_blocks, reserved; uint32_t extent[PrevExtents][2];};
+_Static_assert(sizeof(struct prev_log_prefix) <= PrevPrefix, "the prefix fits its block");
+static uint8_t *prev_log_copy(uint64_t first, uint64_t blocks, int (*read)(uint64_t, uint32_t, void *), void *(*alloc)(size_t),
+                              void (*release)(void *, size_t), uint32_t *bytes) {
+  if (blocks <= LogSlotFirst || blocks > 0xffffffffu) return NULL;
+  const uint32_t slot_count = (uint32_t)((blocks - LogSlotFirst) / LogSlotBlocks);
+  uint8_t *block = alloc(LogBlock);
+  if (!block) return NULL;
+  struct boot_log_header old;
+  const int got = read(0, 1, block);
+  memcpy(&old, block, sizeof old);
+  release(block, LogBlock);
+  if (!got || memcmp(old.magic, "SHLOG001", 8) || old.version < 3 || old.first_lba != first || old.window_blocks != blocks ||
+      old.msg_first != LogMsgFirst || old.msg_blocks != LogMsgBlocks || old.slot_first != LogSlotFirst ||
+      old.slot_blocks != LogSlotBlocks || old.slot_count != slot_count || !slot_count || !old.slots_written)
+    return NULL;
+  struct prev_log_prefix p;
+  memset(&p, 0, sizeof p);
+  memcpy(p.magic, "SHPREV01", 8);
+  p.version = 1;
+  p.window_blocks = (uint32_t)blocks;
+  uint32_t n = 0, total = 0;
+  p.extent[n][0] = 0; p.extent[n][1] = LogSlotFirst; total += LogSlotFirst; ++n;   // the header and the message area
+  uint32_t keep = old.slots_written < PrevSlots ? old.slots_written : PrevSlots;
+  if (keep > slot_count) keep = slot_count;
+  for (uint32_t i = old.slots_written - keep; i < old.slots_written; ++i) {
+    p.extent[n][0] = LogSlotFirst + (i % slot_count) * LogSlotBlocks; p.extent[n][1] = LogSlotBlocks; total += LogSlotBlocks; ++n;
+  }
+  const uint32_t tail = LogSlotFirst + slot_count * LogSlotBlocks;   // the startup checkpoints
+  if (tail < blocks) {p.extent[n][0] = tail; p.extent[n][1] = (uint32_t)(blocks - tail); total += p.extent[n][1]; ++n;}
+  p.extents = n;
+  const size_t size = PrevPrefix + (size_t)total * LogBlock;
+  uint8_t *out = alloc(size);
+  if (!out) return NULL;
+  memset(out, 0, PrevPrefix);
+  memcpy(out, &p, sizeof p);
+  uint8_t *at = out + PrevPrefix;
+  for (uint32_t e = 0; e < n; ++e) {
+    if (!read(p.extent[e][0], p.extent[e][1], at)) {release(out, size); return NULL;}
+    at += (size_t)p.extent[e][1] * LogBlock;
+  }
+  *bytes = (uint32_t)size;
+  return out;
+}
+// End of the previous run's log.
+uint8_t *volatile boot_log_prev;         // the copy, for kern.unixnu_prev_log (BootDiagExport.c); NULL when nothing was kept
+volatile uint32_t boot_log_prev_bytes;
+static uint64_t prev_first_lba;
+static int prev_read(uint64_t rel, uint32_t n, void *dst) {return native_ufs_part_read(0, prev_first_lba + rel, n, dst);}
+static void *prev_alloc(size_t n) {return IOMallocAligned(n, LogBlock);}
+static void prev_release(void *p, size_t n) {IOFreeAligned(p, n);}
+
 static void writer(void *arg, wait_result_t result) {
   (void)arg; (void)result;
   thread_set_thread_name(current_thread(), "boot_log");
@@ -2775,6 +2873,16 @@ static void writer(void *arg, wait_result_t result) {
     IOSleep(1000);
   }
   boot_log_first_lba = first;
+  if (&native_ufs_part_read) {
+    uint32_t prev_bytes = 0;
+    prev_first_lba = first;
+    uint8_t *prev = prev_log_copy(first, blocks, prev_read, prev_alloc, prev_release, &prev_bytes);
+    if (prev) {
+      boot_log_prev_bytes = prev_bytes;
+      __atomic_store_n(&boot_log_prev, prev, __ATOMIC_RELEASE);
+      IOLog("boot log: the previous run's log is kept for kern.unixnu_prev_log (%u bytes)\n", prev_bytes);
+    }
+  }
   const uint32_t slot_count = (uint32_t)((blocks - LogSlotFirst) / LogSlotBlocks);
   if (&native_ufs_export_blocks && &native_ufs_export_write) {
     IOLockLock(export_lock);
