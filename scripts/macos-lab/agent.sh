@@ -93,10 +93,14 @@ fi
         /usr/bin/pkill -KILL -u "$owner" -x iconservicesagent 2>/dev/null || :
         /bin/sleep 1
         single=$(/bin/cat /private/var/ngpu/test/share/icon-probe-path)
+        tiling_cost_check=0
+        if [ "$(/bin/cat /private/var/ngpu/test/share/tiling-cost-check 2>/dev/null)" = 1 ]; then
+            tiling_cost_check=1
+        fi
         if [ "$single" = settings ]; then
-            CI_ENABLE_MPS=0 "$tool" --settings-icons /Users/Shared/unixnu-test/icons.png >> "$log" 2>&1 &
+            CI_ENABLE_MPS=0 NATIVE_METAL_TILING_CHECK="$tiling_cost_check" "$tool" --settings-icons /Users/Shared/unixnu-test/icons.png >> "$log" 2>&1 &
         else
-            CI_ENABLE_MPS=0 "$tool" --icon-symbols "$single" /Users/Shared/unixnu-test/icons.png >> "$log" 2>&1 &
+            CI_ENABLE_MPS=0 NATIVE_METAL_TILING_CHECK="$tiling_cost_check" "$tool" --icon-symbols "$single" /Users/Shared/unixnu-test/icons.png >> "$log" 2>&1 &
         fi
     else
         CI_ENABLE_MPS=0 "$tool" /Users/Shared/unixnu-test/icons.png >> "$log" 2>&1 &
