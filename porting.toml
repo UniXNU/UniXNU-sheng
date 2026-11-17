@@ -1059,7 +1059,7 @@ result = "The production launch policy check passed. The four lab control files 
 kind = "host"
 reference = "https://github.com/UniXNU/UniXNU-sheng/commit/e19928db3e6f49247f21b4593906edfc70750d65"
 revision = "e19928db3e6f49247f21b4593906edfc70750d65"
-command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --auto-login-user unixnu --password-stdin --capture-graphics --ssh-public-key authorized-key.pub --icon-path settings --icon-dump-cb 4:1 --preserve-data --autoreset 180"
+command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --auto-login-user unixnu --password-stdin --capture-graphics --ssh-public-key authorized-key.pub --icon-path settings --icon-dump-cb 4:1 --preserve-data --autoreset 180 < account-password"
 result = "One preparation produced a 100450304-byte v0 image with mode 0600, the signed GPU addon, existing-account automatic login, SSH and graphics capture."
 
 [[area.evidence]]
