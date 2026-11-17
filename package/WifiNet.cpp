@@ -36,6 +36,8 @@ extern "C" {
 #include <stdarg.h>
 #include "nw_abi.h"
 #include "nw_control_endpoint.h"
+#include "WifiScan.h"
+static_assert(SHENG_WIFI_SCAN_FREQUENCIES == NW_WIFI_SCAN_FREQUENCIES_MAX, "the frequencies a scan request carries");
 
 #if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
 // macOS: en0 is ShengEthernet (an IOEthernetController of the original IONetworkingFamily, ShengEthernet.cpp), which carries this
@@ -580,10 +582,30 @@ int apple80211(bool set, apple80211req &rq) {
         nw_wifi_status current; nw_wifi_status_get(&current);
         if (current.state >= NW_STA_AUTH) return EBUSY; // preserve pending teardown
       }
-      uint8_t buf[0x80]; if (copy_in(rq, buf, sizeof buf)) return EFAULT;
-      uint32_t ssidLength; memcpy(&ssidLength, buf + 16, 4); const uint8_t *ssid = buf + 20;
-      uint32_t scanType = 0; if (type == kScanReq) memcpy(&scanType, buf + 0x34, 4);
-      { static unsigned said; if (said++ < 16) log(6, "wifi-net: scan request: scan type %u, ssid length %u, %d networks held", scanType, ssidLength, nw_wifi_bss_count()); }
+      // The channels asked for go with it (WifiScan.h sheng_wifi_scan_frequencies): every band took longer than the scan is waited for.
+      uint32_t ssidLength = 0, scanType = 0, frequencies = 0, mhz[SHENG_WIFI_SCAN_FREQUENCIES]; const uint8_t *ssid = nullptr;
+      if (type == kScanReq) {
+        const uint32_t copied = SHENG_WIFI_SCAN_ONE_CHANNELS + SHENG_WIFI_SCAN_CHANNELS_READ * SHENG_WIFI_SCAN_CHANNEL_ENTRY;
+        if (copy_in(rq, out.raw, copied)) return EFAULT;
+        memcpy(&ssidLength, out.raw + 16, 4); ssid = out.raw + 20; memcpy(&scanType, out.raw + 0x34, 4);
+        frequencies = sheng_wifi_scan_frequencies(out.raw, rq.req_len < copied ? rq.req_len : copied, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT,
+                                                  SHENG_WIFI_SCAN_ONE_CHANNELS, mhz);
+        { static unsigned said; if (said++ < 16) log(6, "wifi-net: scan request: scan type %u, ssid length %u, %u frequencies, %d networks held", scanType, ssidLength, frequencies, nw_wifi_bss_count()); }
+      } else {
+        // Names the networks (WifiScan.h): what airportd sends for a saved network it counts as hidden. The names stay in out.raw,
+        // behind the channels read.
+        const uint32_t copied = SHENG_WIFI_SCAN_MULTIPLE_CHANNELS + SHENG_WIFI_SCAN_CHANNELS_READ * SHENG_WIFI_SCAN_CHANNEL_ENTRY;
+        static_assert(0x600 >= SHENG_WIFI_SCAN_MULTIPLE_CHANNELS + SHENG_WIFI_SCAN_CHANNELS_READ * SHENG_WIFI_SCAN_CHANNEL_ENTRY &&
+                      0x600 + sizeof(sheng_wifi_scan_multiple) <= sizeof(Out), "parsed names fit behind the request");
+        if (copy_in(rq, out.raw, copied)) return EFAULT;
+        sheng_wifi_scan_multiple *names = reinterpret_cast<sheng_wifi_scan_multiple *>(out.raw + 0x600);
+        const uint32_t held = rq.req_len < copied ? rq.req_len : copied;
+        const int bad = sheng_wifi_scan_multiple_parse(out.raw, held, names);
+        if (!bad) frequencies = sheng_wifi_scan_frequencies(out.raw, held, SHENG_WIFI_SCAN_MULTIPLE_CHANNEL_COUNT, SHENG_WIFI_SCAN_MULTIPLE_CHANNELS, mhz);
+        { static unsigned said; if (said++ < 16) log(6, "wifi-net: named scan: len %u, %s, names %u, wildcard %u, scan type %u, %u frequencies, %d networks held", rq.req_len, bad ? "refused" : "read", names->named, names->wildcard, names->scan_type, frequencies, nw_wifi_bss_count()); }
+        if (bad) return EINVAL;
+        scanType = names->scan_type; sheng_wifi_scan_multiple_target(names, &ssid, &ssidLength);
+      }
       // The held results are asked for: the list is read from its start and no scan runs (none held yet: a scan, as for the other types).
       if (scanType == kScanTypeCached && nw_wifi_bss_count() > 0) { gScanCursor = 0; gResultsShown = 24; return 0; }
       // joining or joined: a scan takes the radio off channel for seconds and the access point's beacons and handshake frames are missed, so
@@ -593,7 +615,8 @@ int apple80211(bool set, apple80211req &rq) {
         static unsigned answered; if (++answered <= 8 || answered % 64 == 0) log(6, "wifi-net: scan %u while joined: answered from the cache", answered);
         gScanning = 1; gScanCursor = 0; gResultsShown = 24; uint64_t at; clock_interval_to_deadline(2000, kMillisecondScale, &at); thread_call_enter_delayed(gCachedScan, at); return 0; }
       gScanning = 1; gScanCursor = 0; gResultsShown = 0;
-      int result = nw_wifi_scan(ssidLength && ssidLength <= 32 ? ssid : nullptr, ssidLength <= 32 ? ssidLength : 0);
+      int result = nw_wifi_scan_frequencies(ssid && ssidLength && ssidLength <= 32 ? ssid : nullptr, ssid && ssidLength <= 32 ? ssidLength : 0,
+                                            frequencies ? mhz : nullptr, frequencies);
       if (result) { __atomic_store_n(&gScanning, 0u, __ATOMIC_RELEASE); return ENETDOWN; }
       sheng_wifi_wake(); return 0; }
     case kAssociate: {
@@ -643,12 +666,7 @@ int apple80211(bool set, apple80211req &rq) {
   case kOpMode: return answer_value(rq, 1);   // station
   case kAuthType: w[0] = 1; w[1] = 1; w[2] = gKeyed ? 0x10 : 0; w[3] = 0; return copy_out(rq, w, 16);   // {version, lower: open system, upper: WPA2 personal, extension}
   case kPowerSave: return answer_value(rq, 0);
-  case kCardCaps: {   // a bitmap, bit n in byte n / 8: AES, AES-CCM, power management, short slot and preamble, WPA2, WME, short guard interval at 20 MHz
-    // and 46: the end of a scan is reported by the scan-done event. The framework's scan (IO80211 26C5035r, Apple80211Scan) waits for
-    // that event, up to 20 s, only with this bit; without it the results are read the moment the request returns, before the radio scanned.
-    static const uint8_t has[] = { 2, 3, 6, 9, 10, 14, 17, 19, 46 };
-    for (uint8_t b : has) out.raw[b / 8] |= static_cast<uint8_t>(1u << (b % 8));
-    return answer_bytes(rq, out.raw, 12); }
+  case kCardCaps: sheng_wifi_caps_fill(out.raw); return answer_bytes(rq, out.raw, SHENG_WIFI_CAPS_BYTES);   // WifiScan.h
   case kPhyMode: w[0] = 1; w[1] = 0x1 | 0x2 | 0x4 | 0x8 | 0x10 | 0x20 | 0x40; w[2] = st.state == NW_STA_UP ? 0x8 : 0; return copy_out(rq, w, 12);
   case kSsid: if (st.state < NW_STA_ASSOC) return ENOENT; return answer_bytes(rq, st.ssid, st.ssid_len);
   case kBssid: if (st.state < NW_STA_ASSOC) return ENOENT; return answer_bytes(rq, st.bssid, 6);
