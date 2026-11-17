@@ -101,6 +101,13 @@ graphics_state() {
     {
         /bin/date -u
         /bin/echo "boot=$boot"
+        runtime_stderr=/private/var/tmp/NativeAdrenoMetal.cache/runtime-stderr.log
+        if [ -s "$runtime_stderr" ]; then
+            /usr/bin/awk -v boot="$boot" '
+                /^native-metal runtime stderr boot=/ { current = index($0, "boot=" boot " ") != 0 }
+                current { print }
+            ' "$runtime_stderr" | /usr/bin/tail -c 65536
+        fi
         if [ -s /private/var/ngpu/test/share/icon-probe-path ] && [ -s "${icon_command_log%/*}/runtime-stderr.log" ]; then
             /usr/bin/grep -Ev '^native-metal dump (function|cb|pipeline|image) ' "${icon_command_log%/*}/runtime-stderr.log" | /usr/bin/tail -c 131072
         fi
