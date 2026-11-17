@@ -57,3 +57,18 @@ Capture `sa5ae6-42021120d`, boot `50C2AB62-9A9F-40B9-9099-5B9C12872385`, used th
 Device source `64e00e4d90e6455257ed477de703dfd95d25c68b` ([PR #123](https://github.com/UniXNU/UniXNU-sheng/pull/123)) adds `--tiling-cost-check` to the selected-icon preparation. The icon probe requests the runtime check with a three-second wait and records its verdict and medians in `icon-probe.log`. The runtime policy log includes the tiling state.
 
 Capture `s3e223-6182b8d69` returned `LinearCheap` on A740: linear 1.339 ms, optimal 1.048 ms, download 0.889 ms and upload 0.342 ms, medians of eight rounds. Its atlas pixels matched the reference and the device returned to fastboot.
+
+## Fixed desktop comparison
+
+Use `--graphics-comparison` in the preparation command. Source `fd964ee46eb855543482e2f7261bf49df3d22178` ([PR #124](https://github.com/UniXNU/UniXNU-sheng/pull/124)) selects one round for return timers below 300 seconds: General, Network, Displays and General, 15 seconds per pane, followed by 15 seconds of settling. The initial desktop reset waits 15 seconds. The animation uses an accessory application with a background window; Settings stays in front. Longer captures use two rounds, 20 seconds per pane and 30 seconds of settling. `agent.log` records the selected timing, pane requests and completion.
+
+Reference capture `sc3cc5-70185657`, boot `1A0BEED0-706D-4613-92AD-D57F340E0F70`, completed the four pane requests and settling period with the 20-layer animation. It returned after 197.638 seconds; Linux retrieval took 25.249 seconds and fastboot responded. Both ordered image packages passed local arm64e compilation, signing and packaging.
+
+```sh
+python3 scripts/audit-gpu-desktop-comparison.py \
+  /path/to/reference-capture /path/to/candidate-capture --output comparison.json
+```
+
+Each capture directory contains `diag/files`. The report uses current-boot pane requests and the raw frame clock, omits the first 30 seconds and matches GPU passes by size, format, draws, pixel count and fragment hash. It reports command callback latency, kernel submission calls, encoding CPU time and GPU pass medians and p95 values. A WindowServer restart or an incomplete sequence rejects the comparison.
+
+Candidate `sf2a4f-76733c08` restarted WindowServer from PID 173 to 1022; the command returned status 2. Its [runtime failure](metal-upstream-rendering.md#desktop-stability) remains under qualification.
