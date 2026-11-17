@@ -515,9 +515,12 @@ void publishLid(bool closed, bool changed) {
     if (!root) return;
     const lid_clamshell_message message = lid_clamshell_step(&gClamshell, closed);
     if (message == LidClamshellNone) return;
-    root->receivePowerNotification(message == LidClamshellClosed ? kIOPMClamshellClosed : kIOPMClamshellOpened);
+    // An open lid is sent with kIOPMSetValue (1 << 16, IOPMPrivate.h): the power manager then counts it as user input, which turns a dark
+    // wake from platform sleep into a full one and wakes the display, as a lid opening does on a Mac.
+    constexpr uint32_t kSetValue = 1u << 16;
+    root->receivePowerNotification(message == LidClamshellClosed ? kIOPMClamshellClosed : kIOPMClamshellOpened | kSetValue);
     IOLog(kClamshellLog, message == LidClamshellClosed ? "closed" : "open");
-    // macOS leaves the built-in panel to the clamshell sleep this board refuses: the backlight driver darkens it (LidClamshell.h).
+    // macOS leaves the built-in panel to the clamshell sleep, and the panel has no power switch: the backlight driver darkens it (LidClamshell.h).
     if (sheng_backlight_lid) sheng_backlight_lid(message == LidClamshellClosed);
 #endif
 }

@@ -1,0 +1,99 @@
+diff --git a/osfmk/arm64/cpu.c b/osfmk/arm64/cpu.c
+--- a/osfmk/arm64/cpu.c
++++ b/osfmk/arm64/cpu.c
+@@ -99,6 +99,14 @@
+ #else
+ extern void __attribute__((noreturn)) arm64_prepare_for_sleep(boolean_t deep_sleep);
+ #endif
++
++/*
++ * sheng: the platform sleep hook. The CPU driver of a board without Apple's sleep hardware (ArmCpu, boot-arg
++ * platform-sleep=1) installs it; ml_arm_sleep then calls it instead of arm64_prepare_for_sleep, whose non-Apple version is a WFI
++ * loop with no way back. A core other than the boot core does not return (PSCI CPU_OFF); the boot core returns once a wake source
++ * fires and resumes through arm_init_cpu's wake path, as the virtual platform's test_sleep_in_vm does.
++ */
++void (*arm64_platform_sleep_hook)(boolean_t boot_cpu) = NULL;
+ extern void arm64_force_wfi_clock_gate(void);
+ #if defined(APPLETYPHOON)
+ // <rdar://problem/15827409>
+@@ -1141,6 +1149,10 @@
+ #if CONFIG_CPU_COUNTERS
+ 		mt_sleep();
+ #endif /* CONFIG_CPU_COUNTERS */
++		if (arm64_platform_sleep_hook != NULL) {
++			arm64_platform_sleep_hook(TRUE);
++			arm_init_cpu(cpu_data_ptr, 0);
++		}
+ 		/* ARM64-specific preparation */
+ #if APPLEVIRTUALPLATFORM
+ 		extern bool test_sleep_in_vm;
+@@ -1183,6 +1195,9 @@
+ 			*(volatile uint32_t *)(cpu_data_ptr->coresight_base[CORESIGHT_ED] + ARM_DEBUG_OFFSET_DBGPRCR) = 0;
+ 		}
+ 
++		if (arm64_platform_sleep_hook != NULL) {
++			arm64_platform_sleep_hook(FALSE);
++		}
+ 		/* ARM64-specific preparation */
+ #if APPLEVIRTUALPLATFORM
+ 		arm64_prepare_for_sleep(true, cpu_data_ptr->cpu_number, ml_vtophys(reset_vector_vaddr));
+diff --git a/osfmk/arm/cpu_common.c b/osfmk/arm/cpu_common.c
+--- a/osfmk/arm/cpu_common.c
++++ b/osfmk/arm/cpu_common.c
+@@ -934,6 +934,26 @@
+ 	assert(ml_get_interrupts_enabled());
+ 	cpu_data_t *cpu_data_ptr = getCpuDatap();
+ 
++#if defined(__arm64__)
++	/*
++	 * sheng: with platform sleep (the CPU driver's arm64_platform_sleep_hook installed) the boot core resumes with no other core running,
++	 * so a lost self-IPI would never be made up by another core's signal (sheng_sigp_recover in cpu_signal_internal). After 100 ms the
++	 * flag is cleared here, as that recovery does.
++	 */
++	extern void (*arm64_platform_sleep_hook)(boolean_t boot_cpu);
++	if (arm64_platform_sleep_hook != NULL) {
++		uint64_t deadline;
++		nanoseconds_to_absolutetime(100 * NSEC_PER_MSEC, &deadline);
++		deadline += mach_absolute_time();
++		while (os_atomic_load(&cpu_data_ptr->cpu_signal, acquire) == SIGPdisabled) {
++			if (mach_absolute_time() > deadline) {
++				(void)sheng_sigp_recover(cpu_data_ptr);
++				break;
++			}
++		}
++		return;
++	}
++#endif /* defined(__arm64__) */
+ 	hw_wait_while_equals32(__DEVOLATILE(uint32_t*, &cpu_data_ptr->cpu_signal), SIGPdisabled);
+ }
+ 
+diff --git a/iokit/Kernel/IOPMrootDomain.cpp b/iokit/Kernel/IOPMrootDomain.cpp
+--- a/iokit/Kernel/IOPMrootDomain.cpp	2026-11-16 22:06:06
++++ b/iokit/Kernel/IOPMrootDomain.cpp	2026-11-16 22:06:28
+@@ -565,6 +565,9 @@
+ 
+ static uint32_t         gNoIdleFlag = 0;
+ static uint32_t         gSleepDisabledFlag = 0;
++#if defined(__arm64__)
++extern "C" void (*arm64_platform_sleep_hook)(boolean_t boot_cpu); // osfmk/arm64/cpu.c (sheng board patch)
++#endif
+ static uint32_t         gSwdPanic = 1;
+ static uint32_t         gSwdSleepTimeout = 0;
+ static uint32_t         gSwdWakeTimeout = 0;
+@@ -8507,6 +8510,16 @@
+ 				}
+ 			}
+ 
++#if defined(__arm64__)
++			/* sheng: platform-sleep=1 with the CPU driver's sleep hook installed lifts sleep-disabled. */
++			if (gSleepDisabledFlag && arm64_platform_sleep_hook != NULL) {
++				uint32_t platformSleep = 0;
++				if (PE_parse_boot_argn("platform-sleep", &platformSleep, sizeof(platformSleep)) && platformSleep == 1) {
++					gSleepDisabledFlag = 0;
++					IOLog("PMRD: sleep enabled by platform-sleep\n");
++				}
++			}
++#endif
+ 			if (lowBatteryCondition || thermalEmergencyState) {
+ 				if (lowBatteryCondition) {
+ 					privateSleepSystem(kIOPMSleepReasonLowPower);

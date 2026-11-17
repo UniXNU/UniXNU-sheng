@@ -540,6 +540,7 @@ extern void sheng_audio_probe(void);
 extern void sheng_buttons_probe(void);
 extern void sheng_backlight_probe(void);
 extern "C" void sheng_keyboard_probe(void) __attribute__((weak_import));
+extern "C" void sheng_sleep_probe(void) __attribute__((weak_import));
 extern "C" void sheng_dpu_probe(void);
 // IOKit's busy services while the registry is not quiet: the network configuration names interfaces only once IOKit is quiet (or after its
 // 240 s limit), and the TimeSync clock manager waits for quiet too, so a service whose matching never ends holds up the network, TimeSync
@@ -637,6 +638,7 @@ void native_legacy_display_late_probe(void) {
     sheng_buttons_probe();
     sheng_backlight_probe();
     if (sheng_keyboard_probe) sheng_keyboard_probe();
+    if (sheng_sleep_probe) sheng_sleep_probe();
     sheng_dpu_probe();
     native_hid_input_probe();
     IOService *display=pendingLegacyDisplay;if(!display){native_legacy_display_checkpoint();return;}pendingLegacyDisplay=nullptr;

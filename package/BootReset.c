@@ -136,6 +136,7 @@ _Static_assert(BR_WDT_TIMEOUT_MS <= 32000, "Gunyah watchdog timeout exceeds the 
 volatile int32_t boot_reset_wdt_stats[4];   // [0] status call result, [1] set-time result, [2] enable result, [3] pings sent
 static uint32_t wdt_deadline;
 static unsigned wdt_stopped;
+static unsigned wdt_pinging;   // 1 while wdt_thread pings
 void boot_reset_watchdog_stop(void) {
   __atomic_store_n(&wdt_stopped, 1, __ATOMIC_RELEASE);
 }
@@ -149,12 +150,22 @@ static void wdt_thread(void *arg, wait_result_t wr) {
   thread_set_thread_name(current_thread(), "boot_watchdog");
   uint64_t f = 0; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); if (!f) f = 19200000;
   const uint64_t start = watchdog_ticks();
+  __atomic_store_n(&wdt_pinging, 1, __ATOMIC_RELEASE);
   while (!__atomic_load_n(&wdt_stopped, __ATOMIC_ACQUIRE) &&
          (!wdt_deadline || (watchdog_ticks() - start) / f < wdt_deadline)) {
     smc2(BR_WDT_PING, 0, 0, NULL);
     boot_reset_wdt_stats[3] = boot_reset_wdt_stats[3] + 1;
     IOSleep(10000);
   }
+  __atomic_store_n(&wdt_pinging, 0, __ATOMIC_RELEASE);
+}
+// Platform sleep (ShengSleep.cpp, through ArmCpu's board tick every 10 s): the ping wdt_thread cannot send while the system sleeps, sent
+// from the boot core with interrupts masked. Nothing unless that thread is pinging (the watchdog taken over, not stopped, its deadline
+// not passed).
+void boot_reset_watchdog_ping(void) {
+  if (!__atomic_load_n(&wdt_pinging, __ATOMIC_ACQUIRE) || __atomic_load_n(&wdt_stopped, __ATOMIC_ACQUIRE)) return;
+  smc2(BR_WDT_PING, 0, 0, NULL);
+  boot_reset_wdt_stats[3] = boot_reset_wdt_stats[3] + 1;
 }
 int boot_reset_watchdog(uint32_t deadline, char *text, unsigned cap) {
   uint64_t since = 0;

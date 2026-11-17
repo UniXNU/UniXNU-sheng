@@ -34,6 +34,7 @@ extern void boot_process_start(void);
 #endif
 
 extern int native_ufs_log_open(uint64_t *, uint64_t *, const char **) __attribute__((weak_import));
+extern int native_ufs_part_read(uint32_t, uint64_t, uint32_t, void *) __attribute__((weak_import));
 extern int native_ufs_log_write(uint64_t, uint32_t, const void *) __attribute__((weak_import));
 extern uint64_t native_ufs_export_blocks(void) __attribute__((weak_import));
 extern int native_ufs_export_write(uint64_t, uint32_t, const void *) __attribute__((weak_import));
@@ -139,6 +140,11 @@ extern volatile uint64_t native_ufs_block_reads __attribute__((weak_import)), na
     native_ufs_verify_ticks __attribute__((weak_import));
 extern volatile int native_staged_apps_stage __attribute__((weak_import));
 extern volatile int32_t native_buttons_stats[10] __attribute__((weak_import));
+// Platform sleep: ShengSleep.cpp's counters and ArmCpu's (drivers/ArmCpu/ArmCpuSleep.h layout).
+extern volatile int32_t sheng_sleep_stats[8] __attribute__((weak_import));
+struct armcpu_sleep_stats {uint32_t phase, entries, spurious, last_intid, last_reason, cpu_off_failures; uint64_t asleep_ticks;
+                           uint32_t masked, ticks, unarmed;};
+extern volatile struct armcpu_sleep_stats armcpu_sleep_stats __attribute__((weak_import));
 extern volatile int32_t native_keyboard_stats[17] __attribute__((weak_import));
 extern volatile int32_t native_keyboard_accel[4] __attribute__((weak_import));
 extern volatile int32_t native_keyboard_hid_stats[6] __attribute__((weak_import));
@@ -802,6 +808,23 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     snprintf(row, sizeof row, "B st=%d irq=%d rep=%d mask=%x apid=%d/%d off=%d pdc=%x err=%d spur=%d", native_buttons_stats[0], native_buttons_stats[1],
              native_buttons_stats[2], native_buttons_stats[3], native_buttons_stats[4], native_buttons_stats[5], native_buttons_stats[6],
              native_buttons_stats[7], native_buttons_stats[8], native_buttons_stats[9]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // Platform sleep (ShengSleep.cpp): the board's stage (2 registered), sleeps prepared, lid and power key wakes, lid reads closed while
+  // asleep, registration answer, will-sleep and has-powered-on notifications; then ArmCpu's: the phase reached (1 in the hook, 2 the other
+  // cores off, 3 waiting, 4 woken, 5 restored), sleeps, spurious wakes, storming lines masked, board ticks, sleeps with nothing armed,
+  // the waking INTID and reason (1 source, 2 timer, 3 storm), failed CPU_OFFs. The rows written before a sleep and after a wake show
+  // where a sleep that never came back stopped.
+  if (&sheng_sleep_stats && sheng_sleep_stats[0]) {
+    char row[220];
+    int n = snprintf(row, sizeof row, "SL st=%d n=%d lid=%d pwr=%d lidc=%d reg=%d will=%d on=%d", sheng_sleep_stats[0], sheng_sleep_stats[1],
+                     sheng_sleep_stats[2], sheng_sleep_stats[3], sheng_sleep_stats[4], sheng_sleep_stats[5], sheng_sleep_stats[6],
+                     sheng_sleep_stats[7]);
+    if (&armcpu_sleep_stats && n > 0 && (size_t)n < sizeof row) {
+      snprintf(row + n, sizeof row - (size_t)n, " ph=%u n=%u spur=%u mask=%u tick=%u unarm=%u id=%u why=%u off=%u", armcpu_sleep_stats.phase,
+               armcpu_sleep_stats.entries, armcpu_sleep_stats.spurious, armcpu_sleep_stats.masked, armcpu_sleep_stats.ticks,
+               armcpu_sleep_stats.unarmed, armcpu_sleep_stats.last_intid, armcpu_sleep_stats.last_reason, armcpu_sleep_stats.cpu_off_failures);
+    }
     at = put(out, at, cap, row, sizeof row);
   }
   // Keyboard cover (KeyboardProbe.cpp): stage (7 serving, negative the failed step) and its detail, engine protocol and clock, boot ROM
@@ -2763,6 +2786,66 @@ static void round_watch_start(void) {
   if (kernel_thread_start_priority(round_watch, NULL, BASEPRI_KERNEL, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
 
+// The previous run's log (kern.unixnu_prev_log, BootDiagExport.c). Every run opens the same window and starts writing at once, so the
+// run before it, such as one that hung and was restarted by hand, would be gone. Before its first write the writer copies that run's
+// header and message area, its newest PrevSlots slots and the startup checkpoints after the slots, when the header on the medium
+// describes this very window, into one buffer: a PrevPrefix-byte prefix (magic "SHPREV01", version 1, the extent count, the window
+// size, then each extent's first block and block count) and the blocks of each extent in order. scripts/read-sheng-log.py --prev
+// puts them back in place. read(rel, blocks, dst) reads blocks of the window; alloc and release give and take LogBlock-aligned memory.
+// Returns the buffer (its size in *bytes), or NULL when the medium holds no log of this window or a read fails.
+enum {PrevSlots = 64, PrevPrefix = 4096, PrevExtents = PrevSlots + 2};
+struct prev_log_prefix {char magic[8]; uint32_t version, extents, window_blocks, reserved; uint32_t extent[PrevExtents][2];};
+_Static_assert(sizeof(struct prev_log_prefix) <= PrevPrefix, "the prefix fits its block");
+static uint8_t *prev_log_copy(uint64_t first, uint64_t blocks, int (*read)(uint64_t, uint32_t, void *), void *(*alloc)(size_t),
+                              void (*release)(void *, size_t), uint32_t *bytes) {
+  if (blocks <= LogSlotFirst || blocks > 0xffffffffu) return NULL;
+  const uint32_t slot_count = (uint32_t)((blocks - LogSlotFirst) / LogSlotBlocks);
+  uint8_t *block = alloc(LogBlock);
+  if (!block) return NULL;
+  struct boot_log_header old;
+  const int got = read(0, 1, block);
+  memcpy(&old, block, sizeof old);
+  release(block, LogBlock);
+  if (!got || memcmp(old.magic, "SHLOG001", 8) || old.version < 3 || old.first_lba != first || old.window_blocks != blocks ||
+      old.msg_first != LogMsgFirst || old.msg_blocks != LogMsgBlocks || old.slot_first != LogSlotFirst ||
+      old.slot_blocks != LogSlotBlocks || old.slot_count != slot_count || !slot_count || !old.slots_written)
+    return NULL;
+  struct prev_log_prefix p;
+  memset(&p, 0, sizeof p);
+  memcpy(p.magic, "SHPREV01", 8);
+  p.version = 1;
+  p.window_blocks = (uint32_t)blocks;
+  uint32_t n = 0, total = 0;
+  p.extent[n][0] = 0; p.extent[n][1] = LogSlotFirst; total += LogSlotFirst; ++n;   // the header and the message area
+  uint32_t keep = old.slots_written < PrevSlots ? old.slots_written : PrevSlots;
+  if (keep > slot_count) keep = slot_count;
+  for (uint32_t i = old.slots_written - keep; i < old.slots_written; ++i) {
+    p.extent[n][0] = LogSlotFirst + (i % slot_count) * LogSlotBlocks; p.extent[n][1] = LogSlotBlocks; total += LogSlotBlocks; ++n;
+  }
+  const uint32_t tail = LogSlotFirst + slot_count * LogSlotBlocks;   // the startup checkpoints
+  if (tail < blocks) {p.extent[n][0] = tail; p.extent[n][1] = (uint32_t)(blocks - tail); total += p.extent[n][1]; ++n;}
+  p.extents = n;
+  const size_t size = PrevPrefix + (size_t)total * LogBlock;
+  uint8_t *out = alloc(size);
+  if (!out) return NULL;
+  memset(out, 0, PrevPrefix);
+  memcpy(out, &p, sizeof p);
+  uint8_t *at = out + PrevPrefix;
+  for (uint32_t e = 0; e < n; ++e) {
+    if (!read(p.extent[e][0], p.extent[e][1], at)) {release(out, size); return NULL;}
+    at += (size_t)p.extent[e][1] * LogBlock;
+  }
+  *bytes = (uint32_t)size;
+  return out;
+}
+// End of the previous run's log.
+uint8_t *volatile boot_log_prev;         // the copy, for kern.unixnu_prev_log (BootDiagExport.c); NULL when nothing was kept
+volatile uint32_t boot_log_prev_bytes;
+static uint64_t prev_first_lba;
+static int prev_read(uint64_t rel, uint32_t n, void *dst) {return native_ufs_part_read(0, prev_first_lba + rel, n, dst);}
+static void *prev_alloc(size_t n) {return IOMallocAligned(n, LogBlock);}
+static void prev_release(void *p, size_t n) {IOFreeAligned(p, n);}
+
 static void writer(void *arg, wait_result_t result) {
   (void)arg; (void)result;
   thread_set_thread_name(current_thread(), "boot_log");
@@ -2775,6 +2858,16 @@ static void writer(void *arg, wait_result_t result) {
     IOSleep(1000);
   }
   boot_log_first_lba = first;
+  if (&native_ufs_part_read) {
+    uint32_t prev_bytes = 0;
+    prev_first_lba = first;
+    uint8_t *prev = prev_log_copy(first, blocks, prev_read, prev_alloc, prev_release, &prev_bytes);
+    if (prev) {
+      boot_log_prev_bytes = prev_bytes;
+      __atomic_store_n(&boot_log_prev, prev, __ATOMIC_RELEASE);
+      IOLog("boot log: the previous run's log is kept for kern.unixnu_prev_log (%u bytes)\n", prev_bytes);
+    }
+  }
   const uint32_t slot_count = (uint32_t)((blocks - LogSlotFirst) / LogSlotBlocks);
   if (&native_ufs_export_blocks && &native_ufs_export_write) {
     IOLockLock(export_lock);

@@ -39,6 +39,8 @@ extern "C" {extern volatile int32_t native_backlight_stats[16];}
 // with no status bit set, [5] the last status an interrupt saw.
 extern "C" {volatile int32_t native_backlight_request[6];}
 extern "C" int armcpu_spi_attach(uint32_t, bool, void (*)(void *), void *, uint32_t *, uint64_t *) __attribute__((weak_import));
+// The frames the display shows (GopFramebuffer NativeLegacyDisplay.cpp): [7] copies, [9] flips, [10] latches.
+extern "C" volatile uint32_t native_legacy_swapstat[16] __attribute__((weak_import));
 
 namespace {
 constexpr uint64_t kGcc = 0x100000, kSeA = 0xa84000, kSeB = 0x988000;
@@ -63,6 +65,18 @@ volatile uint64_t gRequest;
 volatile uint32_t gLidClosed;
 // The lid timer of the running service, armed by sheng_backlight_lid to apply the lid on the work loop.
 IOTimerEventSource *volatile gLidTimer;
+// 1 from the system's will-sleep notification (macOS platform sleep) until the display shows frames again after the wake
+// (lid_backlight_wake_ready): the panel is dark too.
+volatile uint32_t gSystemAsleep;
+// 1 from the has-powered-on notification until then, with the display's frame count and the time at the wake.
+volatile uint32_t gWaking, gWakeFrames;
+volatile uint64_t gWakeAt;
+// The wake timer of the running service, armed by the has-powered-on notification.
+IOTimerEventSource *volatile gWakeTimer;
+uint32_t shownFrames(bool &counted) {
+    counted = &native_legacy_swapstat != nullptr;
+    return counted ? native_legacy_swapstat[7] + native_legacy_swapstat[9] + native_legacy_swapstat[10] : 0;
+}
 
 bool mapWindow(Window &w, uint64_t base, uint64_t size) {
     IODeviceMemory *memory = IODeviceMemory::withRange(base, size);
@@ -105,7 +119,7 @@ class ShengBacklight : public IOService {
     struct Engine {GeniI2c bus; Step step; bool started, usable; uint8_t lsb; int32_t written; uint32_t sending; uint64_t deadline;};
     Engine engine[2] = {};
     IOWorkLoop *loop = nullptr;
-    IOTimerEventSource *fade = nullptr, *tick = nullptr, *attachTimer = nullptr, *request = nullptr, *lid = nullptr;
+    IOTimerEventSource *fade = nullptr, *tick = nullptr, *attachTimer = nullptr, *request = nullptr, *lid = nullptr, *wake = nullptr;
     IOInterruptEventSource *inbox = nullptr;
     uint32_t level = 0, from = 0, to = 0, target = 0, attachTries = 0;
     uint64_t start = 0, period = 0;
@@ -222,6 +236,22 @@ class ShengBacklight : public IOService {
         if (!self || !self->published) return;
         self->setLevel(self->level);
     }
+    // After a wake, every 20 ms until the display shows frames again (LidClamshell.h lid_backlight_wake_ready): then the level comes back.
+    static void wakeFired(OSObject *owner, IOTimerEventSource *sender) {
+        ShengBacklight *self = static_cast<ShengBacklight *>(owner);   // see impersonate()
+        if (!self || !__atomic_load_n(&gWaking, __ATOMIC_ACQUIRE)) return;
+        bool counted = false;
+        const uint32_t frames = shownFrames(counted);
+        uint64_t ns = 0;
+        absolutetime_to_nanoseconds(now() - gWakeAt, &ns);
+        const uint64_t ms = ns / NSEC_PER_MSEC;
+        if (!lid_backlight_wake_ready(counted, gWakeFrames, frames, ms)) {sender->setTimeoutMS(20); return;}
+        __atomic_store_n(&gWaking, 0u, __ATOMIC_RELEASE);
+        __atomic_store_n(&gSystemAsleep, 0u, __ATOMIC_RELEASE);
+        IOLog("sheng backlight: panel back to its level %llu ms after the wake, %u frames shown%s\n", ms, frames - gWakeFrames,
+              counted ? "" : " (no frame count)");
+        if (self->published) self->setLevel(self->level);
+    }
     // Attaching the two lines, retried while the GIC driver is not up yet; the engines keep working by polling meanwhile.
     static void attachFired(OSObject *owner, IOTimerEventSource *sender) {
         ShengBacklight *self = static_cast<ShengBacklight *>(owner);   // see impersonate()
@@ -238,8 +268,33 @@ class ShengBacklight : public IOService {
         self->service();
     }
 
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+    // The system sleeps (platform sleep): the work loop writes the level shown again, dark, as for the lid. It has woken: the panel stays
+    // dark until the display shows frames again (wakeFired). Returning at once with the notification's returnValue left 0 acknowledges
+    // it; the timers carry the change, so this never waits.
+    static IOReturn sleepWake(void *, void *, UInt32 message, IOService *, void *, vm_size_t) {
+        if (message != kIOMessageSystemWillSleep && message != kIOMessageSystemHasPoweredOn) return kIOReturnSuccess;
+        if (message == kIOMessageSystemWillSleep) {
+            __atomic_store_n(&gWaking, 0u, __ATOMIC_RELEASE);
+            __atomic_store_n(&gSystemAsleep, 1u, __ATOMIC_RELEASE);
+            IOLog("sheng backlight: system going to sleep, panel dark\n");
+            if (IOTimerEventSource *timer = gLidTimer) timer->setTimeoutUS(1);
+            return kIOReturnSuccess;
+        }
+        bool counted = false;
+        gWakeFrames = shownFrames(counted);
+        gWakeAt = now();
+        __atomic_store_n(&gWaking, 1u, __ATOMIC_RELEASE);
+        IOLog("sheng backlight: system awake, panel waits for the display\n");
+        if (IOTimerEventSource *timer = gWakeTimer) timer->setTimeoutMS(20);
+        else {__atomic_store_n(&gWaking, 0u, __ATOMIC_RELEASE); __atomic_store_n(&gSystemAsleep, 0u, __ATOMIC_RELEASE);
+              if (IOTimerEventSource *lidTimer = gLidTimer) lidTimer->setTimeoutUS(1);}
+        return kIOReturnSuccess;
+    }
+#endif
     void setLevel(uint32_t value) {
-        target = lid_backlight_level(value, __atomic_load_n(&gLidClosed, __ATOMIC_ACQUIRE) != 0);
+        target = lid_backlight_level(value, lid_backlight_dark(__atomic_load_n(&gLidClosed, __ATOMIC_ACQUIRE) != 0,
+                                                              __atomic_load_n(&gSystemAsleep, __ATOMIC_ACQUIRE) != 0));
         kick(0); kick(1);
         armTick();
     }
@@ -386,10 +441,15 @@ public:
         inbox = IOInterruptEventSource::interruptEventSource(this, &ShengBacklight::inboxFired);
         request = IOTimerEventSource::timerEventSource(this, &ShengBacklight::requestFired);
         lid = IOTimerEventSource::timerEventSource(this, &ShengBacklight::lidFired);
-        if (!loop || !fade || !tick || !attachTimer || !inbox || !request || !lid) return false;
+        wake = IOTimerEventSource::timerEventSource(this, &ShengBacklight::wakeFired);
+        if (!loop || !fade || !tick || !attachTimer || !inbox || !request || !lid || !wake) return false;
         if (loop->addEventSource(fade) || loop->addEventSource(tick) || loop->addEventSource(attachTimer) || loop->addEventSource(inbox) ||
-            loop->addEventSource(request) || loop->addEventSource(lid)) return false;
+            loop->addEventSource(request) || loop->addEventSource(lid) || loop->addEventSource(wake)) return false;
         gLidTimer = lid;
+        gWakeTimer = wake;
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+        if (!registerSleepWakeInterest(&sleepWake, nullptr, nullptr)) IOLog("sheng backlight: no sleep/wake interest\n");
+#endif
         for (unsigned i = 0; i < 2; ++i) {
             const GeniIo io = {ioRead, ioWrite, (void *)gSe[i].va};
             uint32_t config = 0;
