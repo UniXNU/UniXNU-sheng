@@ -295,6 +295,14 @@ revision = "9890389dd7c7a1ec0f7dcdab62cb979fd2bb0cbe"
 command = "scripts/package.sh --os macos-27"
 result = "The complete SourceStorage startup, authenticated root policies and native UFS runtime compile and link in the macOS kernel. The original Data seed and volume UUID are retained."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-sleep-wake.md"
+revision = "5d8fedb97a1834db292fdc8f2b09b95c2c9fdb2e"
+command = "configured macOS kernel build, production ABI audits and existing diagnostic host checks"
+result = "Storage startup exposes policy, APFS, class-registration, UFS, Data and log-writer checkpoints. The source compiled with the configured kernel records and the complete macOS kernel prelink passed."
+
 [[area]]
 id = "display"
 status = "implemented"
@@ -339,6 +347,14 @@ reference = "reports/macos-cover-input.md"
 revision = "ac40d6811c15f775371db7d0aa1fccb3f099b8e6"
 command = "macOS cover host checks and guarded v0 desktop capture"
 result = "The cover candidate kernel compiled and prelinked. Desktop and General Settings remained visible through the retained 175-second photo; physical lid transitions remain pending."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-sleep-wake.md"
+revision = "5d8fedb97a1834db292fdc8f2b09b95c2c9fdb2e"
+command = "existing sleep, input, backlight, WN8030, previous-log and target XNU compile checks"
+result = "The wake backlight waits for two presented frames with a 1500 ms bound, or 600 ms when frame counts are unavailable. The existing readiness host checks and target backlight compilation passed."
 
 [[area]]
 id = "input"
@@ -413,6 +429,14 @@ reference = "reports/macos-cover-input.md"
 revision = "ac40d6811c15f775371db7d0aa1fccb3f099b8e6"
 command = "macOS cover host checks and guarded v0 desktop capture"
 result = "The production touch-lid gate host checks passed and the integrated kernel reached the desktop. Physical lid transitions remain pending."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-sleep-wake.md"
+revision = "5d8fedb97a1834db292fdc8f2b09b95c2c9fdb2e"
+command = "existing sleep, input, backlight, WN8030, previous-log and target XNU compile checks"
+result = "The touchscreen sends a release frame on cover closure and gates later frames until opening. Power-key wakes are consumed by the wake path and request a full user wake. Existing lid-gate and wake-source host checks passed."
 
 [[area]]
 id = "keyboard"
@@ -495,6 +519,14 @@ reference = "reports/macos-cover-input.md"
 revision = "ac40d6811c15f775371db7d0aa1fccb3f099b8e6"
 command = "macOS cover host checks and guarded v0 desktop capture"
 result = "WN8030, macOS HID and keyboard trace host checks passed. The device cover-service query returned ProductID 163; physical trackpad motion remains pending."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-sleep-wake.md"
+revision = "5d8fedb97a1834db292fdc8f2b09b95c2c9fdb2e"
+command = "existing sleep, input, backlight, WN8030, previous-log and target XNU compile checks"
+result = "Cover pointer reports use their arrival timestamps; a gap above 60 ms resets contact tracking and pending motion. Immutable cover metadata remains in read-only data. Existing macOS keyboard HID and pinned WN8030 firmware-command checks passed."
 
 [[area]]
 id = "gpu"
@@ -749,6 +781,14 @@ revision = "ac40d6811c15f775371db7d0aa1fccb3f099b8e6"
 command = "macOS cover host checks and guarded v0 desktop capture"
 result = "The macOS display archive passed its 299 original USB binding audit alongside the cover changes."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-sleep-wake.md"
+revision = "5d8fedb97a1834db292fdc8f2b09b95c2c9fdb2e"
+command = "configured macOS kernel build, production ABI audits and existing diagnostic host checks"
+result = "The display initialization archive includes the sleep probe. The production USB binding audit retained 299 original bindings and matching xDCI/xHCI vtable diversities; full kernel prelink passed."
+
 [[area]]
 id = "network"
 status = "implemented"
@@ -852,7 +892,7 @@ result = "ShengAudio.driver builds and passes strict code signature verification
 id = "power"
 status = "implemented"
 components = ["AppleKeyStoreState"]
-paths = ["package/*Battery*", "package/*Battmgr*", "package/*Power*", "package/*PlatformPower*", "package/QcomQmp*", "package/QcomRpmh*", "package/QcomScm.h", "scripts/*power*", "scripts/*battery*", "scripts/*pmgr*", "package/ThermalProbe.*", "package/ThermalLevel.*", "package/tests/thermallevel_host.c", "package/BoardClock.*", "package/tests/thermal_host.c", "package/tests/boardclock_host.c", "package/tests/battmgr_host.c", "package/*ChargeAuth*", "scripts/check-charger-auth-host.py", "scripts/charge-sheng-linux.py", "package/linux-log/charge.cpp", "scripts/build-linux-charge.py", "scripts/prepare-linux-charge-reader.py", "scripts/run-sheng-charge-test.py", "scripts/read-sheng-log.py"]
+paths = ["package/ShengSleep.*", "package/tests/sheng_sleep_host.c", "scripts/check-sheng-sleep-host.py", "package/*Battery*", "package/*Battmgr*", "package/*Power*", "package/*PlatformPower*", "package/QcomQmp*", "package/QcomRpmh*", "package/QcomScm.h", "scripts/*power*", "scripts/*battery*", "scripts/*pmgr*", "package/ThermalProbe.*", "package/ThermalLevel.*", "package/tests/thermallevel_host.c", "package/BoardClock.*", "package/tests/thermal_host.c", "package/tests/boardclock_host.c", "package/tests/battmgr_host.c", "package/*ChargeAuth*", "scripts/check-charger-auth-host.py", "scripts/charge-sheng-linux.py", "package/linux-log/charge.cpp", "scripts/build-linux-charge.py", "scripts/prepare-linux-charge-reader.py", "scripts/run-sheng-charge-test.py", "scripts/read-sheng-log.py"]
 inputs = ["Board PMGR integration, clocks/regulators and per-peripheral power requirements.", "ADSP battery manager: PMIC GLINK owner 32778 on PMIC_RTR_ADSP_APPS; board properties use opcode 0x50; fuel gauges 0x8a/0x8b and 0xa6/0xa7."]
 configuration = ["CONFIG_XNU_SHENG_PMGR=y; pmgr=2 selects the board integration.", "AppleKeyStoreState is selected with the OS event integration.", "adsp=2 publishes the battery as an IOPMPowerSource; battery=0 leaves it off.", "usb-sdp-ma sets the input limit on a standard computer port (default 900; 0 keeps the firmware limit).", "cpufreq=4 scales the CPU domains with load (cpufreq-min sets a floor in MHz); cpufreq=3 fixes the highest non-turbo level.", "gpu-dcvs=1 scales the GPU clock with its busy time (gpu-dcvs-min sets the floor level, default 3); gpu-perf fixes a level instead."]
 procedure = ["Document each clock, regulator and firmware-owned state before enabling power transitions.", "Check battery units and update behavior separately from suspend/resume and peripheral power.", "Read the [battery], [battery-raw] and [charger] log lines with scripts/read-sheng-log.py."]
@@ -925,6 +965,14 @@ reference = "https://github.com/rponeawa/UniXNU-sheng/blob/ef84485040ae364c91cae
 command = "scripts/run-sheng-unattended.sh sheng-macos27-inherited-prime.img 7500"
 revision = "c30fec292042b44537bf764468e6a15d658f21b6"
 result = "The macOS 27.3 PC-USB capture reported battery 97 percent, 4865 mV and 1109 mA at the input, with gauge authentication bits 3."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-sleep-wake.md"
+revision = "5d8fedb97a1834db292fdc8f2b09b95c2c9fdb2e"
+command = "existing sleep, input, backlight, WN8030, previous-log and target XNU compile checks"
+result = "Platform sleep registers lid and power-key wake sources, uses an absolute wake timer and feeds the inherited watchdog every 10 seconds while asleep. Host checks and target-source compilation passed; 8 GiB device sleep/wake verification is pending."
 
 [[area]]
 id = "packaging"
@@ -1139,6 +1187,14 @@ revision = "4d638584fa1fd8959392d386b24a8ff2b545eedf"
 command = "python3 scripts/repack-sheng-boot.py QUALIFIED.img DESKTOP.img --core CORE --desktop-session --partition-bytes 201326592"
 result = "The desktop repacker produced an 80887808-byte Android v0 image, with lab files removed, test jobs disabled and runtime output directed to /dev/null. Source review requires uefi-watchdog=1 with autoreset=0 for indefinite takeover of the armed firmware watchdog. The corrected image was flashed to active boot_a and normal reboot acknowledged."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-sleep-wake.md"
+revision = "5d8fedb97a1834db292fdc8f2b09b95c2c9fdb2e"
+command = "existing sleep, input, backlight, WN8030, previous-log and target XNU compile checks"
+result = "The v0 reader can select the Android OS-version field. The previous-run log is exposed through kern.unixnu_prev_log and decoded with read-sheng-log.py --prev. The existing previous-log checker passed with a wrapped slot ring and failed reads."
+
 [[area]]
 id = "diagnostics"
 status = "implemented"
@@ -1289,6 +1345,14 @@ revision = "fd964ee46eb855543482e2f7261bf49df3d22178"
 command = "python3 scripts/audit-gpu-desktop-comparison.py REFERENCE_CAPTURE CANDIDATE_CAPTURE --output comparison.json"
 result = "The ordered arm64e scene and both signed v0 packages compiled locally. Reference capture sc3cc5-70185657 completed all pane requests and settling with Settings in front of the animation, then returned to fastboot. Candidate sf2a4f-76733c08 restarted WindowServer during the workload; the report command rejected it with status 2."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-sleep-wake.md"
+revision = "5d8fedb97a1834db292fdc8f2b09b95c2c9fdb2e"
+command = "configured macOS kernel build, production ABI audits and existing diagnostic host checks"
+result = "The previous-run UFS snapshot and decoder host check passed, including a wrapped ring, three-slot logs and failed reads. Board diagnostic format arrays compile in read-only constants and the full macOS kernel prelink passed."
+
 [[area]]
 id = "arm64e-os"
 status = "planned"
@@ -1349,6 +1413,14 @@ reference = "https://github.com/rponeawa/UniXNU-sheng/blob/ef84485040ae364c91cae
 command = "scripts/run-sheng-unattended.sh sheng-macos27-inherited-prime.img 7500"
 revision = "c30fec292042b44537bf764468e6a15d658f21b6"
 result = "On sheng, macOS 27.3 build 26C5035r booted and automatically logged into the unixnu admin account with UID 501."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-sleep-wake.md"
+revision = "5d8fedb97a1834db292fdc8f2b09b95c2c9fdb2e"
+command = "configured macOS kernel build, production ABI audits and existing diagnostic host checks"
+result = "The ordered XNU patch series supplies the board platform-sleep hook, bounded resume signaling and the power-manager enable gate. The full 8 GiB macOS kernel built and prelinked locally."
 
 [[area]]
 id = "video"
