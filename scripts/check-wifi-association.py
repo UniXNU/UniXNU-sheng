@@ -251,7 +251,7 @@ int main() {
     uint32_t radio[6]{}; apple80211req rr = {sizeof radio, reinterpret_cast<user_addr_t>(radio)};
     assert(power_get(rr) == 0 && radio[2] == 0);
     physical.state = NW_STA_IDLE; assert(power_get(rr) == 0 && radio[2] == 1);
-    uint8_t scan_wire[512]{}; apple80211req sr = {sizeof scan_wire, reinterpret_cast<user_addr_t>(scan_wire)};
+    uint8_t scan_wire[128]{}; apple80211req sr = {sizeof scan_wire, reinterpret_cast<user_addr_t>(scan_wire)};
     scan_error = -1; assert(scan(sr) == ENETDOWN && scan_calls == 1 && !gScanning);
     scan_error = 0; assert(scan(sr) == 0 && scan_calls == 2 && gScanning);
     gPower = false; assert(scan(sr) == ENETDOWN && scan_calls == 2);
