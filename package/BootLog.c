@@ -25,6 +25,21 @@ extern int vsnprintf(char *, size_t, const char *, va_list);
 #include <pexpert/pexpert.h>
 #include <kern/misc_protos.h>
 #include <IOKit/IOLib.h>
+
+// Board diagnostic formats use the collection's read-only constant segment.
+static const char boot_log_touch_cost_format[] __attribute__((section("__DATA_CONST,__const"))) = "[touch cost] irq armed=%u n=%u spurious=%u | wakes=%u peeks=%u stale=%u bad=%u reads=%u frames=%u | ms peek=%u read=%u process=%u";
+static const char boot_log_cpu_gov_format[] __attribute__((section("__DATA_CONST,__const"))) = "[cpu gov] d0 changes=%u mhz=%u busy=%u%% | d1 changes=%u mhz=%u busy=%u%% | d2 changes=%u mhz=%u busy=%u%% | boosts=%u frame=%u/%uw";
+static const char boot_log_cpu_ramp_format[] __attribute__((section("__DATA_CONST,__const"))) = "[cpu ramp] 10s windows 90%% busy/below top vote, run %% of vote: d0 %u/%u %u%% | d1 %u/%u %u%% | d2 %u/%u %u%%";
+static const char boot_log_touch_spi_format[] __attribute__((section("__DATA_CONST,__const"))) = "[touch spi] wait=%u attach=%x irqs=%u slept=%u by irq=%u by deadline=%u polled after wake mean=%uus max=%uus";
+static const char boot_log_bluetooth_format[] __attribute__((section("__DATA_CONST,__const"))) = "[bluetooth] state=%llu error=%lld phase=%llu baud=%llu tx=%llu rx=%llu irq=%llu timeout=%llu sleep=%llu smmu=%llu/%llu fsr=%llx fw=%llx qup=%llx votes=%llx soc=%llx rompatch=%llx power=%llx owners=%llx";
+static const char boot_log_bluetooth_uart_format[] __attribute__((section("__DATA_CONST,__const"))) = "[bluetooth uart] fault=%llx/%llx/%llx/%llx malformed=%llu unmatched=%llu dma=%llu/%llu errors=%llu/%llu loop=%llx/%llx";
+static const char boot_log_bluetooth_ibs_format[] __attribute__((section("__DATA_CONST,__const"))) = "[bluetooth ibs] wake_ind=%llu wake_ack=%llu sleep_ind=%llu reverts=%llu refused=%llu unarmed=%llu cancel_timeouts=%llu wakes=%llu";
+static const char boot_log_bluetooth_scan_format[] __attribute__((section("__DATA_CONST,__const"))) = "[bluetooth scan] sent/reply/status inquiry=%u/%u/%u legacy-param=%u/%u/%u legacy-enable=%u/%u/%u ext-param=%u/%u/%u ext-enable=%u/%u/%u reports=%u/%u/%u";
+static const char boot_log_bluetooth_boot_format[] __attribute__((section("__DATA_CONST,__const"))) = "[bluetooth boot] pins=%x/%x pre-tx-rx=%u status=%x m=%x s=%x tx=%x rx=%x fifo=%x rxlen=%u tlv=%x final=%x";
+static const char boot_log_touch_hold_format[] __attribute__((section("__DATA_CONST,__const"))) = "[touch hold] bridged=%u lifts none=%u far=%u weak=%u palm=%u taken=%u frames t2=%u t4=%u merges=%u peaks=%u full=%u ref=%u";
+static const char boot_log_adsp_format[] __attribute__((section("__DATA_CONST,__const"))) = "[adsp] st=%d err=%d irq=%d slave=%x items=%x qmp=%x rsc=%x fw=%dK rdy=%dms rx=%d tx=%d ch=%x unk=%d scm=%d/%x votes=%x";
+static const char boot_log_battery_format[] __attribute__((section("__DATA_CONST,__const"))) = "[battery] st=%d pct=%d mv=%d ma=%d temp=%d fl=%x cyc=%d ans=%d to=%x ntf=%d usb=%d full=%d design=%d cycles=%d drop=%x refuse=%d";
+
 extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
 extern void boot_cache_loader_log_capture(unsigned) __attribute__((weak_import));
 extern uint32_t boot_cache_input_ready(void) __attribute__((weak_import));
@@ -1527,7 +1542,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   if (&native_touch_cost && &native_touch_irq_stats) {
     const volatile uint32_t *c = native_touch_cost;
     char row[220];
-    snprintf(row, sizeof row, "[touch cost] irq armed=%u n=%u spurious=%u | wakes=%u peeks=%u stale=%u bad=%u reads=%u frames=%u | ms peek=%u read=%u process=%u",
+    snprintf(row, sizeof row, boot_log_touch_cost_format,
              native_touch_irq_stats[0], native_touch_irq_stats[1], native_touch_irq_stats[2], c[0], c[1], c[2], c[3], c[4], c[5],
              c[6] / 1000, c[7] / 1000, c[8] / 1000);
     at = put(out, at, cap, row, sizeof row);
@@ -1622,7 +1637,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              &native_gpu_perf_vote ? native_gpu_perf_vote[1] : 0);
     at = put(out, at, cap, row, sizeof row);
     if (&native_cpufreq_gov && (native_cpufreq_gov[1] || native_cpufreq_gov[4] || native_cpufreq_gov[7])) {
-      snprintf(row, sizeof row, "[cpu gov] d0 changes=%u mhz=%u busy=%u%% | d1 changes=%u mhz=%u busy=%u%% | d2 changes=%u mhz=%u busy=%u%% | boosts=%u frame=%u/%uw",
+      snprintf(row, sizeof row, boot_log_cpu_gov_format,
                native_cpufreq_gov[0], native_cpufreq_gov[1], native_cpufreq_gov[2], native_cpufreq_gov[3], native_cpufreq_gov[4],
                native_cpufreq_gov[5], native_cpufreq_gov[6], native_cpufreq_gov[7], native_cpufreq_gov[8],
                &native_cpufreq_boosts ? native_cpufreq_boosts : 0, &native_cpufreq_frame ? native_cpufreq_frame[0] : 0,
@@ -1636,7 +1651,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       }
       if (&native_cpufreq_ramp) {
         const volatile uint32_t *r = native_cpufreq_ramp;
-        snprintf(row, sizeof row, "[cpu ramp] 10s windows 90%% busy/below top vote, run %% of vote: d0 %u/%u %u%% | d1 %u/%u %u%% | d2 %u/%u %u%%",
+        snprintf(row, sizeof row, boot_log_cpu_ramp_format,
                  r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8]);
         at = put(out, at, cap, row, sizeof row);
       }
@@ -1685,7 +1700,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     // interrupt and by the deadline, then the time polled after the last wake of a transfer: mean and longest.
     if (&native_touch_spi_wait && native_touch_spi_wait[0]) {
       const volatile uint32_t *w = native_touch_spi_wait;
-      snprintf(row, sizeof row, "[touch spi] wait=%u attach=%x irqs=%u slept=%u by irq=%u by deadline=%u polled after wake mean=%uus max=%uus",
+      snprintf(row, sizeof row, boot_log_touch_spi_format,
                w[0], w[1], w[2], w[3], w[4], w[5], w[3] ? w[6] / w[3] : 0, w[7]);
       at = put(out, at, cap, row, sizeof row);
     }
@@ -1698,10 +1713,10 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   }
   if (&native_bluetooth_stats && (native_bluetooth_stats[0] || native_bluetooth_stats[14])) {
     const volatile uint64_t *b=native_bluetooth_stats;char row[300];
-    snprintf(row,sizeof row,"[bluetooth] state=%llu error=%lld phase=%llu baud=%llu tx=%llu rx=%llu irq=%llu timeout=%llu sleep=%llu smmu=%llu/%llu fsr=%llx fw=%llx qup=%llx votes=%llx soc=%llx rompatch=%llx power=%llx owners=%llx",
+    snprintf(row,sizeof row,boot_log_bluetooth_format,
         b[0],(long long)b[1],b[14],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13],b[18],b[19],b[20],b[21]);
     at=put(out,at,cap,row,sizeof row);
-    snprintf(row,sizeof row,"[bluetooth uart] fault=%llx/%llx/%llx/%llx malformed=%llu unmatched=%llu dma=%llu/%llu errors=%llu/%llu loop=%llx/%llx",
+    snprintf(row,sizeof row,boot_log_bluetooth_uart_format,
         b[22],b[23],b[24],b[25],b[26],b[27],b[28],b[29],b[15],b[16],b[30],b[31]);
     at=put(out,at,cap,row,sizeof row);
     if(&qbt_transport_activity) {
@@ -1711,14 +1726,14 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
     if(&native_bluetooth_ibs) {
       const volatile uint64_t *w=native_bluetooth_ibs;
-      snprintf(row,sizeof row,"[bluetooth ibs] wake_ind=%llu wake_ack=%llu sleep_ind=%llu reverts=%llu refused=%llu unarmed=%llu cancel_timeouts=%llu wakes=%llu",
+      snprintf(row,sizeof row,boot_log_bluetooth_ibs_format,
           (unsigned long long)w[0],(unsigned long long)w[1],(unsigned long long)w[2],(unsigned long long)w[3],(unsigned long long)w[4],
           (unsigned long long)w[5],(unsigned long long)w[6],(unsigned long long)w[7]);
       at=put(out,at,cap,row,sizeof row);
     }
     if(&native_bluetooth_discovery) {
       const volatile uint32_t *d=native_bluetooth_discovery;
-      snprintf(row,sizeof row,"[bluetooth scan] sent/reply/status inquiry=%u/%u/%u legacy-param=%u/%u/%u legacy-enable=%u/%u/%u ext-param=%u/%u/%u ext-enable=%u/%u/%u reports=%u/%u/%u",
+      snprintf(row,sizeof row,boot_log_bluetooth_scan_format,
           d[0],d[1],d[2],d[3],d[4],d[5],d[6],d[7],d[8],d[9],d[10],d[11],d[12],d[13],d[14],d[15],d[16],d[17]);
       at=put(out,at,cap,row,sizeof row);
     }
@@ -1729,7 +1744,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     }
     if(&native_bluetooth_boot_state && native_bluetooth_boot_state[0]) {
       volatile uint32_t *s=native_bluetooth_boot_state;
-      snprintf(row,sizeof row,"[bluetooth boot] pins=%x/%x pre-tx-rx=%u status=%x m=%x s=%x tx=%x rx=%x fifo=%x rxlen=%u tlv=%x final=%x",
+      snprintf(row,sizeof row,boot_log_bluetooth_boot_format,
           s[0],s[2],s[1],s[3],s[4],s[5],s[6],s[7],s[8],s[9],s[10],s[11]);
       at=put(out,at,cap,row,sizeof row);
     }
@@ -2004,7 +2019,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // Touch noise before the fuzz filter: resting or slow frames, mean step (x + y) and largest single-axis step, in 0.1 px.
   if (&native_touch_hold && native_touch_hold[7]) {
     char row[200];
-    snprintf(row, sizeof row, "[touch hold] bridged=%u lifts none=%u far=%u weak=%u palm=%u taken=%u frames t2=%u t4=%u merges=%u peaks=%u full=%u ref=%u",
+    snprintf(row, sizeof row, boot_log_touch_hold_format,
              native_touch_hold[0], native_touch_hold[1], native_touch_hold[2], native_touch_hold[3], native_touch_hold[4], native_touch_hold[5],
              native_touch_hold[6], native_touch_hold[7], native_touch_hold[10], native_touch_hold[11], native_touch_hold[12], native_touch_hold[13]);
     at = put(out, at, cap, row, sizeof row);
@@ -2031,7 +2046,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   // adsp.mbn KiB, ms to ready, GLINK messages in/out, channels up, opens nobody serves, last SCM result, rail votes; then its note.
   if (&native_adsp_stats && native_adsp_stats[0]) {
     char row[200];
-    snprintf(row, sizeof row, "[adsp] st=%d err=%d irq=%d slave=%x items=%x qmp=%x rsc=%x fw=%dK rdy=%dms rx=%d tx=%d ch=%x unk=%d scm=%d/%x votes=%x",
+    snprintf(row, sizeof row, boot_log_adsp_format,
              native_adsp_stats[0], native_adsp_stats[1], native_adsp_stats[2], native_adsp_stats[3], native_adsp_stats[4], native_adsp_stats[5],
              native_adsp_stats[6], native_adsp_stats[7], native_adsp_stats[8], native_adsp_stats[9], native_adsp_stats[10], native_adsp_stats[11],
              native_adsp_stats[12], native_adsp_stats[13], native_adsp_stats[14], native_adsp_stats[15]);
@@ -2082,7 +2097,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
       snprintf(row, sizeof row, "[usb host] role=%x n=%u xhci=%x cmd=%x sts=%x port=%x/%x hcs=%x dev=%u last=%x", native_usb_stats[44], native_usb_stats[45], native_usb_stats[46], native_usb_stats[47], native_usb_stats[48], native_usb_stats[49], native_usb_stats[50], native_usb_stats[51], native_usb_stats[52], native_usb_stats[53]);
       at = put(out, at, cap, row, sizeof row);
     }
-    snprintf(row, sizeof row, "[battery] st=%d pct=%d mv=%d ma=%d temp=%d fl=%x cyc=%d ans=%d to=%x ntf=%d usb=%d full=%d design=%d cycles=%d drop=%x refuse=%d",
+    snprintf(row, sizeof row, boot_log_battery_format,
              native_battery_stats[0], native_battery_stats[1], native_battery_stats[2], native_battery_stats[3], native_battery_stats[4],
              native_battery_stats[5], native_battery_stats[6], native_battery_stats[7], native_battery_stats[8], native_battery_stats[9],
              native_battery_stats[10], native_battery_stats[11], native_battery_stats[12], native_battery_stats[13], native_battery_stats[14],
