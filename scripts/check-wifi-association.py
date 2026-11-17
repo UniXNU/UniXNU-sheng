@@ -20,7 +20,7 @@ assertions = 'static_assert(sizeof(assoc_parameters)' + section(
     'static_assert(sizeof(assoc_parameters)', 'static_assert(sizeof(channels_list)')
 decoder = 'int copy_in(' + section('int copy_in(', 'unsigned gResultsShown;')
 join = 'int associate(apple80211req &rq) {' + section('case kAssociate: {', 'case kDisassociate:')
-events = section('// events\n', 'struct channel')
+events = section('// events\n', 'using channel')
 link_type = 'struct link_event {' + section('struct link_event {', 'static_assert(sizeof(scan_result)')
 notifications = 'void post_event(' + section('void post_event(', '// ---- what the module tells us ----')
 callbacks = 'void on_connect_done(' + section('void on_connect_done(', '// What the address configuration exchanges')
