@@ -597,6 +597,14 @@ revision = "64e00e4d90e6455257ed477de703dfd95d25c68b"
 command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --icon-path settings --icon-dump-cb 4:1 --tiling-cost-check --auto-login-user unixnu --password-stdin --capture-graphics --ssh-public-key authorized-key.pub --preserve-data --autoreset 180 < account-password"
 result = "A 100495360-byte v0 image passed one-pass packaging and guarded capture s3e223-6182b8d69. A740 settled LinearCheap: linear 1.339 ms, optimal 1.048 ms, download 0.889 ms, upload 0.342 ms over eight rounds. All atlas pixels and selected attachment statistics matched the reference; automatic return and Linux retrieval confirmed fastboot."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-unattended-desktop.md"
+revision = "365890c8965e2698100804b41b079b32d3419055"
+command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --graphics-comparison --autoreset 180 --auto-login-user unixnu --password-stdin --preserve-data < account-password; SERIAL=b714917c READER=LINUX_READER CORE=CORE AUTORESET_SECONDS=180 scripts/run-sheng-unattended.sh OUTPUT.img 420"
+result = "Both reference and candidate one-pass v0 images passed signing and packaging with the short comparison timing. A740 reference capture sa9df1-14c2a47f6 completed all four pane requests and settling with the animation, returned after 195.718 seconds, and Linux collection confirmed fastboot after 25.033 seconds."
+
 [[area]]
 id = "bluetooth"
 status = "device-verified"
@@ -1093,6 +1101,14 @@ revision = "64e00e4d90e6455257ed477de703dfd95d25c68b"
 command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --icon-path settings --icon-dump-cb 4:1 --tiling-cost-check --auto-login-user unixnu --password-stdin --capture-graphics --ssh-public-key authorized-key.pub --preserve-data --autoreset 180 < account-password"
 result = "A 100495360-byte v0 image passed one-pass packaging and guarded capture s3e223-6182b8d69. A740 settled LinearCheap: linear 1.339 ms, optimal 1.048 ms, download 0.889 ms, upload 0.342 ms over eight rounds. All atlas pixels and selected attachment statistics matched the reference; automatic return and Linux retrieval confirmed fastboot."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-unattended-desktop.md"
+revision = "365890c8965e2698100804b41b079b32d3419055"
+command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --graphics-comparison --autoreset 180 --auto-login-user unixnu --password-stdin --preserve-data < account-password; SERIAL=b714917c READER=LINUX_READER CORE=CORE AUTORESET_SECONDS=180 scripts/run-sheng-unattended.sh OUTPUT.img 420"
+result = "Both reference and candidate one-pass v0 images passed signing and packaging with the short comparison timing. A740 reference capture sa9df1-14c2a47f6 completed all four pane requests and settling with the animation, returned after 195.718 seconds, and Linux collection confirmed fastboot after 25.033 seconds."
+
 [[area]]
 id = "diagnostics"
 status = "implemented"
@@ -1226,6 +1242,14 @@ reference = "https://github.com/UniXNU/UniXNU-sheng/commit/64e00e4d90e6455257ed4
 revision = "64e00e4d90e6455257ed477de703dfd95d25c68b"
 command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --icon-path settings --icon-dump-cb 4:1 --tiling-cost-check --auto-login-user unixnu --password-stdin --capture-graphics --ssh-public-key authorized-key.pub --preserve-data --autoreset 180 < account-password"
 result = "A 100495360-byte v0 image passed one-pass packaging and guarded capture s3e223-6182b8d69. A740 settled LinearCheap: linear 1.339 ms, optimal 1.048 ms, download 0.889 ms, upload 0.342 ms over eight rounds. All atlas pixels and selected attachment statistics matched the reference; automatic return and Linux retrieval confirmed fastboot."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-unattended-desktop.md"
+revision = "365890c8965e2698100804b41b079b32d3419055"
+command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --graphics-comparison --autoreset 180 --auto-login-user unixnu --password-stdin --preserve-data < account-password; SERIAL=b714917c READER=LINUX_READER CORE=CORE AUTORESET_SECONDS=180 scripts/run-sheng-unattended.sh OUTPUT.img 420"
+result = "Both reference and candidate one-pass v0 images passed signing and packaging with the short comparison timing. A740 reference capture sa9df1-14c2a47f6 completed all four pane requests and settling with the animation, returned after 195.718 seconds, and Linux collection confirmed fastboot after 25.033 seconds."
 
 [[area]]
 id = "arm64e-os"

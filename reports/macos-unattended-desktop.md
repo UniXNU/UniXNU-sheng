@@ -57,3 +57,9 @@ Capture `sa5ae6-42021120d`, boot `50C2AB62-9A9F-40B9-9099-5B9C12872385`, used th
 Device source `64e00e4d90e6455257ed477de703dfd95d25c68b` ([PR #123](https://github.com/UniXNU/UniXNU-sheng/pull/123)) adds `--tiling-cost-check` to the selected-icon preparation. The icon probe requests the runtime check with a three-second wait and records its verdict and medians in `icon-probe.log`. The runtime policy log includes the tiling state.
 
 Capture `s3e223-6182b8d69` returned `LinearCheap` on A740: linear 1.339 ms, optimal 1.048 ms, download 0.889 ms and upload 0.342 ms, medians of eight rounds. Its atlas pixels matched the reference and the device returned to fastboot.
+
+## Fixed desktop comparison
+
+Use `--graphics-comparison` in the preparation command. Source `365890c8965e2698100804b41b079b32d3419055` ([PR #124](https://github.com/UniXNU/UniXNU-sheng/pull/124)) selects one round for return timers below 300 seconds: General, Network, Displays and General, 15 seconds per pane, followed by 15 seconds of settling. The initial desktop reset waits 15 seconds. Longer captures use two rounds, 20 seconds per pane and 30 seconds of settling. `agent.log` records the selected timing, pane requests and completion.
+
+Reference capture `sa9df1-14c2a47f6`, boot `83F2AF11-430C-42B8-BC60-A081F01652AF`, completed the four pane requests and settling period with the 20-layer animation. It returned after 195.718 seconds; Linux retrieval took 25.033 seconds and fastboot responded. Both reference and candidate one-pass packages passed signing and use mode `0600`.
