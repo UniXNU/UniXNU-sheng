@@ -127,7 +127,7 @@ def main():
             for value in values:
                 if value.startswith('disable-jobs='):
                     disabled.update(value.split('=', 1)[1].split(','))
-            args.kernel_arg += ['log=0', 'autoreset=0', 'uefi-watchdog=0',
+            args.kernel_arg += ['log=0', 'autoreset=0', 'uefi-watchdog=1',
                                 'disable-jobs=' + ','.join(sorted(disabled))]
         config.write_text(change_arguments(config.read_text(), args.kernel_arg, args.remove_arg))
         replacements = []
