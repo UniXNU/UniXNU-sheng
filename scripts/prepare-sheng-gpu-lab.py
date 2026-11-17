@@ -34,6 +34,7 @@ def main():
     parser.add_argument('--video-fixture', type=Path, help='HEVC MP4 for the timed VideoToolbox decode probe')
     parser.add_argument('--video-fixture-10bit', type=Path, help='additional 10-bit HEVC MP4 for pixel and frame checks')
     parser.add_argument('--icon-path', help='one guest application or preference pane, or settings for the configured sidebar icons')
+    parser.add_argument('--tiling-cost-check', action='store_true', help='measure linear and optimal texture costs in the icon probe')
     parser.add_argument('--icon-dump-cb', help='bounded FIRST:COUNT command-buffer dump for the isolated icon service')
     parser.add_argument('--icon-skip-draws', help='omit PASS:FIRST:LAST draws in the isolated icon service')
     graphics = parser.add_mutually_exclusive_group()
@@ -57,6 +58,8 @@ def main():
         parser.error('--auto-login-user and --password-stdin are required together')
     if (args.ssh_public_key or args.capture_graphics) and not args.auto_login_user:
         parser.error('--ssh-public-key and --capture-graphics require --auto-login-user')
+    if args.tiling_cost_check and (not args.icon_path or args.manual_session or args.graphics_comparison or args.graphics_view or args.shader_cache_view):
+        parser.error('--tiling-cost-check requires an icon capture')
     if args.output.exists() or args.input.resolve() == args.output.resolve():
         parser.error('choose a new output file')
     if args.refresh_payload and not args.uefi:
@@ -131,6 +134,7 @@ def main():
         (files / 'share').mkdir(exist_ok=True)
         (files / 'share/manual-session').write_text('1\n' if args.manual_session else '0\n')
         (files / 'share/icon-probe-path').write_text(args.icon_path+'\n' if args.icon_path else '')
+        (files / 'share/tiling-cost-check').write_text('1\n' if args.tiling_cost_check else '0\n')
         (files / 'share/graphics-comparison').write_text('shader-cache\n' if args.shader_cache_view else 'view\n' if args.graphics_view else '1\n' if args.graphics_comparison else '')
         for name in ('video-probe.mp4', 'video-probe-10bit.mp4'):
             (files / 'share' / name).write_bytes(b'')
