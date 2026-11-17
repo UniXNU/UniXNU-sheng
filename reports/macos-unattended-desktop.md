@@ -51,3 +51,9 @@ python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img \
 This capture requests the Settings sidebar icons through IconServices with cache bypass, exports `icons.png` and records the selected command buffer. Compare backgrounds, glyphs and edges against the [rendering reference](metal-upstream-rendering.md). `graphics-state.log` includes process and SSH state; `graphics-events-previous.log` contains the isolated command-buffer payloads.
 
 Capture `sa5ae6-42021120d`, boot `50C2AB62-9A9F-40B9-9099-5B9C12872385`, used the one-pass account preparation and reached General Settings. All 56-source atlas pixels and selected attachment statistics matched the main reference. Console user `unixnu` (UID 501), caffeinate, enabled SSH and Shader Cache `running=false` were recorded. The image returned after 206.224 seconds; Linux retrieval took 18.856 seconds and fastboot responded. Complete macOS CI: [43992174081](https://github.com/UniXNU/UniXNU-sheng/actions/runs/43992174081).
+
+## Texture tiling cost capture
+
+Device source `64e00e4d90e6455257ed477de703dfd95d25c68b` ([PR #123](https://github.com/UniXNU/UniXNU-sheng/pull/123)) adds `--tiling-cost-check` to the selected-icon preparation. The icon probe requests the runtime check with a three-second wait and records its verdict and medians in `icon-probe.log`. The runtime policy log includes the tiling state.
+
+Capture `s3e223-6182b8d69` returned `LinearCheap` on A740: linear 1.339 ms, optimal 1.048 ms, download 0.889 ms and upload 0.342 ms, medians of eight rounds. Its atlas pixels matched the reference and the device returned to fastboot.
