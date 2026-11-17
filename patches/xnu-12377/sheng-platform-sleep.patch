@@ -40,7 +40,19 @@ diff --git a/osfmk/arm64/cpu.c b/osfmk/arm64/cpu.c
 diff --git a/osfmk/arm/cpu_common.c b/osfmk/arm/cpu_common.c
 --- a/osfmk/arm/cpu_common.c
 +++ b/osfmk/arm/cpu_common.c
-@@ -934,6 +934,26 @@
+@@ -416,7 +416,10 @@
+ bool
+ sheng_sigp_recover(cpu_data_t *target_proc)
+ {
+-	if ((os_atomic_load(&target_proc->cpu_flags, relaxed) & (InitState | StartedState)) != (InitState | StartedState)) {
++	/* Only recover a running core. ml_cpu_down owns SIGPdisabled while taking a core down; startup recovery requires cpu_init's
++	 * cpu_running flag. */
++	if ((os_atomic_load(&target_proc->cpu_flags, relaxed) & (InitState | StartedState)) != (InitState | StartedState) ||
++	    !os_atomic_load(&target_proc->cpu_running, relaxed)) {
+ 		return false;
+ 	}
+ 	os_atomic_andnot(&target_proc->cpu_signal, SIGPdisabled, acq_rel);
+@@ -934,6 +937,26 @@
  	assert(ml_get_interrupts_enabled());
  	cpu_data_t *cpu_data_ptr = getCpuDatap();
  

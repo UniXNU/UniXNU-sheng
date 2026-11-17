@@ -20,13 +20,13 @@ assertions = 'static_assert(sizeof(assoc_parameters)' + section(
     'static_assert(sizeof(assoc_parameters)', 'static_assert(sizeof(channels_list)')
 decoder = 'int copy_in(' + section('int copy_in(', 'unsigned gResultsShown;')
 join = 'int associate(apple80211req &rq) {' + section('case kAssociate: {', 'case kDisassociate:')
-events = section('// events\n', 'struct channel')
+events = section('// events\n', 'using channel')
 link_type = 'struct link_event {' + section('struct link_event {', 'static_assert(sizeof(scan_result)')
 notifications = 'void post_event(' + section('void post_event(', '// ---- what the module tells us ----')
 callbacks = 'void on_connect_done(' + section('void on_connect_done(', '// What the address configuration exchanges')
 power = 'int power(apple80211req &rq) {' + section('case kPower: {', 'case kScanReq:')
 power_get = 'int power_get(apple80211req &rq) { nw_wifi_status st; visible_status(st); uint32_t w[6]{}; w[0]' + section('case kPower: w[0]', 'case kState:') + '}\n'
-scan = 'int scan(apple80211req &rq) { nw_wifi_status st; visible_status(st);' + section('case kScanReq: case kScanReqMultiple: {', 'case kAssociate:')
+scan = 'int scan(apple80211req &rq, uint32_t type = kScanReq) { struct Out { uint8_t raw[5120]; } out{}; nw_wifi_status st; visible_status(st);' + section('case kScanReq: case kScanReqMultiple: {', 'case kAssociate:')
 auth = 'int auth(apple80211req &rq) { uint32_t w[4]{}; w[0]' + section('case kAuthType: w[0]', 'case kPowerSave:') + '}\n'
 
 prefix = r'''
@@ -37,10 +37,16 @@ prefix = r'''
 #include <cstdio>
 #include <vector>
 #include "nw_abi.h"
+#include "WifiScan.h"
+#include "WifiScanPolicy.h"
 using test_user_addr_t = uintptr_t;
 #define user_addr_t test_user_addr_t
 struct apple80211req { uint32_t req_len; user_addr_t req_data; uint32_t req_kernel = 0; };
-static bool copy_fault, gUserJoin, gKeyed, had_bssid, had_key;
+static bool copy_fault, gUserJoin, gKeyed, gKeepJoin, had_bssid, had_key;
+static sheng_wifi_air gAir;
+static uint64_t gLinkUpMs;
+static uint64_t continuous_ms() { return 100000; }
+static constexpr uint32_t kScanReq = 10, kScanTypeCached = 3;
 static bool gPower = true, gLinkSuppressed, gAssocModern, gJoinPending;
 static int gAssocResult, calls, connect_error;
 static int disconnects;
@@ -63,7 +69,10 @@ static void thread_call_enter_delayed(void *, uint64_t) {}
 static int nw_wifi_bss_count_mock() { return 0; }
 static int nw_wifi_scan_mock(const uint8_t *, size_t length) { assert(length <= 32); scan_calls++; return scan_error; }
 #define nw_wifi_bss_count nw_wifi_bss_count_mock
-#define nw_wifi_scan nw_wifi_scan_mock
+static int nw_wifi_scan_frequencies_mock(const uint8_t *ssid, size_t length, const uint32_t *, size_t) {
+    return nw_wifi_scan_mock(ssid, length);
+}
+#define nw_wifi_scan_frequencies nw_wifi_scan_frequencies_mock
 static void IOSleep(unsigned ms) {
     sleep_ms += ms;
     if (disconnect_queued && !hold_disconnect) { physical.state = NW_STA_IDLE; disconnect_queued = false; }
@@ -260,7 +269,7 @@ int main() {
 unit = prefix + '#include <initializer_list>\n' + events + types + link_type + assertions + decoder + notifications + callbacks + power + power_get + scan + auth + join + fixtures
 (out / 'test.cpp').write_text(unit)
 subprocess.run(['clang++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-O1', '-g',
-                '-fsanitize=address,undefined', '-I', str(root / 'drivers/Ath12kWifi/include'),
+                '-fsanitize=address,undefined', '-I', str(root / 'drivers/Ath12kWifi/include'), '-I', str(root / 'package'),
                 str(out / 'test.cpp'), '-o', str(out / 'test')], check=True)
 subprocess.run([str(out / 'test')], check=True)
 (out / 'report.json').write_text(json.dumps({

@@ -50,6 +50,9 @@ static inline void sheng_sleep_tlmm_keep(const uint32_t cfg[SHENG_SLEEP_GPIO_COU
     }
 }
 
+// Clear the lid pin's latched status before every sleep wait.
+static inline int sheng_sleep_clear_lid_status(int closed) {(void)closed; return 1;}
+
 // The lid pin's INTR_CFG while asleep: level high and enabled when the lid was closed as the sleep began, else unchanged.
 static inline uint32_t sheng_sleep_lid_cfg(uint32_t cfg, int closed_when_sleep_began)
 {

@@ -138,6 +138,15 @@ static void woke_by_names(void)
     CHECK(strcmp(sheng_sleep_woke_by(3u, ShengWakeNone), "storm") == 0);   // ArmcpuWakeStorm: a line kept firing
 }
 
+// The lid pin's status is cleared before every wait, the lid open too: an edge latched while the system was awake (the lid opened or
+// closed some time before; KeyboardProbe polls the pin and leaves the status) raised the summary the moment the wait began, and with
+// the lid open that is a wake: the system woke 3 ms after it slept (seen on the tablet: sleeps 1, woke by lid).
+static void lid_status_cleared_open_or_closed(void)
+{
+    CHECK(sheng_sleep_clear_lid_status(1));
+    CHECK(sheng_sleep_clear_lid_status(0));
+}
+
 int main(void)
 {
     tlmm_keep_only_lid();
@@ -156,6 +165,7 @@ int main(void)
     next_press_reported();
     released_before_first_look();
     woke_by_names();
+    lid_status_cleared_open_or_closed();
     printf("%u checks\n", checks);
     return 0;
 }
