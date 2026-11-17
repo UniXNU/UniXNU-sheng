@@ -12,9 +12,10 @@ The comparison uses the General pane in System Settings and a 1024 by 896 atlas 
 | Corrected uniform array capacity, component `79a2d579af8e1e559391ca03874ca7cbadc360bf` | `1b5a527f5e00abe64036db54c445d2a0e91325c1` | All 56-source atlas pixels and CB 4 passes 2, 4 and 5 statistics match the main reference, with RGB minimum zero. Retained widget and Settings photos show complete backgrounds. |
 | Qualified development with the capacity correction, component `840e10fce0a40622b9c28b0f9da010a6402a84d5` | `be905fd8992417edf146792036d666c126baa093` | All atlas pixels and selected attachment statistics match the main reference. Photos through 175 seconds show complete widget and Settings backgrounds. |
 | Scheduler and rebind checkpoint, component `a4590c23b319a1ae14332d71c0a4a2fabf729aaa` | `cda5fd8f027f29f1213961de4eb11a7726c61bf6` | All atlas pixels and selected attachment statistics match the main reference. Photos through 175 seconds show complete widget and Settings backgrounds. Full macOS CI passed. |
-| Compute reuse checkpoint, component `8b1a75b3dc6999a47ea4275d04eb8e8c7b318c96` | `51280732aa8c2e86240fb5f73669f86798de9893` | Atlas pixels and selected attachment statistics match the reference. Complete backgrounds at 90 through 175 seconds. Startup timing and CI are under review. |
-| Constant views and placement queries, component `3e556b62f9b9b05e250e41a79caf1f4e016b3ec8` | `85987cda9d68ef150340611d620dbbecaa1efa56` | Atlas pixels and selected attachment statistics match the reference. Complete backgrounds at 90 through 175 seconds. Full CI is pending. |
-| Tiling measurement and region copies, component `2ab9328eb8a220c98c2aef997fa5f4633e7f672a` | `33186454573ae3c8c1af7ef2e0fcdcf217f5eb07` | Atlas pixels and selected attachment statistics match the reference. The explicit A740 tiling check settled as LinearCheap. Full CI is pending. |
+| Compute reuse checkpoint, component `8b1a75b3dc6999a47ea4275d04eb8e8c7b318c96` | `51280732aa8c2e86240fb5f73669f86798de9893` | Atlas pixels and selected attachment statistics match the reference. Complete backgrounds at 90 through 175 seconds. Full macOS CI passed; fixed-sequence desktop performance is under review. |
+| Constant views and placement queries, component `3e556b62f9b9b05e250e41a79caf1f4e016b3ec8` | `85987cda9d68ef150340611d620dbbecaa1efa56` | Atlas pixels and selected attachment statistics match the reference. Complete backgrounds at 90 through 175 seconds. Full macOS CI passed. |
+| Tiling measurement and region copies, component `2ab9328eb8a220c98c2aef997fa5f4633e7f672a` | `33186454573ae3c8c1af7ef2e0fcdcf217f5eb07` | Atlas pixels and selected attachment statistics match the reference. The explicit A740 tiling check settled as LinearCheap. Full macOS CI passed. |
+| Staged row copies, component `d9535ac96256aacfab721d4d2eb16a6109c3181c` | `e3959de823c26623ba6a3f50bbc077d2508170f9` | All atlas pixels and selected attachment statistics match the reference. Photos at 90 and 175 seconds show complete widget and Settings backgrounds. The ordered desktop workload restarts WindowServer; this candidate remains unmerged. |
 
 ## Uniform array capacity
 
@@ -24,7 +25,7 @@ A740 reports a 64-byte uniform offset alignment and a 65536-byte maximum uniform
 
 The corrected runtime is `24128cb24c4a7146e58247a367ec0e06`. Capture `s393c4-48393a6e3`, boot `428DE739-2D3F-49F1-88C3-5FBF38A32A09`, retained photos at 60, 90, 120, 150 and 175 seconds. The image returned after 206.264 seconds; Linux log retrieval took 19.015 seconds and fastboot responded. The original reference atlas is `sf0ff4-22d059986`, and its CB 4 trace is `s57b45-14bbf54d9`. The failing comparison is `seb6b9-43f6ffa80`.
 
-The current development capture is `s4fa13-4bd7e1abb`, boot `DBCB42BF-E951-4E1D-91D9-CAFE40F2B363`, runtime `2bb0552b6e78724f9ab119c3370d20ed`. Its image returned after 206.204 seconds; Linux retrieval took 19.213 seconds and fastboot responded. The Core Image half-blur probe completed 4096 pixels with no nonfinite values.
+The qualified be905 capture is `s4fa13-4bd7e1abb`, boot `DBCB42BF-E951-4E1D-91D9-CAFE40F2B363`, runtime `2bb0552b6e78724f9ab119c3370d20ed`. Its image returned after 206.204 seconds; Linux retrieval took 19.213 seconds and fastboot responded. The Core Image half-blur probe completed 4096 pixels with no nonfinite values.
 
 The local arm64e release build and signing passed. The [complete macOS CI build](https://github.com/UniXNU/UniXNU-sheng/actions/runs/43963130713) compiled and packaged core `6d059b16c2f09f2f6911d5a5c1ee0d8ee4c866f5`. The current source is available through [AdrenoMetal #51](https://github.com/UniXNU/AdrenoMetal/pull/51) and [UniXNU #286](https://github.com/UniXNU/UniXNU/pull/286).
 
@@ -60,3 +61,13 @@ Capture `s3e223-6182b8d69`, boot `034A90BD-C54F-41E2-9F83-CA1B3253C2FD`, runtime
 | Upload from host pages | 0.342 ms |
 
 The check reported `LinearCheap` and completed in 905.1 ms of host time. These frame and copy costs support the selected `InPlaceWrites` policy for this host-page workload. The icon atlas and selected attachment statistics matched the reference. Return took 206.099 seconds, Linux retrieval took 18.921 seconds and fastboot responded. Complete CI: [43995908832](https://github.com/UniXNU/UniXNU-sheng/actions/runs/43995908832).
+
+The staged-row capture is `s9db86-480e4e4de`, boot `C5534944-2C10-4FFA-9B16-688790DC9CF6`, runtime `be44c1281af3bbf2e69e2bb44f2c211a`. Return took 206.273 seconds, Linux retrieval took 18.842 seconds and fastboot responded. The local release build and signing passed. Complete CI: [43998089607](https://github.com/UniXNU/UniXNU-sheng/actions/runs/43998089607).
+
+## Desktop stability
+
+The ordered workload uses source `619c1cecd1457ffbb91be8d6808ee0b192654213`, a background animation window and General, Network, Displays and General pane requests. The reference component `a4590c23b319a1ae14332d71c0a4a2fabf729aaa` completed capture `sc3cc5-70185657` and returned to fastboot.
+
+Component `d9535ac96256aacfab721d4d2eb16a6109c3181c` failed capture `sf2a4f-76733c08`, boot `E07FE387-AE42-477F-9892-3A94725CF7A2`. WindowServer PID 173 restarted as 1022 and the desktop returned to login before the sequence completed. The fresh report is `WindowServer-2026-11-14-151617.ips`. Module UUID `EA586705-94E8-3418-A84C-183386ADF0DD` matches the locally built module and its symbols.
+
+The panic bounds-check location is `crates/metal2vulkan-runtime/src/replay.rs:123:19`, in `Handles<RenderPipelineState>::get`, reached by `render::replay::render` and `nmb_render_set_pipeline`. Rust panic unwinding then fails pointer authentication in libunwind. The first introducing revision and the invalid handle's lifetime are under investigation. This candidate remains unmerged. Automatic return took 206.119 seconds, Linux retrieval took 19.569 seconds and fastboot responded.
