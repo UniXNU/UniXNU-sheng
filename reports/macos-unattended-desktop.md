@@ -17,6 +17,8 @@ python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img \
 
 The image includes the selected GPU addon, automatic login, graphics logs and SSH key. Its file mode is `0600`. The login job selects the account, keeps the screen and system awake and sets both sleep timers to zero. Shader Cache provides manual Start and Stop controls.
 
+For a persistent desktop, use `autoreset=0` and `uefi-watchdog=1`. Firmware hands over an armed 30-second Gunyah watchdog; the kernel takes ownership and feeds it indefinitely when the return deadline is zero. Diagnostic recording uses the separate `log` and `diag` settings.
+
 ## Run and collect
 
 ```sh

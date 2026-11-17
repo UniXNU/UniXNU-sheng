@@ -1132,6 +1132,13 @@ revision = "60bcf9ebb4413083e625897ff6667c0873be64af"
 command = "scripts/run-sheng-unattended.sh sheng-runtime2507.img 420; scripts/audit-gpu-desktop-comparison.py REFERENCE_CAPTURE CANDIDATE_CAPTURE --output comparison.json"
 result = "Capture s3a6e1-222ad7510d exported the current boot runtime stderr marker for WindowServer PID 171. The ordered sequence completed with PID 171 unchanged and 78 matched GPU pass signatures. The image returned after 195.873 seconds; Linux collection took 24.889 seconds and final fastboot responded."
 
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-unattended-desktop.md"
+revision = "4d638584fa1fd8959392d386b24a8ff2b545eedf"
+command = "python3 scripts/repack-sheng-boot.py QUALIFIED.img DESKTOP.img --core CORE --desktop-session --partition-bytes 201326592"
+result = "The desktop repacker produced an 80887808-byte Android v0 image, with lab files removed, test jobs disabled and runtime output directed to /dev/null. Source review requires uefi-watchdog=1 with autoreset=0 for indefinite takeover of the armed firmware watchdog. The corrected image was flashed to active boot_a and normal reboot acknowledged."
+
 [[area]]
 id = "diagnostics"
 status = "implemented"
