@@ -589,6 +589,14 @@ revision = "e19928db3e6f49247f21b4593906edfc70750d65"
 command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --icon-path settings --icon-dump-cb 4:1 --auto-login-user unixnu --password-stdin --capture-graphics --ssh-public-key authorized-key.pub --preserve-data --autoreset 180 < account-password"
 result = "The one-pass image with core 97fcbfc05da43805c123bf1c3d59337edded63c4 and component 3e556b62f9b9b05e250e41a79caf1f4e016b3ec8 passed signing and packaging. Capture sa5ae6-42021120d retained the reference atlas pixels, console user unixnu, SSH enabled and Shader Cache running=false; automatic return and Linux retrieval confirmed fastboot."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/64e00e4d90e6455257ed477de703dfd95d25c68b"
+revision = "64e00e4d90e6455257ed477de703dfd95d25c68b"
+command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --icon-path settings --icon-dump-cb 4:1 --tiling-cost-check --auto-login-user unixnu --password-stdin --capture-graphics --ssh-public-key authorized-key.pub --preserve-data --autoreset 180 < account-password"
+result = "A 100495360-byte v0 image passed one-pass packaging and guarded capture s3e223-6182b8d69. A740 settled LinearCheap: linear 1.339 ms, optimal 1.048 ms, download 0.889 ms, upload 0.342 ms over eight rounds. All atlas pixels and selected attachment statistics matched the reference; automatic return and Linux retrieval confirmed fastboot."
+
 [[area]]
 id = "bluetooth"
 status = "device-verified"
@@ -1077,6 +1085,14 @@ revision = "e19928db3e6f49247f21b4593906edfc70750d65"
 command = "run-sheng-unattended.sh sheng-group2482-icons.img 420"
 result = "Capture sa5ae6-42021120d, boot 50C2AB62-9A9F-40B9-9099-5B9C12872385, reached General Settings with user unixnu, caffeinate and SSH enabled. Shader Cache reported running=false. All atlas pixels matched the reference. Return took 206.224 seconds and Linux retrieval 18.856 seconds; fastboot responded."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/64e00e4d90e6455257ed477de703dfd95d25c68b"
+revision = "64e00e4d90e6455257ed477de703dfd95d25c68b"
+command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --icon-path settings --icon-dump-cb 4:1 --tiling-cost-check --auto-login-user unixnu --password-stdin --capture-graphics --ssh-public-key authorized-key.pub --preserve-data --autoreset 180 < account-password"
+result = "A 100495360-byte v0 image passed one-pass packaging and guarded capture s3e223-6182b8d69. A740 settled LinearCheap: linear 1.339 ms, optimal 1.048 ms, download 0.889 ms, upload 0.342 ms over eight rounds. All atlas pixels and selected attachment statistics matched the reference; automatic return and Linux retrieval confirmed fastboot."
+
 [[area]]
 id = "diagnostics"
 status = "implemented"
@@ -1202,6 +1218,14 @@ reference = "https://github.com/UniXNU/UniXNU-sheng/commit/e19928db3e6f49247f21b
 revision = "e19928db3e6f49247f21b4593906edfc70750d65"
 command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --icon-path settings --icon-dump-cb 4:1 --auto-login-user unixnu --password-stdin --capture-graphics --ssh-public-key authorized-key.pub --preserve-data --autoreset 180 < account-password"
 result = "The one-pass image with core 97fcbfc05da43805c123bf1c3d59337edded63c4 and component 3e556b62f9b9b05e250e41a79caf1f4e016b3ec8 passed signing and packaging. Capture sa5ae6-42021120d retained the reference atlas pixels, console user unixnu, SSH enabled and Shader Cache running=false; automatic return and Linux retrieval confirmed fastboot."
+
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/64e00e4d90e6455257ed477de703dfd95d25c68b"
+revision = "64e00e4d90e6455257ed477de703dfd95d25c68b"
+command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --core CORE --plugin PLUGIN --tools TOOLS --icon-path settings --icon-dump-cb 4:1 --tiling-cost-check --auto-login-user unixnu --password-stdin --capture-graphics --ssh-public-key authorized-key.pub --preserve-data --autoreset 180 < account-password"
+result = "A 100495360-byte v0 image passed one-pass packaging and guarded capture s3e223-6182b8d69. A740 settled LinearCheap: linear 1.339 ms, optimal 1.048 ms, download 0.889 ms, upload 0.342 ms over eight rounds. All atlas pixels and selected attachment statistics matched the reference; automatic return and Linux retrieval confirmed fastboot."
 
 [[area]]
 id = "arm64e-os"
