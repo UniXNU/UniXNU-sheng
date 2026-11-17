@@ -18,6 +18,9 @@ Host checks passed for driver lifecycle, cfg80211 control, the real supplicant
 with simulated radio operations, scan channels (45), result timestamps (19),
 scan policy (99), exported ABI (24 functions), sleep (467) and association.
 
+The complete local macOS kernel built and prelinked successfully as
+`b929a232d0b9135c75e6e35aec13b14bcb5ed62521287b7a94ec4c57d5ca9c22`.
+
 Full image CI: [44089097226](https://github.com/UniXNU/UniXNU-sheng/actions/runs/44089097226).
 
 The source author's 12 GiB sheng records show scans completing in 7.2–9.0 seconds

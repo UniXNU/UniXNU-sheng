@@ -794,7 +794,7 @@ kind = "host"
 reference = "reports/macos-wifi-wake.md"
 revision = "c8f9e6b939c84aa6517aca8f740435fe3d98d846"
 command = "Existing driver lifecycle, cfg80211, supplicant, board scan, association and sleep checks"
-result = "Driver and board host checks passed with ASan/UBSan, including scan channels, sleep-aware ages, current scan-result timestamps and association events. The exported ABI check preserves all 24 functions."
+result = "Driver and board host checks passed with ASan/UBSan, including scan channels, sleep-aware ages, current scan-result timestamps and association events. The exported ABI check preserves all 24 functions. The complete macOS kernel built and prelinked successfully."
 
 [[area]]
 id = "network"
@@ -854,7 +854,7 @@ kind = "host"
 reference = "reports/macos-wifi-wake.md"
 revision = "c8f9e6b939c84aa6517aca8f740435fe3d98d846"
 command = "Existing driver lifecycle, cfg80211, supplicant, board scan, association and sleep checks"
-result = "Driver and board host checks passed with ASan/UBSan, including scan channels, sleep-aware ages, current scan-result timestamps and association events. The exported ABI check preserves all 24 functions."
+result = "Driver and board host checks passed with ASan/UBSan, including scan channels, sleep-aware ages, current scan-result timestamps and association events. The exported ABI check preserves all 24 functions. The complete macOS kernel built and prelinked successfully."
 
 [[area]]
 id = "audio"
@@ -993,7 +993,7 @@ kind = "host"
 reference = "reports/macos-wifi-wake.md"
 revision = "c8f9e6b939c84aa6517aca8f740435fe3d98d846"
 command = "Existing driver lifecycle, cfg80211, supplicant, board scan, association and sleep checks"
-result = "Driver and board host checks passed with ASan/UBSan, including scan channels, sleep-aware ages, current scan-result timestamps and association events. The exported ABI check preserves all 24 functions."
+result = "Driver and board host checks passed with ASan/UBSan, including scan channels, sleep-aware ages, current scan-result timestamps and association events. The exported ABI check preserves all 24 functions. The complete macOS kernel built and prelinked successfully."
 
 [[area]]
 id = "packaging"
@@ -1221,7 +1221,7 @@ kind = "host"
 reference = "reports/macos-wifi-wake.md"
 revision = "c8f9e6b939c84aa6517aca8f740435fe3d98d846"
 command = "Existing driver lifecycle, cfg80211, supplicant, board scan, association and sleep checks"
-result = "Driver and board host checks passed with ASan/UBSan, including scan channels, sleep-aware ages, current scan-result timestamps and association events. The exported ABI check preserves all 24 functions."
+result = "Driver and board host checks passed with ASan/UBSan, including scan channels, sleep-aware ages, current scan-result timestamps and association events. The exported ABI check preserves all 24 functions. The complete macOS kernel built and prelinked successfully."
 
 [[area]]
 id = "diagnostics"
@@ -1386,7 +1386,7 @@ kind = "host"
 reference = "reports/macos-wifi-wake.md"
 revision = "c8f9e6b939c84aa6517aca8f740435fe3d98d846"
 command = "Existing driver lifecycle, cfg80211, supplicant, board scan, association and sleep checks"
-result = "Driver and board host checks passed with ASan/UBSan, including scan channels, sleep-aware ages, current scan-result timestamps and association events. The exported ABI check preserves all 24 functions."
+result = "Driver and board host checks passed with ASan/UBSan, including scan channels, sleep-aware ages, current scan-result timestamps and association events. The exported ABI check preserves all 24 functions. The complete macOS kernel built and prelinked successfully."
 
 [[area]]
 id = "arm64e-os"
@@ -1462,7 +1462,7 @@ kind = "host"
 reference = "reports/macos-wifi-wake.md"
 revision = "c8f9e6b939c84aa6517aca8f740435fe3d98d846"
 command = "Existing driver lifecycle, cfg80211, supplicant, board scan, association and sleep checks"
-result = "Driver and board host checks passed with ASan/UBSan, including scan channels, sleep-aware ages, current scan-result timestamps and association events. The exported ABI check preserves all 24 functions."
+result = "Driver and board host checks passed with ASan/UBSan, including scan channels, sleep-aware ages, current scan-result timestamps and association events. The exported ABI check preserves all 24 functions. The complete macOS kernel built and prelinked successfully."
 
 [[area]]
 id = "video"
