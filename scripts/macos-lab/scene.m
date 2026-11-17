@@ -28,7 +28,7 @@ int main(int argc, const char **argv) {
             return 0;
         }
         NSApplication *app = NSApplication.sharedApplication;
-        [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+        [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
         NSWindow *window = [[NSWindow alloc]
             initWithContentRect:NSMakeRect(80, 80, 1050, 700)
             styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
@@ -54,8 +54,7 @@ int main(int argc, const char **argv) {
             [layer addAnimation:motion forKey:@"translation"];
         }
         [app finishLaunching];
-        [window makeKeyAndOrderFront:nil];
-        [app activateIgnoringOtherApps:YES];
+        [window orderBack:nil];
         printf("scene start layers=20 duration=360 preferred-fps=120\n");
         fflush(stdout);
         [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:360]];
