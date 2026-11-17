@@ -2,19 +2,19 @@
 
 Xiaomi Pad 6S Pro, sheng, 8 GiB, macOS 27.3 build 26C5035r, Android boot header v0. The installed Data volume is preserved.
 
-The comparison uses the General pane in System Settings and a 1024 by 896 atlas of 56 icon sources. Each pair contains the high-resolution workspace icon and the low-resolution IconServices rendering. The main reference renders the high-resolution glyphs; some low-resolution variants contain the colored background.
+The comparison uses the General pane in System Settings and a 1024 by 896 atlas of 56 icon sources. Each pair contains the high-resolution workspace icon and the low-resolution IconServices rendering. The pixel reference renders the high-resolution glyphs; some low-resolution variants contain the colored background.
 
 | Source | Upstream revision | Result |
 | --- | --- | --- |
-| Main reference, component `26d4902c588d0d0c23993cc4f32ebe9062d5c377` | `555b13d57e09bff70996a88cff64f1275256d5cf` | Complete icon backgrounds. Some low-resolution variants contain the background alone. |
+| Pixel reference, component `26d4902c588d0d0c23993cc4f32ebe9062d5c377` | `555b13d57e09bff70996a88cff64f1275256d5cf` | Complete icon backgrounds. Some low-resolution variants contain the background alone. |
 | Last matching checkpoint, component `898c786c0d7087ab62eb1886b96240597caadc2d` | `188606728a57db94f94395ba03144fccbe05a91d` | All atlas pixels and selected attachment statistics match the main reference. |
 | Shared uniform ranges, component `5e881fea2086ccd959c85b846ada42e8c59f3b6a` | `1b5a527f5e00abe64036db54c445d2a0e91325c1` | Green widget artifacts, cropped Settings icons and changed atlas RGB pixels. CB 4 pass 2 has RGB minima near -0.95. |
 | Corrected uniform array capacity, component `79a2d579af8e1e559391ca03874ca7cbadc360bf` | `1b5a527f5e00abe64036db54c445d2a0e91325c1` | All 56-source atlas pixels and CB 4 passes 2, 4 and 5 statistics match the main reference, with RGB minimum zero. Retained widget and Settings photos show complete backgrounds. |
 | Qualified development with the capacity correction, component `840e10fce0a40622b9c28b0f9da010a6402a84d5` | `be905fd8992417edf146792036d666c126baa093` | All atlas pixels and selected attachment statistics match the main reference. Photos through 175 seconds show complete widget and Settings backgrounds. |
 | Scheduler and rebind checkpoint, component `a4590c23b319a1ae14332d71c0a4a2fabf729aaa` | `cda5fd8f027f29f1213961de4eb11a7726c61bf6` | All atlas pixels and selected attachment statistics match the main reference. Photos through 175 seconds show complete widget and Settings backgrounds. Full macOS CI passed. |
-| Compute reuse checkpoint, component `8b1a75b3dc6999a47ea4275d04eb8e8c7b318c96` | `51280732aa8c2e86240fb5f73669f86798de9893` | Atlas pixels and selected attachment statistics match the reference. Complete backgrounds at 90 through 175 seconds. Full macOS CI passed; fixed-sequence desktop performance is under review. |
+| Compute reuse checkpoint, component `8b1a75b3dc6999a47ea4275d04eb8e8c7b318c96` | `51280732aa8c2e86240fb5f73669f86798de9893` | Atlas pixels and selected attachment statistics match the reference. Complete backgrounds at 90 through 175 seconds. Full macOS CI and ordered desktop qualification through runtime 2485 passed. |
 | Constant views and placement queries, component `3e556b62f9b9b05e250e41a79caf1f4e016b3ec8` | `85987cda9d68ef150340611d620dbbecaa1efa56` | Atlas pixels and selected attachment statistics match the reference. Complete backgrounds at 90 through 175 seconds. Full macOS CI passed. |
-| Tiling measurement and region copies, component `2ab9328eb8a220c98c2aef997fa5f4633e7f672a` | `33186454573ae3c8c1af7ef2e0fcdcf217f5eb07` | Atlas pixels and selected attachment statistics match the reference. The explicit A740 tiling check settled as LinearCheap. Full macOS CI passed. |
+| Tiling measurement and region copies, component `2ab9328eb8a220c98c2aef997fa5f4633e7f672a` | `33186454573ae3c8c1af7ef2e0fcdcf217f5eb07` | Atlas pixels and selected attachment statistics match the reference. The explicit A740 tiling check settled as LinearCheap. Full macOS CI and the ordered desktop workload passed. |
 | Staged row copies, component `d9535ac96256aacfab721d4d2eb16a6109c3181c` | `e3959de823c26623ba6a3f50bbc077d2508170f9` | All atlas pixels and selected attachment statistics match the reference. Photos at 90 and 175 seconds show complete widget and Settings backgrounds. The ordered desktop workload restarts WindowServer; this candidate remains unmerged. |
 
 ## Uniform array capacity
@@ -67,6 +67,19 @@ The staged-row capture is `s9db86-480e4e4de`, boot `C5534944-2C10-4FFA-9B16-6887
 ## Desktop stability
 
 The ordered workload uses source `619c1cecd1457ffbb91be8d6808ee0b192654213`, a background animation window and General, Network, Displays and General pane requests. The reference component `a4590c23b319a1ae14332d71c0a4a2fabf729aaa` completed capture `sc3cc5-70185657` and returned to fastboot.
+
+The qualified main prefix is development `33186454573ae3c8c1af7ef2e0fcdcf217f5eb07`, component `2ab9328eb8a220c98c2aef997fa5f4633e7f672a`, selected through [AdrenoMetal #59](https://github.com/UniXNU/AdrenoMetal/pull/59) and [UniXNU #295](https://github.com/UniXNU/UniXNU/pull/295). Its ordered capture is `s4e8fe-5ad112253`, boot `DF75D96F-FA04-4CEC-8F98-82DCAC6C8EE6`, runtime `a70fac9ecbef4a2f7c2d4125fda28c65`. All four pane requests and settling completed with a stable WindowServer process and complete widget/Settings backgrounds. Return took 195.981 seconds, Linux retrieval took 25.708 seconds and fastboot responded.
+
+The comparison omits the first 30 seconds after the initial pane request and measures the following 48 seconds. It matches 84 GPU pass signatures by geometry, format, pixel count and fragment hash.
+
+| Measurement | Scheduler reference | Qualified prefix |
+| --- | ---: | ---: |
+| Command callback latency median | 41.206 ms | 43.073 ms |
+| Command callback latency p95 | 47.058 ms | 48.547 ms |
+| Kernel submission call median | 6.376 ms | 6.802 ms |
+| Encoding batch CPU median | 0.175 ms | 0.171 ms |
+| Full-screen pass, three draws, fragment `3731781318`, median | 1.641 ms | 1.638 ms |
+| Full-screen pass, one draw, fragment `2070874897`, median | 1.162 ms | 1.151 ms |
 
 Component `d9535ac96256aacfab721d4d2eb16a6109c3181c` failed capture `sf2a4f-76733c08`, boot `E07FE387-AE42-477F-9892-3A94725CF7A2`. WindowServer PID 173 restarted as 1022 and the desktop returned to login before the sequence completed. The fresh report is `WindowServer-2026-11-14-151617.ips`. Module UUID `EA586705-94E8-3418-A84C-183386ADF0DD` matches the locally built module and its symbols.
 
