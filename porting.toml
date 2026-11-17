@@ -1054,6 +1054,21 @@ revision = "a7489b1662e6ba1753415448c928cb7d7f74ca73"
 command = "python3 scripts/check-boot-watchdog-policy.py"
 result = "The production launch policy check passed. The four lab control files match device revision 4a3945586f915c4891c7465dc727bf9538737da3 used by guarded capture s2fc70-50e43ee32, with enabled SSH, replacement-kernel preparation, bounded cover diagnostics and responsive final fastboot."
 
+
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/UniXNU/UniXNU-sheng/commit/e19928db3e6f49247f21b4593906edfc70750d65"
+revision = "e19928db3e6f49247f21b4593906edfc70750d65"
+command = "python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img --auto-login-user unixnu --password-stdin --capture-graphics --ssh-public-key authorized-key.pub --icon-path settings --icon-dump-cb 4:1 --preserve-data --autoreset 180"
+result = "One preparation produced a 100450304-byte v0 image with mode 0600, the signed GPU addon, existing-account automatic login, SSH and graphics capture."
+
+[[area.evidence]]
+kind = "device"
+reference = "reports/macos-unattended-desktop.md"
+revision = "e19928db3e6f49247f21b4593906edfc70750d65"
+command = "run-sheng-unattended.sh sheng-group2482-icons.img 420"
+result = "Capture sa5ae6-42021120d, boot 50C2AB62-9A9F-40B9-9099-5B9C12872385, reached General Settings with user unixnu, caffeinate and SSH enabled. Shader Cache reported running=false. All atlas pixels matched the reference. Return took 206.224 seconds and Linux retrieval 18.856 seconds; fastboot responded."
+
 [[area]]
 id = "diagnostics"
 status = "implemented"
