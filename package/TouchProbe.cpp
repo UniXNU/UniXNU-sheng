@@ -24,10 +24,13 @@ extern "C" {
 #include "NvtProtocol.h"
 #include "NvtTouchCore.h"
 #include "TouchBoard.h"
+#include "TouchLid.h"
 #include "TouchTrace.h"
 #include "SmmuBypass.h"
 extern const uint8_t native_touch_firmware[] __attribute__((weak_import));
 extern const uint32_t native_touch_firmware_size __attribute__((weak_import));
+// KeyboardProbe.cpp: 1 while the keyboard cover is closed over the screen (TouchLid.h).
+extern volatile uint32_t native_keyboard_lid_closed __attribute__((weak_import));
 }
 
 extern "C" {
@@ -443,7 +446,22 @@ extern "C" void native_touch_set_sink(void (*sink)(void *), void *context) {gTou
 // Set while the scripted input (swipe) holds a contact down: the panel's own empty frames, which it reports about 110 times a second
 // with no finger on it, would lift that contact after every scripted frame (int-283: 1247 one-frame strokes, no swipe ever reached the UI).
 volatile bool gScriptedDown;
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+// KeyboardProbe.cpp's lid word (TouchLid.h, declared above): while the cover is closed over the screen, all contacts lift once and
+// later frames are dropped, so the cover lying on the glass does not flood WindowServer.
+touch_lid_gate gTouchLidGate = TOUCH_LID_GATE_INIT;
+#endif
 void publish(unsigned count, const nvt_contact *c) {
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+    if (&native_keyboard_lid_closed) {
+        const bool closed = touch_lid_closed_word(__atomic_load_n(&native_keyboard_lid_closed, __ATOMIC_ACQUIRE));
+        switch (touch_lid_gate_step(&gTouchLidGate, closed)) {
+        case TouchLidDrop: return;
+        case TouchLidRelease: count = 0; break;
+        case TouchLidPass: break;
+        }
+    }
+#endif
     int ids[NVT_SLOTS], xs[NVT_SLOTS], ys[NVT_SLOTS];
     for (unsigned i = 0; i < count && i < NVT_SLOTS; ++i) {
         ids[i] = c[i].tracking_id; xs[i] = c[i].x; ys[i] = c[i].y < 0 ? c[i].y : (20319 - (c[i].y > 20319 ? 20319 : c[i].y));

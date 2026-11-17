@@ -7,6 +7,8 @@
 #include <mutex>
 #include <vector>
 #include <functional>
+#include <map>
+#include <string>
 using IOReturn = int;
 using IOByteCount = size_t;
 using IOOptionBits = unsigned;
@@ -88,6 +90,10 @@ public:
     virtual bool start(IOService *) {return !failSuperStart;}
     virtual void stop(IOService *) {}
     bool setProperty(const char *, bool) {return true;}
+    std::map<std::string, std::vector<uint8_t>> dataProperties;
+    bool setProperty(const char *key, const void *bytes, unsigned length) {
+        dataProperties[key].assign(static_cast<const uint8_t *>(bytes), static_cast<const uint8_t *>(bytes) + length); return true;
+    }
     int handleReport(IOMemoryDescriptor *report, IOHIDReportType, IOOptionBits) {
         const std::vector<uint8_t> before(report->data.begin(), report->data.begin() + report->length);
         if (reportCallback) reportCallback();

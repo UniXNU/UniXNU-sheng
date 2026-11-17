@@ -17,8 +17,9 @@
 // as the cover is open: the display dimmed and slept, and no key did anything), and its HID event driver makes no pointer events from a
 // touchpad's finger collections ("createEventForDigitizerCollection generates null event"; only Apple's own trackpads have a driver).
 // There the device is a keyboard and a pointer: the touchpad report becomes relative motion, scroll steps and two buttons
-// (Wn8030.c wn8030_pointer_report), and the folded cover is silenced by KeyboardProbe.cpp alone.
+// (Wn8030.c wn8030_pointer_report_at, with each report's arrival time), and the folded cover is silenced by KeyboardProbe.cpp alone.
 #include <IOKit/hid/IOHIDDevice.h>
+#include <kern/clock.h>
 #include "Wn8030.h"
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOWorkLoop.h>
@@ -44,7 +45,12 @@ namespace {
     0x09, 0x31, 0x26, 0xef, 0x07, 0x46, 0x2b, 0x02, 0x81, 0x02, \
     0x65, 0x00, 0x55, 0x00, 0x45, 0x00, \
     0xc0,
-const uint8_t kDescriptor[] = {
+#if NATIVE_COVER_POINTER
+#define COVER_CONST __attribute__((section("__DATA_CONST,__const")))
+#else
+#define COVER_CONST
+#endif
+const uint8_t kDescriptor[] COVER_CONST = {
     // Keyboard: 8 modifiers, a reserved byte, 6 keys (usages 0 to 0xa4); Caps Lock LED output.
     0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0x85, 0x05,
     0x05, 0x07, 0x19, 0xe0, 0x29, 0xe7, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
@@ -95,6 +101,8 @@ void *volatile gOutputContext;
 
 // [0] devices started, [1] input reports, [2] failed input reports, [3] output reports, [4] feature reads, [5] last failure
 extern "C" {volatile int32_t native_keyboard_hid_stats[6];}
+// The controller's counters (KeyboardProbe.cpp: stage, interrupts, frames read, I2C failures and the rest).
+extern "C" volatile int32_t native_keyboard_stats[17];
 
 class ShengKeyboardCover : public IOHIDDevice {
     OSDeclareDefaultStructors(ShengKeyboardCover)
@@ -105,6 +113,21 @@ class ShengKeyboardCover : public IOHIDDevice {
     bool gateAdded = false, stopping = false, reporting = false;
 #if NATIVE_COVER_POINTER
     struct wn8030_pointer pointer = {};
+    uint32_t timingAt = 0;
+    bool timingSent = false;
+
+    // ShengTouchpadTiming, for `ioreg -r -c ShengKeyboardCover`: 32-bit little-endian words, layout 1, the touchpad reports, the
+    // pointer reports sent, the touches the pause rule restarted, the gap buckets (Wn8030.h wn8030_gap_bucket), then the controller's
+    // 17 counters. Published at device start and at most once a second of report time.
+    void publishTiming(uint32_t now) {
+        if (timingSent && now - timingAt < 1000) return;
+        timingSent = true; timingAt = now;
+        uint32_t words[4 + WN8030_GAP_BUCKETS + 17];
+        words[0] = 1; words[1] = pointer.reports; words[2] = pointer.sent; words[3] = pointer.restarts;
+        for (unsigned i = 0; i < WN8030_GAP_BUCKETS; ++i) words[4 + i] = pointer.gaps[i];
+        for (unsigned i = 0; i < 17; ++i) words[4 + WN8030_GAP_BUCKETS + i] = static_cast<uint32_t>(native_keyboard_stats[i]);
+        setProperty("ShengTouchpadTiming", words, sizeof words);
+    }
 #endif
 
     static IOReturn submitAction(OSObject *owner, void *bytes, void *length, void *, void *) {
@@ -135,7 +158,10 @@ public:
         uint8_t moved[WN8030_POINTER_REPORT];
         if (bytes[0] == kTouchpadId) {
             if (length != WN8030_TOUCHPAD_REPORT) return;
-            length = wn8030_pointer_report(&pointer, bytes, moved);
+            uint64_t ns; absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+            const uint32_t now = static_cast<uint32_t>(ns / 1000000);
+            length = wn8030_pointer_report_at(&pointer, bytes, now, moved);
+            publishTiming(now);
             if (!length) return;
             bytes = moved;
         }
@@ -204,6 +230,11 @@ public:
         if (!setProperty("HIDDefaultBehavior", true)) return false;
         if (!IOHIDDevice::start(provider)) return false;
         native_keyboard_hid_stats[0] = native_keyboard_hid_stats[0] + 1;
+#if NATIVE_COVER_POINTER
+        uint64_t ns;
+        absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+        publishTiming(static_cast<uint32_t>(ns / 1000000));
+#endif
         return true;
     }
     void stop(IOService *provider) override {
