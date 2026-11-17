@@ -43,12 +43,20 @@ def main():
     graphics.add_argument('--manual-session', action='store_true', help='boot the desktop for manual use with the firmware return timer')
     parser.add_argument('--kernel-arg', action='append', default=[], help='additional kernel argument for this capture')
     parser.add_argument('--preserve-data', action='store_true')
+    parser.add_argument('--auto-login-user', help='configure automatic login for an existing local account')
+    parser.add_argument('--password-stdin', action='store_true', help='read the existing account password from standard input')
+    parser.add_argument('--ssh-public-key', type=Path, help='enable Remote Login with this Ed25519 public key')
+    parser.add_argument('--capture-graphics', action='store_true', help='capture fresh graphics logs during boot')
     parser.add_argument('--bluetooth-runtime', type=Path, help='signed runtime report from build-bluetooth-userspace.py')
     parser.add_argument('--refresh-payload', action='store_true', help='build the current board menu, ADT and firmware transport')
     parser.add_argument('--uefi', type=Path, help='built firmware checkout for --refresh-payload')
     parser.add_argument('--unique-chip-id', help='device platform seed for --refresh-payload')
     parser.add_argument('--autoreset', type=int, default=7200)
     args = parser.parse_args()
+    if bool(args.auto_login_user) != args.password_stdin:
+        parser.error('--auto-login-user and --password-stdin are required together')
+    if (args.ssh_public_key or args.capture_graphics) and not args.auto_login_user:
+        parser.error('--ssh-public-key and --capture-graphics require --auto-login-user')
     if args.output.exists() or args.input.resolve() == args.output.resolve():
         parser.error('choose a new output file')
     if args.refresh_payload and not args.uefi:
@@ -185,6 +193,16 @@ def main():
             env=dict(os.environ, ADRENO_PLUGIN_DIR=str(args.plugin.resolve())))
         run(sys.executable, core / 'scripts/addon-add-dir.py', original_addon, addon,
             '--addon', gpu, 'test', files, 'test', ROOT / 'scripts/macos-lab', *bluetooth_dirs)
+        if args.auto_login_user:
+            login_addon = work / 'login-addon.bin'
+            login = [sys.executable, core / 'scripts/make-macos-autologin-addon.py', addon, login_addon,
+                     '--user', args.auto_login_user, '--password-stdin']
+            if args.ssh_public_key:
+                login += ['--ssh-public-key', args.ssh_public_key.resolve()]
+            if args.capture_graphics:
+                login += ['--capture-graphics']
+            run(*login, stdin=sys.stdin)
+            addon = login_addon
         run(sys.executable, core / 'scripts/trust-append-module.py', original_trust, trust, *sorted(set(hashes)))
         if args.refresh_payload:
             from unixnu.cli import parser as cli_parser
@@ -247,6 +265,8 @@ def main():
             try:
                 fat_payload.build(ctx)
                 bootimg.build(ctx, ctx.uefi, fd, None, fat_payload.paths(ctx)[1], args.output)
+                if args.auto_login_user:
+                    args.output.chmod(0o600)
             finally:
                 if previous is None:
                     os.environ.pop('UNIXNU_BOOT_TEMPLATE', None)
@@ -287,6 +307,8 @@ def main():
         if args.preserve_data:
             command += ['--remove-arg', 'data-reset']
         run(*command)
+        if args.auto_login_user:
+            args.output.chmod(0o600)
     print(f'GPU lab image: {args.output}; {len(set(hashes))} signed diagnostic images')
 
 
