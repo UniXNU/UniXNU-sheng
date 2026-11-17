@@ -78,8 +78,9 @@ void prepare() {
     for (uint32_t i = 0; i < SHENG_SLEEP_GPIO_COUNT; ++i) {
         if (sheng_sleep_pin_usable(i) && gAsleep[i] != gSaved[i]) *reg(i, kIntrCfg) = gAsleep[i];
     }
-    // A closed lid's status is the edge of its closing: cleared, so that only an open lid holds the summary.
-    if (lidClosed()) *reg(SHENG_SLEEP_LID_GPIO, kIntrStatus) = 0;
+    // An edge latched before the wait, open or closed (ShengSleep.h sheng_sleep_clear_lid_status): cleared, so that only the lid
+    // moving while asleep raises the summary.
+    if (sheng_sleep_clear_lid_status(lidClosed())) *reg(SHENG_SLEEP_LID_GPIO, kIntrStatus) = 0;
     barrier();
     sheng_sleep_stats[1] = sheng_sleep_stats[1] + 1;
 }
