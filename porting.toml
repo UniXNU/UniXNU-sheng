@@ -114,6 +114,13 @@ revision = "855a9a65ff15a96b2c44429e0deed21c59cbf28a"
 command = "git diff --exit-code fd225e4d444b840e2749d60a71cc02a70ea3792e 855a9a65ff15a96b2c44429e0deed21c59cbf28a -- .github/workflows/macos-lab.yml"
 result = "The core_ref workflow source matches the dispatched CI version. The input selects the core checkout and defaults to main; the active macOS lab run selects core 6d059b16c2f09f2f6911d5a5c1ee0d8ee4c866f5."
 
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-lab-cache.md"
+revision = "f08e5c5e1449ecc0730a335e66978c52732f451b"
+command = "gh workflow run macos-lab.yml --ref fix/ci-cache-publish-after-build --field core_ref=0000000000000000000000000000000000000000 --field root_storage=false"
+result = "The deliberate unavailable-core workflow run was accepted and failed during checkout. Build-input and kernel-record cache saves both reported skipped under the successful-image publication condition."
+
 [[area]]
 id = "firmware"
 status = "implemented"
@@ -566,6 +573,13 @@ reference = "reports/macos-cover-input.md"
 revision = "ac40d6811c15f775371db7d0aa1fccb3f099b8e6"
 command = "macOS cover host checks and guarded v0 desktop capture"
 result = "The replacement-kernel preparation produced a v0 desktop image with runtime 2bb0552b6e78724f9ab119c3370d20ed. Retained 120 to 175 second photos show complete widget and Settings backgrounds."
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-cover-input.md"
+revision = "a7489b1662e6ba1753415448c928cb7d7f74ca73"
+command = "python3 scripts/check-boot-watchdog-policy.py"
+result = "The production launch policy check passed. The four lab control files match device revision 4a3945586f915c4891c7465dc727bf9538737da3 used by guarded capture s2fc70-50e43ee32, with enabled SSH, replacement-kernel preparation, bounded cover diagnostics and responsive final fastboot."
 
 [[area]]
 id = "bluetooth"
@@ -1033,6 +1047,13 @@ revision = "ac40d6811c15f775371db7d0aa1fccb3f099b8e6"
 command = "macOS cover host checks and guarded v0 desktop capture"
 result = "The macOS HID checker passed 5119 checks. The exported toolchain built and prelinked the DEVELOPMENT kernel with initial cover timing publication; the kernel SHA-256 is 7a246e83410c23a60d23427ae85aac56aeb0e6345cc37b59e88495881458972f. The guarded desktop capture and bounded cover-property selection retained ProductID 163."
 
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-cover-input.md"
+revision = "a7489b1662e6ba1753415448c928cb7d7f74ca73"
+command = "python3 scripts/check-boot-watchdog-policy.py"
+result = "The production launch policy check passed. The four lab control files match device revision 4a3945586f915c4891c7465dc727bf9538737da3 used by guarded capture s2fc70-50e43ee32, with enabled SSH, replacement-kernel preparation, bounded cover diagnostics and responsive final fastboot."
+
 [[area]]
 id = "diagnostics"
 status = "implemented"
@@ -1143,6 +1164,13 @@ reference = "reports/macos-cover-input.md"
 revision = "ac40d6811c15f775371db7d0aa1fccb3f099b8e6"
 command = "macOS cover host checks and guarded v0 desktop capture"
 result = "The production launch-policy initializer host checks passed, including enable-jobs. The device capture showed SSH enabled and completed the timed return and Linux retrieval."
+
+[[area.evidence]]
+kind = "host"
+reference = "reports/macos-cover-input.md"
+revision = "a7489b1662e6ba1753415448c928cb7d7f74ca73"
+command = "python3 scripts/check-boot-watchdog-policy.py"
+result = "The production launch policy check passed. The four lab control files match device revision 4a3945586f915c4891c7465dc727bf9538737da3 used by guarded capture s2fc70-50e43ee32, with enabled SSH, replacement-kernel preparation, bounded cover diagnostics and responsive final fastboot."
 
 [[area]]
 id = "arm64e-os"
