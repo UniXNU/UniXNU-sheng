@@ -14,6 +14,7 @@ The comparison uses the General pane in System Settings and a 1024 by 896 atlas 
 | Scheduler and rebind checkpoint, component `a4590c23b319a1ae14332d71c0a4a2fabf729aaa` | `cda5fd8f027f29f1213961de4eb11a7726c61bf6` | All atlas pixels and selected attachment statistics match the main reference. Photos through 175 seconds show complete widget and Settings backgrounds. Full macOS CI passed. |
 | Compute reuse checkpoint, component `8b1a75b3dc6999a47ea4275d04eb8e8c7b318c96` | `51280732aa8c2e86240fb5f73669f86798de9893` | Atlas pixels and selected attachment statistics match the reference. Complete backgrounds at 90 through 175 seconds. Startup timing and CI are under review. |
 | Constant views and placement queries, component `3e556b62f9b9b05e250e41a79caf1f4e016b3ec8` | `85987cda9d68ef150340611d620dbbecaa1efa56` | Atlas pixels and selected attachment statistics match the reference. Complete backgrounds at 90 through 175 seconds. Full CI is pending. |
+| Tiling measurement and region copies, component `2ab9328eb8a220c98c2aef997fa5f4633e7f672a` | `33186454573ae3c8c1af7ef2e0fcdcf217f5eb07` | Atlas pixels and selected attachment statistics match the reference. The explicit A740 tiling check settled as LinearCheap. Full CI is pending. |
 
 ## Uniform array capacity
 
@@ -46,3 +47,16 @@ Compare the retained Settings photos, the decoded atlas pixels and the matching 
 The scheduler and rebind capture is `s079b0-42da33372`, boot `BE80FAD6-5A74-44A0-A165-F01E26E6B089`, runtime `ab279cc610ed93f137b1668e3f751450`. The local release build and signing passed. Return took 205.927 seconds and Linux retrieval took 19.800 seconds, with fastboot responding. The 4096-pixel half-blur probe had no nonfinite values. The candidate is [AdrenoMetal #55](https://github.com/UniXNU/AdrenoMetal/pull/55) and [UniXNU #292](https://github.com/UniXNU/UniXNU/pull/292); its complete CI passed: [43987841609](https://github.com/UniXNU/UniXNU-sheng/actions/runs/43987841609).
 
 The compute-reuse capture is `s23178-3b623c779`, boot `A5FC6DB7-5C84-4D1C-9178-15D5980C1B00`, runtime `8e5753f0087aa93fb01850fdecb7f45a`; return and Linux retrieval took 206.210 and 19.058 seconds. The constant-view capture is `sa5ae6-42021120d`, boot `50C2AB62-9A9F-40B9-9099-5B9C12872385`, runtime `6922265bbba960fbd06100a4f70b17a7`; return and retrieval took 206.224 and 18.856 seconds. Both returned to responsive fastboot. Their local builds and signing passed.
+
+## A740 texture tiling measurement
+
+Capture `s3e223-6182b8d69`, boot `034A90BD-C54F-41E2-9F83-CA1B3253C2FD`, runtime `a70fac9ecbef4a2f7c2d4125fda28c65`, measured eight rounds of two-pass 2048 by 1536 BGRA8Unorm frames.
+
+| GPU operation | Median |
+| --- | ---: |
+| Linear frame over host pages | 1.339 ms |
+| Optimal frame | 1.048 ms |
+| Download to host pages | 0.889 ms |
+| Upload from host pages | 0.342 ms |
+
+The check reported `LinearCheap` and completed in 905.1 ms of host time. These frame and copy costs support the selected `InPlaceWrites` policy for this host-page workload. The icon atlas and selected attachment statistics matched the reference. Return took 206.099 seconds, Linux retrieval took 18.921 seconds and fastboot responded. Complete CI: [43995908832](https://github.com/UniXNU/UniXNU-sheng/actions/runs/43995908832).
