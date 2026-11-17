@@ -31,3 +31,5 @@ Kernel replacement carries the matching root policies, entry probes and POST sea
 ## Lab controls
 
 `enable-jobs=LABEL` enables a selected launch job under the boot policy. `prepare-sheng-gpu-lab.py --kernel` replaces the kernel, root policy bundle and entry probes in one payload preparation. The daemon records bounded cover identity and timing properties with remote-login state. The four control files at `a7489b1662e6ba1753415448c928cb7d7f74ca73` match the corresponding source used by the guarded capture above.
+
+The shared lab controls passed the [complete macOS CI build](https://github.com/UniXNU/UniXNU-sheng/actions/runs/43978179270) with device `4a3945586f915c4891c7465dc727bf9538737da3` and core `e23fdd384f34859653c970d3e9f4e79331f387bd`. The four control files are selected in [PR #120](https://github.com/UniXNU/UniXNU-sheng/pull/120).
