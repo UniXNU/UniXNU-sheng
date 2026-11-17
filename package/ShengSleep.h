@@ -50,6 +50,12 @@ static inline void sheng_sleep_tlmm_keep(const uint32_t cfg[SHENG_SLEEP_GPIO_COU
     }
 }
 
+// Whether the wait's preparation clears the lid pin's INTR_STATUS: always. Closed, the status is the edge of its closing; open, it is an
+// edge latched while the system was awake (KeyboardProbe polls the pin and leaves the status), which raised the summary the moment the
+// wait began and, the lid being open, counted as an opening: the system woke 3 ms after it slept. Cleared, a status while asleep is a
+// movement of the lid during the sleep (a closing is acknowledged and the wait goes on, an opening wakes it).
+static inline int sheng_sleep_clear_lid_status(int closed) {(void)closed; return 1;}
+
 // The lid pin's INTR_CFG while asleep: level high and enabled when the lid was closed as the sleep began, else unchanged.
 static inline uint32_t sheng_sleep_lid_cfg(uint32_t cfg, int closed_when_sleep_began)
 {
