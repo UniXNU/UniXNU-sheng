@@ -136,6 +136,7 @@ def main():
         (files / 'share/icon-probe-path').write_text(args.icon_path+'\n' if args.icon_path else '')
         (files / 'share/tiling-cost-check').write_text('1\n' if args.tiling_cost_check else '0\n')
         (files / 'share/graphics-comparison').write_text('shader-cache\n' if args.shader_cache_view else 'view\n' if args.graphics_view else '1\n' if args.graphics_comparison else '')
+        (files / 'share/graphics-timing').write_text('1 15 15\n' if args.autoreset < 300 else '2 20 30\n')
         for name in ('video-probe.mp4', 'video-probe-10bit.mp4'):
             (files / 'share' / name).write_bytes(b'')
         if args.video_fixture:
