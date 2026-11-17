@@ -27,7 +27,11 @@ def wall_us(value):
 def capture(directory, skip):
     files = directory / 'diag/files'
     session = files / 'Users/Shared/unixnu-test'
-    boot = re.search(r'^graphics state boot=(\S+)', (session / 'graphics-state.log').read_text())[1]
+    state = (session / 'graphics-state.log').read_text()
+    boot = re.search(r'^graphics state boot=(\S+)', state)[1]
+    servers = set(re.findall(r'^\s*(\d+)\s+\d+\s+.+/WindowServer\s*$', state, re.M))
+    if len(servers) > 1:
+        raise ValueError(f'{directory}: WindowServer restarted during the capture')
     log = (session / 'agent.log').read_text()
     start = log.rfind('comparison start boot=' + boot + '\n')
     if start < 0:
@@ -79,8 +83,11 @@ def main():
                         help='omit this interval after the first pane request (default: 30)')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
-    baseline, first = capture(args.baseline, args.skip_seconds)
-    candidate, second = capture(args.candidate, args.skip_seconds)
+    try:
+        baseline, first = capture(args.baseline, args.skip_seconds)
+        candidate, second = capture(args.candidate, args.skip_seconds)
+    except ValueError as error:
+        parser.error(str(error))
     if baseline['pane_requests'] != candidate['pane_requests'] or baseline['timing'] != candidate['timing']:
         parser.error('captures use different pane requests or timing')
     matched = []
