@@ -153,6 +153,7 @@ jobs:
             python3 ../device/scripts/prepare-macos-install.py --reuse-policies
           fi
       - name: Build images
+        id: build-images
         working-directory: device
         run: scripts/package.sh --os macos-27 --uefi ../uefi-sheng
       - name: Publish shader inventory
@@ -211,7 +212,7 @@ jobs:
             UniXNU/out/sheng/*/*/tree/build/sheng-source-storage/*.command.json
           retention-days: 1
       - name: Save build inputs
-        if: always() && steps.build-cache.outputs.cache-hit != 'true'
+        if: always() && steps.build-images.outcome == 'success' && steps.build-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           key: sheng-macos27-build-v1-${{ runner.os }}-${{ github.run_id }}
@@ -226,7 +227,7 @@ jobs:
             device/drivers/Ath12kWifi/deps
             device/.cache/firmware
       - name: Save kernel compile records
-        if: always() && steps.kernel-cache.outputs.cache-hit != 'true'
+        if: always() && steps.build-images.outcome == 'success' && steps.kernel-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           key: ${{ steps.kernel-sdk.outputs.key }}-${{ github.run_id }}
