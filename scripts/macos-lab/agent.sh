@@ -40,14 +40,21 @@ if [ -s /private/var/ngpu/test/share/graphics-comparison ]; then
     /private/var/ngpu/test/bin/gpu-scene &
     animation=$!
     /bin/echo "comparison start boot=$(/usr/sbin/sysctl -n kern.bootsessionuuid)"
-    for round in 1 2; do
+    rounds=2
+    pane_seconds=20
+    settle_seconds=30
+    if [ -r /private/var/ngpu/test/share/graphics-timing ]; then
+        read -r rounds pane_seconds settle_seconds < /private/var/ngpu/test/share/graphics-timing
+    fi
+    /bin/echo "comparison timing rounds=$rounds pane_seconds=$pane_seconds settle_seconds=$settle_seconds"
+    for round in $(/usr/bin/seq 1 "$rounds"); do
         for pane in com.apple.systempreferences.GeneralSettings com.apple.Network-Settings.extension com.apple.Displays-Settings.extension com.apple.systempreferences.GeneralSettings; do
             /bin/echo "comparison round=$round pane=$pane time=$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
             /usr/bin/open "x-apple.systempreferences:$pane"
-            /bin/sleep 20
+            /bin/sleep "$pane_seconds"
         done
     done
-    /bin/sleep 30
+    /bin/sleep "$settle_seconds"
     /bin/kill -TERM "$animation" 2>/dev/null || :
     /bin/echo "comparison complete time=$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
     /usr/bin/touch /Users/Shared/unixnu-test/benchmark.done
