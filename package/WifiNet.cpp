@@ -36,6 +36,7 @@ extern "C" {
 #include <stdarg.h>
 #include "nw_abi.h"
 #include "nw_control_endpoint.h"
+#include "WifiScanResult.h"
 
 #if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
 // macOS: en0 is ShengEthernet (an IOEthernetController of the original IONetworkingFamily, ShengEthernet.cpp), which carries this
@@ -98,13 +99,9 @@ struct assoc_event27 {
 static_assert(sizeof(assoc_event27) == 540 && __builtin_offsetof(assoc_event27, result) == 0x214 &&
               __builtin_offsetof(assoc_event27, has_result) == 0x218, "24A446 association event");
 
-struct channel { uint32_t version, channel, flags; };
+using channel = sheng_wifi_channel;
 struct channels_list { uint32_t version, count; channel list[401]; uint32_t unused; };           // 4824 bytes
-struct scan_result {                                                                              // 1164 bytes
-  uint32_t version; channel ch; uint16_t noise_known; int16_t noise, snr, rssi; uint16_t beacon_interval, capability; uint8_t bssid[6];
-  uint8_t rate_count, unused0; uint32_t rates[15]; uint8_t ssid_length, ssid[32], unused1[3]; uint32_t age_ms; uint8_t flags, unused2;
-  uint16_t elements_length; uint8_t elements[1024];
-};
+using scan_result = sheng_wifi_scan_result;                                                       // 0x8e8 bytes (WifiScanResult.h)
 struct assoc_parameters {
   uint32_t ssid_length; uint8_t ssid[32]; uint8_t bssid[6], unused[2];
   uint32_t key_version, key_length, key_cipher; uint16_t key_flags, key_index; uint8_t key[64];
@@ -120,8 +117,9 @@ struct assoc_request27 {                                                        
   assoc_parameters network; uint8_t rest[0x290 - 0x8c];
 };
 struct link_event { uint8_t down, unused0[3]; int32_t rssi; uint16_t snr, noise; uint8_t unused1[4]; uint8_t involuntary, unused2[3]; uint32_t reason, subreason; uint8_t unused3[4]; };
-static_assert(sizeof(scan_result) == 1164 && __builtin_offsetof(scan_result, ssid_length) == 0x60 && __builtin_offsetof(scan_result, age_ms) == 0x84 &&
-              __builtin_offsetof(scan_result, elements) == 0x8c, "scan result layout");
+static_assert(sizeof(scan_result) == SHENG_WIFI_SCAN_RESULT_BYTES && __builtin_offsetof(scan_result, ssid_length) == 0x60 &&
+              __builtin_offsetof(scan_result, age_ms) == 0x84 && __builtin_offsetof(scan_result, elements) == SHENG_WIFI_SCAN_ELEMENTS &&
+              __builtin_offsetof(scan_result, timestamp) == SHENG_WIFI_SCAN_TIMESTAMP, "scan result layout");
 static_assert(sizeof(assoc_parameters) == 0x7c && __builtin_offsetof(assoc_parameters, key) == 0x3c &&
               __builtin_offsetof(assoc_parameters, key_length) == 0x30 &&
               __builtin_offsetof(assoc_parameters, key_cipher) == 0x34, "association network prefix");
@@ -495,10 +493,12 @@ void fill_channel(channel &c, uint32_t mhz) {
   c.version = 1;
   if (mhz >= 4900) { c.channel = (mhz - 5000) / 5; c.flags = 0x2 | 0x10; } else { c.channel = mhz == 2484 ? 14 : (mhz - 2407) / 5; c.flags = 0x2 | 0x8; }
 }
-void fill_result(scan_result &r, const nw_bss_info &b) {
+// The time the network was heard goes out with the record: now on the clock that counts sleep, less the age (WifiScanResult.h).
+void fill_result(scan_result &r, const nw_bss_info &b, uint32_t requestBytes) {
   memset(&r, 0, sizeof r); r.version = 1; fill_channel(r.ch, b.freq_mhz); r.noise_known = 1; r.noise = -95; r.rssi = b.signal_dbm; r.snr = b.signal_dbm + 95;
   r.beacon_interval = b.beacon_int; r.capability = b.caps; memcpy(r.bssid, b.bssid, 6); r.ssid_length = b.ssid_len; memcpy(r.ssid, b.ssid, 32);
-  r.age_ms = b.age_ms; r.elements_length = b.ie_len > sizeof r.elements ? sizeof r.elements : b.ie_len; memcpy(r.elements, b.ie, r.elements_length);
+  uint64_t now = 0; absolutetime_to_nanoseconds(mach_continuous_time(), &now);
+  sheng_wifi_scan_result_stamp(&r, b.ie, b.ie_len, b.age_ms, now, requestBytes);
   r.rate_count = 0;
 }
 int copy_out(const apple80211req &rq, const void *src, size_t size) {
@@ -670,14 +670,14 @@ int apple80211(bool set, apple80211req &rq) {
   case kScanResult: {
     nw_bss_info b; const int count = nw_wifi_bss_count();
     if (gScanCursor >= static_cast<unsigned>(count) || nw_wifi_bss_get(static_cast<int>(gScanCursor), &b)) { gScanCursor = 0; return EIO; }   // after the last record
-    gScanCursor++; fill_result(out.res, b);
+    gScanCursor++; fill_result(out.res, b, rq.req_len);
     if (gResultsShown < 24) { ++gResultsShown; log(6, "wifi-net: scan result %u: %u MHz, %d dBm, %.*s", gScanCursor, b.freq_mhz, b.signal_dbm, b.ssid_len, reinterpret_cast<const char *>(b.ssid)); }
     return copy_out(rq, &out.res, sizeof out.res); }
   case kCurrentNetwork: {
     if (st.state < NW_STA_ASSOC) return ENOENT;
     nw_bss_info b; const int count = nw_wifi_bss_count();
     for (int i = 0; i < count; i++) if (!nw_wifi_bss_get(i, &b) && !memcmp(b.bssid, st.bssid, 6)) {
-      fill_result(out.res, b); out.res.rssi = st.signal_dbm;
+      fill_result(out.res, b, rq.req_len); out.res.rssi = st.signal_dbm;
       out.res.snr = st.signal_dbm > -95 && st.signal_dbm < 0 ? st.signal_dbm + 95 : 0;
       return copy_out(rq, &out.res, sizeof out.res);
     }
