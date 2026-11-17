@@ -50,6 +50,8 @@ python3 scripts/prepare-sheng-gpu-lab.py INPUT.img OUTPUT.img \
 
 This capture requests the Settings sidebar icons through IconServices with cache bypass, exports `icons.png` and records the selected command buffer. Compare backgrounds, glyphs and edges against the [rendering reference](metal-upstream-rendering.md). `graphics-state.log` includes process and SSH state; `graphics-events-previous.log` contains the isolated command-buffer payloads.
 
+Render-server stderr is appended to `/private/var/tmp/NativeAdrenoMetal.cache/runtime-stderr.log`. Each process records its boot UUID and PID. Graphics diagnostics include the current boot's last 64 KiB in `graphics-state.log`. Capture `s3a6e1-222ad7510d` exported the boot marker for WindowServer PID 171, completed the ordered desktop workload and returned to fastboot.
+
 Capture `sa5ae6-42021120d`, boot `50C2AB62-9A9F-40B9-9099-5B9C12872385`, used the one-pass account preparation and reached General Settings. All 56-source atlas pixels and selected attachment statistics matched the main reference. Console user `unixnu` (UID 501), caffeinate, enabled SSH and Shader Cache `running=false` were recorded. The image returned after 206.224 seconds; Linux retrieval took 18.856 seconds and fastboot responded. Complete macOS CI: [43992174081](https://github.com/UniXNU/UniXNU-sheng/actions/runs/43992174081).
 
 ## Texture tiling cost capture

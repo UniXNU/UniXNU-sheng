@@ -15,7 +15,8 @@ The comparison uses the General pane in System Settings and a 1024 by 896 atlas 
 | Compute reuse checkpoint, component `8b1a75b3dc6999a47ea4275d04eb8e8c7b318c96` | `51280732aa8c2e86240fb5f73669f86798de9893` | Atlas pixels and selected attachment statistics match the reference. Complete backgrounds at 90 through 175 seconds. Full macOS CI and ordered desktop qualification through runtime 2485 passed. |
 | Constant views and placement queries, component `3e556b62f9b9b05e250e41a79caf1f4e016b3ec8` | `85987cda9d68ef150340611d620dbbecaa1efa56` | Atlas pixels and selected attachment statistics match the reference. Complete backgrounds at 90 through 175 seconds. Full macOS CI passed. |
 | Tiling measurement and region copies, component `2ab9328eb8a220c98c2aef997fa5f4633e7f672a` | `33186454573ae3c8c1af7ef2e0fcdcf217f5eb07` | Atlas pixels and selected attachment statistics match the reference. The explicit A740 tiling check settled as LinearCheap. Full macOS CI and the ordered desktop workload passed. |
-| Staged row copies, component `d9535ac96256aacfab721d4d2eb16a6109c3181c` | `e3959de823c26623ba6a3f50bbc077d2508170f9` | All atlas pixels and selected attachment statistics match the reference. Photos at 90 and 175 seconds show complete widget and Settings backgrounds. The ordered desktop workload restarts WindowServer; this candidate remains unmerged. |
+| Staged row copies, component `d9535ac96256aacfab721d4d2eb16a6109c3181c` | `e3959de823c26623ba6a3f50bbc077d2508170f9` | Atlas pixels and selected attachment statistics match the reference. The ordered repeat completed with a stable WindowServer process. Full macOS CI passed. |
+| Current main, component `f7b4ed1d3824c1033d9355e29889076f83163e3b` | `46e7cc96a284150bdf19b4a6a7890b0a8bc0ef71` | R2507 completed the ordered desktop workload with WindowServer PID 171 unchanged. Widget and Settings backgrounds are complete in retained photos; the user confirmed the displayed result. Local release build and signing passed. |
 
 ## Uniform array capacity
 
@@ -68,7 +69,7 @@ The staged-row capture is `s9db86-480e4e4de`, boot `C5534944-2C10-4FFA-9B16-6887
 
 The ordered workload uses source `619c1cecd1457ffbb91be8d6808ee0b192654213`, a background animation window and General, Network, Displays and General pane requests. The reference component `a4590c23b319a1ae14332d71c0a4a2fabf729aaa` completed capture `sc3cc5-70185657` and returned to fastboot.
 
-The qualified main prefix is development `33186454573ae3c8c1af7ef2e0fcdcf217f5eb07`, component `2ab9328eb8a220c98c2aef997fa5f4633e7f672a`, selected through [AdrenoMetal #59](https://github.com/UniXNU/AdrenoMetal/pull/59) and [UniXNU #295](https://github.com/UniXNU/UniXNU/pull/295). Its ordered capture is `s4e8fe-5ad112253`, boot `DF75D96F-FA04-4CEC-8F98-82DCAC6C8EE6`, runtime `a70fac9ecbef4a2f7c2d4125fda28c65`. All four pane requests and settling completed with a stable WindowServer process and complete widget/Settings backgrounds. Return took 195.981 seconds, Linux retrieval took 25.708 seconds and fastboot responded.
+The R2485 comparison uses development `33186454573ae3c8c1af7ef2e0fcdcf217f5eb07`, component `2ab9328eb8a220c98c2aef997fa5f4633e7f672a`. Its ordered capture is `s4e8fe-5ad112253`, boot `DF75D96F-FA04-4CEC-8F98-82DCAC6C8EE6`, runtime `a70fac9ecbef4a2f7c2d4125fda28c65`. All four pane requests and settling completed with a stable WindowServer process and complete widget/Settings backgrounds. Return took 195.981 seconds, Linux retrieval took 25.708 seconds and fastboot responded.
 
 The comparison omits the first 30 seconds after the initial pane request and measures the following 48 seconds. It matches 84 GPU pass signatures by geometry, format, pixel count and fragment hash.
 
@@ -83,4 +84,12 @@ The comparison omits the first 30 seconds after the initial pane request and mea
 
 Component `d9535ac96256aacfab721d4d2eb16a6109c3181c` failed capture `sf2a4f-76733c08`, boot `E07FE387-AE42-477F-9892-3A94725CF7A2`. WindowServer PID 173 restarted as 1022 and the desktop returned to login before the sequence completed. The fresh report is `WindowServer-2026-11-14-151617.ips`. Module UUID `EA586705-94E8-3418-A84C-183386ADF0DD` matches the locally built module and its symbols.
 
-The panic bounds-check location is `crates/metal2vulkan-runtime/src/replay.rs:123:19`, in `Handles<RenderPipelineState>::get`, reached by `render::replay::render` and `nmb_render_set_pipeline`. Rust panic unwinding then fails pointer authentication in libunwind. The first introducing revision and the invalid handle's lifetime are under investigation. This candidate remains unmerged. Automatic return took 206.119 seconds, Linux retrieval took 19.569 seconds and fastboot responded.
+The panic bounds-check location is `crates/metal2vulkan-runtime/src/replay.rs:123:19`, in `Handles<RenderPipelineState>::get`, reached by `render::replay::render` and `nmb_render_set_pipeline`. Rust panic unwinding then fails pointer authentication in libunwind. The cause is undetermined. Automatic return took 206.119 seconds, Linux retrieval took 19.569 seconds and fastboot responded. Repeat capture `s3de1f-63d0e8c2b`, boot `152C6F90-BAB5-407E-904B-D50FFB57C267`, completed the ordered workload with WindowServer PID 171 unchanged and returned to fastboot.
+
+## Current desktop result
+
+Main selects R2507 through [AdrenoMetal #62](https://github.com/UniXNU/AdrenoMetal/pull/62) and [UniXNU #298](https://github.com/UniXNU/UniXNU/pull/298). Capture `s3a6e1-222ad7510d`, boot `E89B4F09-A0DE-436C-9389-06EAFB2BCBB7`, completed all pane requests and settling with WindowServer PID 171 unchanged. Return took 195.873 seconds, Linux retrieval took 24.889 seconds and fastboot responded.
+
+The 48-second comparison window matches 78 GPU pass signatures against the scheduler reference. Command callback latency was 41.462 ms median and 46.328 ms p95; kernel submission calls were 6.894 ms median and 9.243 ms p95. Encoding batch CPU time was 0.171 ms median. The full-screen three-draw pass with fragment `3731781318` took 1.656 ms median; the one-draw pass with fragment `2070874897` took 1.182 ms.
+
+The runtime policy source audit resolves all 26 policy defaults and 19 Turnip options. `QueueTurnPolicy::Fair` is selected by default. The consumer retains the uniform array correction and manual Shader Cache application. The full image build is [44022249295](https://github.com/UniXNU/UniXNU-sheng/actions/runs/44022249295).
