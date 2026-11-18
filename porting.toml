@@ -1471,6 +1471,13 @@ revision = "c8f9e6b939c84aa6517aca8f740435fe3d98d846"
 command = "Existing driver lifecycle, cfg80211, supplicant, board scan, association and sleep checks"
 result = "Driver and board host checks passed with ASan/UBSan, including scan channels, sleep-aware ages, current scan-result timestamps and association events. The exported ABI check preserves all 24 functions. The complete macOS kernel built and prelinked successfully."
 
+[[area.evidence]]
+kind = "host"
+reference = "https://github.com/HYL0924/UniXNU/actions/runs/44395041532"
+revision = "c5f129f00434532a877b3ccee76726f66330dd3b"
+command = "./unixnu build --os ipados-27.0.1-24A446 kernel"
+result = "Removing USB roots did not resolve the native code collision. The board adapter still binds the USB controller. Restore its dependencies and request size optimization for this defconfig; device boot is unverified."
+
 [[area]]
 id = "video"
 status = "implemented"
