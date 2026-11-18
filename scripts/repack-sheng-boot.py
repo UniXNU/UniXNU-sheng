@@ -10,7 +10,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
+import runpy
 import struct
 import subprocess
 import sys
@@ -56,6 +58,8 @@ def main():
     parser.add_argument('output', type=Path)
     parser.add_argument('--kernel-arg', action='append', default=[])
     parser.add_argument('--remove-arg', action='append', default=[])
+    parser.add_argument('--desktop-session', action='store_true',
+                        help='prepare a desktop with automatic login, quiet runtime jobs and no lab or return timer')
     parser.add_argument('--partition-bytes', type=int)
     parser.add_argument('--payload-mib', type=int, help='FAT payload size for a diagnostic RAM boot')
     parser.add_argument('--payload-file', action='append', default=[], metavar='SOURCE=FAT_PATH')
@@ -63,6 +67,8 @@ def main():
     parser.add_argument('--uefi', type=Path, help='UEFI checkout providing the panic font')
     parser.add_argument('--core', type=Path, help='resolved UniXNU tree providing the payload codec')
     args = parser.parse_args()
+    if args.desktop_session:
+        os.umask(0o077)
     board = tomllib.loads((Path(__file__).resolve().parents[1] / 'board.toml').read_text())
     core = (args.core or Path(__file__).resolve().parents[1] / board['package']['unixnu']).resolve()
     sys.path.insert(0, str(core / 'scripts'))
@@ -108,8 +114,60 @@ def main():
             payload_bytes = min(payload_bytes, maximum // MIB * MIB)
         config = work / 'unixnu.toml'
         run('mcopy', '-i', original, '::/EFI/UniXNU/unixnu.toml', config)
+        if args.desktop_session:
+            values = [value for entry in tomllib.loads(config.read_text())['entry']
+                      if entry.get('type') == 'xnu' for value in entry.get('args', '').split()]
+            args.remove_arg += [value.split('=', 1)[0] for value in values
+                                if value.split('=', 1)[0].startswith(('log-', 'diag-', 'trace-'))]
+            args.remove_arg += ['log', 'diag', 'gpu-trace', 'gpu-perf', 'icon-cb', 'gpu-prime',
+                                'build-tag', 'exec-log', 'vc-text', 'storage-probe', 'data-reset',
+                                'autoreset', 'autoreset-clean', 'uefi-watchdog']
+            disabled = {'com.apple.cameracaptured', 'org.unixnu.test.daemon',
+                        'org.unixnu.test.agent', 'org.unixnu.graphics-log'}
+            for value in values:
+                if value.startswith('disable-jobs='):
+                    disabled.update(value.split('=', 1)[1].split(','))
+            args.kernel_arg += ['log=0', 'autoreset=0', 'uefi-watchdog=1',
+                                'disable-jobs=' + ','.join(sorted(disabled))]
         config.write_text(change_arguments(config.read_text(), args.kernel_arg, args.remove_arg))
         replacements = []
+        if args.desktop_session:
+            addon_path = 'EFI/UniXNU/Payloads/kernel.macho.gpuaddon'
+            addon = work / 'desktop-addon.bin'
+            run('mcopy', '-i', original, '::/' + addon_path, addon)
+            addon_codec = runpy.run_path(str(core / 'scripts/addon-add-dir.py'))
+            entries = []
+            for name, mode, body in addon_codec['read'](addon):
+                if name.startswith(('test/', 'debug/')) or name.endswith('org.unixnu.graphics-log.plist'):
+                    continue
+                if '/org.unixnu.test.' in name:
+                    continue
+                if name.endswith('AutoLogin/capture-graphics.sh'):
+                    continue
+                if name.endswith('AutoLogin/install.sh'):
+                    script = body.decode().replace('exec >>/Users/Shared/unixnu-test/daemon.log 2>&1',
+                                                 'exec >/dev/null 2>&1')
+                    script = script.split('/bin/sleep 60\n', 1)[0]
+                    script = '\n'.join(line.split(' || /usr/bin/logger', 1)[0] + ' || :'
+                                       if ' || /usr/bin/logger' in line else line
+                                       for line in script.splitlines()
+                                       if not line.startswith('/usr/bin/logger ')) + '\n'
+                    body = script.encode()
+                if name.endswith('.plist') and name.startswith(('Library/LaunchDaemons/', 'Library/LaunchAgents/')):
+                    job = plistlib.loads(body)
+                    job['StandardOutPath'] = '/dev/null'
+                    job['StandardErrorPath'] = '/dev/null'
+                    body = plistlib.dumps(job)
+                entries.append((name, mode, body))
+            for domain, label in [('LaunchDaemons', 'org.unixnu.test.daemon'),
+                                  ('LaunchAgents', 'org.unixnu.test.agent'),
+                                  ('LaunchDaemons', 'org.unixnu.graphics-log')]:
+                name = f'Library/{domain}/{label}.plist'
+                entries.append((name, 0o644, plistlib.dumps(dict(
+                    Label=label, Disabled=True, RunAtLoad=False,
+                    ProgramArguments=['/usr/bin/true']))))
+            addon_codec['write'](addon, entries)
+            replacements.append((addon, Path(addon_path)))
         for specification in args.payload_file:
             source, separator, destination = specification.partition('=')
             relative = Path(destination)
