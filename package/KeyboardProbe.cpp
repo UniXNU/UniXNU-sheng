@@ -79,7 +79,9 @@ namespace {
 #define KEYBOARD_CONST
 #endif
 static const char kLidLog[] KEYBOARD_CONST = "sheng keyboard: lid %s\n";
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
 static const char kClamshellLog[] KEYBOARD_CONST = "sheng keyboard: clamshell %s sent to the power manager\n";
+#endif
 static const char kCoverLog[] KEYBOARD_CONST = "sheng keyboard: cover %s; frame %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x; before it %s, ms since a frame %d, "
           "input %d, accelerometer %d; frames %d, controller interrupts %d, i2c failures %d, last i2c error 0x%x, auth %d, attaches %d, "
           "reloads %u\n";
