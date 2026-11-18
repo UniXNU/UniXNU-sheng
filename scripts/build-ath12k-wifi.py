@@ -13,6 +13,29 @@ out.mkdir(parents=True, exist_ok=True)
 (out / 'build-report.json').unlink(missing_ok=True)
 raw = out / 'raw'
 raw.mkdir(exist_ok=True)
+
+# FreeBSD release branches move; restore the exact revision from source-lock.json before the
+# module's fetcher validates it. A pre-existing edited checkout is left untouched.
+lock = json.loads((module / 'tools/source-lock.json').read_text())
+freebsd = lock['freebsd']
+freebsd_dir = module / 'deps/freebsd'
+cloned = not (freebsd_dir / '.git').exists()
+if cloned:
+    subprocess.run(['git', 'clone', '--depth', '1', '--filter=blob:none', '--no-checkout',
+                    '--branch', freebsd['ref'], freebsd['url'], str(freebsd_dir)], check=True)
+    subprocess.run(['git', '-C', str(freebsd_dir), 'sparse-checkout', 'init', '--cone'], check=True)
+    paths = [path.strip('/') for path in freebsd['paths']]
+    subprocess.run(['git', '-C', str(freebsd_dir), 'sparse-checkout', 'set', '--skip-checks', *paths], check=True)
+else:
+    dirty = subprocess.run(['git', '-C', str(freebsd_dir), 'status', '--porcelain'],
+                           check=True, capture_output=True, text=True).stdout
+    if dirty:
+        raise SystemExit('FreeBSD source checkout has local changes; preserving it')
+revision = subprocess.run(['git', '-C', str(freebsd_dir), 'rev-parse', 'HEAD'],
+                          check=True, capture_output=True, text=True).stdout.strip()
+if revision != freebsd['commit']:
+    subprocess.run(['git', '-C', str(freebsd_dir), 'fetch', '--depth', '1', 'origin', freebsd['commit']], check=True)
+    subprocess.run(['git', '-C', str(freebsd_dir), 'checkout', '--detach', freebsd['commit']], check=True)
 subprocess.run(['bash', str(module / 'tools/fetch-sources.sh')], check=True, stdout=subprocess.DEVNULL)
 subprocess.run(['bash', str(module / 'tools/prepare.sh')], check=True, stdout=subprocess.DEVNULL)
 clang = subprocess.run(['xcrun', '-f', 'clang'], check=True, capture_output=True, text=True).stdout.strip()
