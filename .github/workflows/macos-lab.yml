@@ -6,7 +6,7 @@ on:
       core_ref:
         description: UniXNU core branch or commit
         type: string
-        default: main
+        default: 10eccf96e78a06d0a1b271e500fe1bc1f473e2bf
       root_storage:
         description: Build the userdata root image
         type: boolean
