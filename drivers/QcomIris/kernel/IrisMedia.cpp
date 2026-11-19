@@ -87,9 +87,10 @@ struct Note {   /* what the event thread hands to the sink */
     uint32_t event;
 };
 
-Media gTable[MaxSessions];
+// Allocated once on first open, under the same lock as the event queue.
+struct MediaStorage { Media table[MaxSessions]; Note ring[RingSize]; };
+MediaStorage *gStorage;
 uint32_t gNextId = 1;
-Note gRing[RingSize];
 uint32_t gHead, gTail;          /* under the device's lock */
 bool gThreadStarted;
 void (*gSink)(void *, const uint8_t *, uint32_t);
@@ -97,7 +98,7 @@ void *gSinkContext;
 
 IOLock *lock() { return QcomIrisDeviceLock(); }
 Media *find(uint32_t id) {
-    for (Media &m : gTable) if (m.used && m.id == id) return &m;
+    if (gStorage) for (Media &m : gStorage->table) if (m.used && m.id == id) return &m;
     return nullptr;
 }
 Media *ofIris(struct qcom_iris_session *is) {
@@ -121,8 +122,8 @@ void note(const Note &n) {
         iris_media_stats[6] = iris_media_stats[6] + 1;
         return;
     }
-    gRing[gHead++ % RingSize] = n;
-    IOLockWakeup(lock(), &gRing, true);
+    gStorage->ring[gHead++ % RingSize] = n;
+    IOLockWakeup(lock(), &gHead, true);
 }
 void noteEvent(Media *m, uint32_t kind, uint32_t event) {
     Note n = {};
@@ -143,8 +144,8 @@ void eventThread(void *, wait_result_t) {
     IOLock *l = lock();
     IOLockLock(l);
     for (;;) {
-        while (gHead == gTail) IOLockSleep(l, &gRing, THREAD_UNINT);
-        const Note n = gRing[gTail++ % RingSize];
+        while (gHead == gTail) IOLockSleep(l, &gHead, THREAD_UNINT);
+        const Note n = gStorage->ring[gTail++ % RingSize];
         void (*sink)(void *, const uint8_t *, uint32_t) = gSink;
         void *context = gSinkContext;
         IOLockUnlock(l);
@@ -443,7 +444,9 @@ int iris_media_open(unsigned device, uint32_t *session) {
     if (!iris_media_is_up(device) || !session) return Enodev;
     IOLockLock(lock());
     Media *m = nullptr;
-    for (Media &candidate : gTable) if (!candidate.used) { m = &candidate; break; }
+    if (!gStorage) gStorage = static_cast<MediaStorage *>(IOMallocZero(sizeof(MediaStorage)));
+    if (!gStorage) { IOLockUnlock(lock()); return Enomem; }
+    for (Media &candidate : gStorage->table) if (!candidate.used) { m = &candidate; break; }
     if (m) {
         memset(m, 0, sizeof *m);
         m->used = true;

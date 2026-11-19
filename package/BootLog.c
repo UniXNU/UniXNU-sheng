@@ -374,10 +374,11 @@ extern volatile uint32_t sheng_edge_cross_type_steals[2] __attribute__((weak_imp
 extern uint64_t cs_native4k_read_ticks __attribute__((weak_import)), cs_native4k_hash_ticks __attribute__((weak_import)),
   cs_native4k_bytes __attribute__((weak_import));
 extern unsigned long cs_native4k_ready_blobs __attribute__((weak_import));
-extern uint64_t cs_native4k_digest_wall[2] __attribute__((weak_import)), cs_native4k_digest_cpu[2] __attribute__((weak_import)),
-  cs_native4k_digest_bytes[2] __attribute__((weak_import)), cs_native4k_chunk_ticks __attribute__((weak_import)),
-  cs_native4k_record_ticks __attribute__((weak_import));
-extern unsigned long cs_native4k_chunks_made __attribute__((weak_import));
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+extern uint64_t cs_native4k_digest_wall[2], cs_native4k_digest_cpu[2], cs_native4k_digest_bytes[2],
+  cs_native4k_chunk_ticks, cs_native4k_record_ticks;
+extern unsigned long cs_native4k_chunks_made;
+#endif
 extern volatile uint32_t sheng_edge_idle_beside_queued[2][8] __attribute__((weak_import));
 extern volatile uint32_t native_touch_cost[9] __attribute__((weak_import));
 extern volatile uint32_t native_touch_irq_stats[4] __attribute__((weak_import));
@@ -1004,8 +1005,8 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              (unsigned long long)(cs_native4k_bytes >> 20), (unsigned long long)(read_ns / 1000000), (unsigned long long)(hash_ns / 1000000));
     at = put(out, at, cap, row, sizeof row);
   }
-  // The digests alone (cssha-digest-time.patch): MiB hashed, wall ms and the threads' own CPU ms, on efficiency cores and
-  // on the others; then the chunks of lazy answers made, the ms making them and the ms recording answers.
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+  // These counters are supplied by the macOS XNU profile.
   if (&cs_native4k_digest_wall && &cs_native4k_digest_cpu && &cs_native4k_digest_bytes && &cs_native4k_chunk_ticks &&
       &cs_native4k_record_ticks && &cs_native4k_chunks_made) {
     uint64_t wall_ns[2], cpu_ns[2], chunk_ns = 0, record_ns = 0;
@@ -1023,6 +1024,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              (unsigned long long)(chunk_ns / 1000000), (unsigned long long)(record_ns / 1000000));
     at = put(out, at, cap, row, sizeof row);
   }
+#endif
   if (log_display_on && &native_legacy_swap_rejected_count && native_legacy_swap_rejected_count) {
     char row[220];
     snprintf(row, sizeof row, "REJ acc=%u rej=%u r=%u st=%x/%x/%x op=%x/%x/%x wh=%ux%u s=%llx/%llx/%llx/%llx cls=%.24s",
