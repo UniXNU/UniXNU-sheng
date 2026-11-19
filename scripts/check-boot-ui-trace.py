@@ -3,17 +3,28 @@
 from pathlib import Path
 import json,hashlib,subprocess
 root=Path(__file__).resolve().parents[1];out=root/'build/cpu-desktop/ui-trace';out.mkdir(parents=True,exist_ok=True)
-s=(root/'kits/sheng/BootUiTraceProbe.c').read_text();body=s[s.index('static struct bt_entry samples'):s.index('// One kernel thread found')]
+s=(root/'package/BootUiTraceProbe.c').read_text();body=s[s.index('// Hot threads:'):s.index('// One kernel thread found')]
 prefix=r'''
+#define _DEFAULT_SOURCE
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <assert.h>
 #include <pthread.h>
+/* Mirror Darwin's uint64_t spelling so the kernel printf formats are checked on Linux too. */
+#ifdef __linux__
+typedef unsigned long long darwin_uint64_t;
+#define uint64_t darwin_uint64_t
+#endif
 #include "BootUiTraceCore.h"
 #include "BootUiTraceDetails.h"
 #define KERN_SUCCESS 0
+#define VM_KERNEL_UNSLIDE(x) (x)
+#define VM_KERNEL_UNSLIDE_OR_PERM(x) (x)
+static unsigned allocations;
+static void *IOMallocAligned(size_t n,size_t alignment){assert(alignment==4096);return ++allocations==1?NULL:malloc(n);}
 #define TH_WAIT 0x01
 #define TH_RUN 0x04
 #define TH_TERMINATE 0x10
@@ -88,39 +99,41 @@ static void setup(unsigned count){
 static void *capture_worker(void *unused){(void)unused;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0x1863c000);boot_ui_trace_publish();return NULL;}
 static uint64_t decode(const char *s){static const char digits[]="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_";uint64_t v=0;for(;*s;++s){const char *p=strchr(digits,*s);assert(p);v=v*64+(unsigned)(p-digits);}return v;}
 int main(void){
+ setup(1);boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);boot_ui_trace_publish();boot_ui_trace_snapshot(0);
+ assert(allocations==1 && !capture_ws && !boot_ui_trace_ready && !task.busy && !map.refs);
  for(unsigned i=0;i<39;++i){uint64_t v=(UINT64_C(1)<<i)-1;char token[9];bt_address(token,v);assert(strlen(token)<=7&&decode(token)==v);}
  for(unsigned n=0;n<10000;++n){uint64_t v=((uint64_t)n*UINT64_C(771723231))&((UINT64_C(1)<<39)-1);char token[9];bt_address(token,v);assert(decode(token)==v);}
- setup(3);boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0x1863c000);assert(!task.busy&&interrupts&&!map.refs&&draft.threads==3&&draft.count==1&&draft.entries[0].count==3);
- boot_ui_trace_task(&task,2,26,"SpringBoard",0x1863c000);assert(draft.count==2&&draft.threads==6);boot_ui_trace_publish();boot_ui_trace_snapshot(0);
+ setup(3);boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0x1863c000);assert(!task.busy&&interrupts&&!map.refs&&capture_ws->draft.threads==3&&capture_ws->draft.count==1&&capture_ws->draft.entries[0].count==3);
+ boot_ui_trace_task(&task,2,26,"SpringBoard",0x1863c000);assert(capture_ws->draft.count==2&&capture_ws->draft.threads==6);boot_ui_trace_publish();boot_ui_trace_snapshot(0);
  assert(boot_ui_trace_ready&&boot_ui_trace_groups==2&&boot_ui_trace_pages==2&&strstr(boot_ui_trace_label,"B=p57+1863c000")&&strstr(boot_ui_trace_rows[0],"B01x3")&&strstr(boot_ui_trace_rows[0]+60,"S01x3"));
  setup(1);struct space space={.owner=&task,.port={.pid=1}};task.itk_space=&space;
  native_regs[16]=UINT64_MAX-46;native_regs[1]=3;native_regs[3]=0x1234;native_regs[4]=UINT64_C(0x10000000)<<32;image_present=true;
  boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0xc14000);
- assert(!space.refs&&!space.port.locked&&draft.entries[0].peer==1&&draft.entries[0].peer_code==0&&draft_main[0].frames[31]==map.lr[31]&&!draft_main[0].error&&draft_main[0].image==0x118ce8000&&!draft_main[0].image_error);
- native_regs[1]=2;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0xc14000);assert(draft.entries[0].peer_code==5&&draft.entries[0].peer==1&&!space.refs);
+ assert(!space.refs&&!space.port.locked&&capture_ws->draft.entries[0].peer==1&&capture_ws->draft.entries[0].peer_code==0&&draft_main[0].frames[31]==map.lr[31]&&!draft_main[0].error&&draft_main[0].image==0x118ce8000&&!draft_main[0].image_error);
+ native_regs[1]=2;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0xc14000);assert(capture_ws->draft.entries[0].peer_code==5&&capture_ws->draft.entries[0].peer==1&&!space.refs);
  native_regs[1]=3;
  boot_ui_trace_publish();boot_ui_trace_snapshot(8);for(unsigned row=0;row<BT_ROWS;++row)puts(boot_ui_trace_rows[row]);assert(strstr(boot_ui_trace_rows[0],"MAIN B p57")&&strstr(boot_ui_trace_rows[2],"B FP01")&&strstr(boot_ui_trace_rows[5],"B FP25"));
- space.fail=true;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(draft.entries[0].peer_code==4&&!space.refs);
- native_regs[3]=0;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(draft.entries[0].peer_code==2&&!space.refs);
- native_regs[3]=0x1234;task.itk_space=NULL;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(draft.entries[0].peer_code==3);
+ space.fail=true;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(capture_ws->draft.entries[0].peer_code==4&&!space.refs);
+ native_regs[3]=0;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(capture_ws->draft.entries[0].peer_code==2&&!space.refs);
+ native_regs[3]=0x1234;task.itk_space=NULL;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(capture_ws->draft.entries[0].peer_code==3);
  setup(1);boot_ui_trace_begin();boot_ui_trace_task(&task,1,97,"chronod",0);boot_ui_trace_publish();boot_ui_trace_snapshot(8);assert(strstr(boot_ui_trace_rows[0],"MAIN C p97"));
  setup(2);boot_ui_trace_begin();boot_ui_trace_task(&task,1,140,"configd",0x1000);boot_ui_trace_task(&task,2,110,"nehelper",0x1000);boot_ui_trace_task(&task,3,122,"profiled",0x1000);boot_ui_trace_task(&task,4,27,"SpringBoard",0x1000);boot_ui_trace_task(&task,5,99,"ignored",0);
- assert(draft_pid[2]==122&&draft_pid[3]==27&&draft.threads==8);boot_ui_trace_publish();boot_ui_trace_snapshot(0);
+ assert(draft_pid[2]==122&&draft_pid[3]==27&&capture_ws->draft.threads==8);boot_ui_trace_publish();boot_ui_trace_snapshot(0);
  assert(strstr(boot_ui_trace_label,"T=p122 U=p27")&&boot_ui_trace_pages==3);
  boot_ui_trace_snapshot(8*(boot_ui_trace_pages-1));assert(strstr(boot_ui_trace_rows[0],"MAIN T p122")&&strstr(boot_ui_trace_rows[7],"MAIN U p27"));
  boot_ui_trace_snapshot(8*(boot_ui_trace_pages-2));assert(strstr(boot_ui_trace_rows[0],"MAIN B p140")&&strstr(boot_ui_trace_rows[7],"MAIN S p110"));
  {struct {char rows[12][120];char guard[16];} live;memset(&live,'Z',sizeof(live));unsigned got=boot_ui_trace_role_rows(1,live.rows,12,1);
   for(unsigned i=0;i<got;++i){assert(strlen(live.rows[i])<120);puts(live.rows[i]);}for(unsigned i=0;i<16;++i)assert(live.guard[i]=='Z');
-  assert(got==6&&strstr(live.rows[0],"STKS p110")&&strstr(live.rows[1],"STKS trap=")&&strstr(live.rows[2],"STKS 01")&&strstr(live.rows[4],"STKS 17")&&strstr(live.rows[5],"STKS#1 x2 p-1"));
+  assert(got==7&&strstr(live.rows[0],"STKS p110")&&strstr(live.rows[1],"STKS trap=")&&strstr(live.rows[2],"STKS 01")&&strstr(live.rows[4],"STKS 17")&&strstr(live.rows[5],"STKS kern st=")&&strstr(live.rows[6],"STKS#1 x2 p-1"));
   assert(boot_ui_trace_role_rows(1,live.rows,5,1)==0&&!trace_lock);trace_lock=1;assert(boot_ui_trace_role_rows(1,live.rows,12,1)==0&&boot_ui_trace_role_peer(1)==-1);trace_lock=0;
   got=boot_ui_trace_role_rows(3,live.rows,12,0);for(unsigned i=0;i<got;++i)puts(live.rows[i]);
   assert(got==2&&strstr(live.rows[0],"STKU SpringBoard p27 cache+1000")&&strstr(live.rows[1],"STKU#1 x2")&&boot_ui_trace_role_peer(3)==0&&!trace_lock);}
  struct {char row[60];char guard[16];} bounded;memset(&bounded,'Z',sizeof(bounded));struct bt_entry maximum={.role='S',.index=64,.count=64,.pc=(UINT64_C(1)<<39)-1,.lr=(UINT64_C(1)<<39)-1,.error=3};for(unsigned i=0;i<8;++i)maximum.frames[i]=maximum.pc;bt_format(&maximum,0,bounded.row);assert(strlen(bounded.row)<60);for(unsigned i=0;i<16;++i)assert(bounded.guard[i]=='Z');
- setup(65);boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(draft.threads==64&&draft_omitted==1&&!map.refs);
- setup(3);task.busy=true;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(draft_busy==1&&!draft.threads);task.busy=false;
- threads[0].sched_lock=true;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(draft_busy==1&&draft.threads==2&&threads[0].sched_lock&&interrupts);
- setup(1);map.fail=1;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(draft.read_failures==1&&draft.entries[0].error==1&&!map.refs);
- map.fail=0;map.fp[1]=map.fp[0];boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(draft.entries[0].error==3&&!map.refs);
+ setup(65);boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(capture_ws->draft.threads==64&&draft_omitted==1&&!map.refs);
+ setup(3);task.busy=true;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(draft_busy==1&&!capture_ws->draft.threads);task.busy=false;
+ threads[0].sched_lock=true;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(draft_busy==1&&capture_ws->draft.threads==2&&threads[0].sched_lock&&interrupts);
+ setup(1);map.fail=1;boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(capture_ws->draft.read_failures==1&&capture_ws->draft.entries[0].error==1&&!map.refs);
+ map.fail=0;map.fp[1]=map.fp[0];boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);assert(capture_ws->draft.entries[0].error==3&&!map.refs);
  struct bt_groups groups={0};for(unsigned i=0;i<128;++i){struct bt_entry e=maximum;e.pc=i;e.index=i%64+1;bt_add(&groups,&e);}char rows[BT_ROWS][120];bt_rows(&groups,8,rows);assert(strstr(rows[0],"S49x1"));
  setup(1);boot_ui_trace_begin();boot_ui_trace_task(&task,1,57,"backboardd",0);boot_ui_trace_publish();boot_ui_trace_snapshot(0);char before[sizeof(boot_ui_trace_rows)];memcpy(before,boot_ui_trace_rows,sizeof(before));
  assert(!pthread_mutex_lock(&gate));hold=true;entered=false;assert(!pthread_mutex_unlock(&gate));pthread_t worker;assert(!pthread_create(&worker,NULL,capture_worker,NULL));
@@ -156,11 +169,11 @@ int main(void){
 }
 '''
 (out/'test.c').write_text(prefix+body+main)
-subprocess.run(['clang','-std=c11','-Wall','-Wextra','-Werror','-Wno-unused-function','-O1','-g','-fsanitize=address,undefined','-pthread','-I',str(root/'kits/sheng'),str(out/'test.c'),'-o',str(out/'test')],check=True,timeout=45)
+subprocess.run(['clang','-std=c11','-Wall','-Wextra','-Werror','-Wno-unused-function','-O1','-g','-fsanitize=address,undefined','-pthread','-I',str(root/'package'),str(out/'test.c'),'-o',str(out/'test')],check=True,timeout=45)
 r=subprocess.run([str(out/'test')],check=True,capture_output=True,text=True,timeout=15)
 (out/'formatted.txt').write_text(r.stdout)
 import importlib.util
-spec=importlib.util.spec_from_file_location('decoder',root/'scripts/decode-boot-ui-trace.py');decoder=importlib.util.module_from_spec(spec);spec.loader.exec_module(decoder)
+spec=importlib.util.spec_from_file_location('decoder',root.parent/'UniXNU/scripts/decode-boot-ui-trace.py');decoder=importlib.util.module_from_spec(spec);spec.loader.exec_module(decoder)
 rows=decoder.decode(r.stdout);backboard=next(row for row in rows if row['role']=='B')
 for first in (1,9,17,25):
  assert backboard['frames_%d_%d'%(first,first+7)]==[hex(0x1e3dc0000+i*4) for i in range(first-1,first+7)]

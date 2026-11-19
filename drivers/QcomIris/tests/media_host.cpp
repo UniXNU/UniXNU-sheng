@@ -18,6 +18,8 @@ extern "C" {
 
 /* ---- the kernel ---- */
 static jmp_buf idle;
+static unsigned allocations;
+void *IOMallocZero(size_t n) { return ++allocations == 1 ? nullptr : calloc(1, n); }
 static void (*threadMain)(void *, wait_result_t);
 int IOLockSleep(IOLock *, void *, int) { longjmp(idle, 1); }
 int kernel_thread_start(void (*main)(void *, wait_result_t), void *, thread_t *thread) { threadMain = main; *thread = nullptr; return 0; }
@@ -247,6 +249,13 @@ static void stream(uint32_t depth, uint32_t fourcc, uint32_t rowBytes) {
 int main(void) {
     CHECK(iris_media_devices() == 1 && iris_media_is_up(IrisMediaDecoder) && !strcmp(iris_media_card(IrisMediaDecoder), "iris decoder"));
     iris_media_set_sink(IrisMediaDecoder, sink, nullptr);
+    pump();  /* The event thread can sleep before the first open. */
+    uint32_t ids[8] = {}, extra = 0;
+    CHECK(iris_media_close(IrisMediaDecoder, 1) == 2);
+    CHECK(iris_media_open(IrisMediaDecoder, &extra) == 12 && !extra);
+    for (auto &id : ids) CHECK(iris_media_open(IrisMediaDecoder, &id) == 0);
+    CHECK(iris_media_open(IrisMediaDecoder, &extra) == 16 && allocations == 2);
+    for (auto id : ids) CHECK(iris_media_close(IrisMediaDecoder, id) == 0);
     stream(8, 0x3231564e, 1920);     /* NV12 */
     stream(10, 0x30313050, 3840);    /* P010: two bytes a sample */
     /* a stream the session cannot give: the client hears of the failure */

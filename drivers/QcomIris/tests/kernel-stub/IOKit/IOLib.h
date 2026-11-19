@@ -4,4 +4,5 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+void *IOMallocZero(size_t);
 #endif
