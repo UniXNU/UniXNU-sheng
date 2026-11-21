@@ -34,6 +34,7 @@ static inline unsigned bl_macos_file_limit(const char *path) {
   const char *name=path+sizeof cache-1;
   if(!strcmp(name,"timing.log"))return 512*1024;
   if(!strcmp(name,"runtime-policy.log"))return 256*1024;
+  if(!strcmp(name,"runtime-stderr.log"))return 1024*1024;
   if(!strcmp(name,"prime-resume"))return 1024;
   for(unsigned i=0;i<sizeof prime/sizeof prime[0];++i)if(!strcmp(name,prime[i]))return i==2?4*1024*1024:512*1024;
  }
