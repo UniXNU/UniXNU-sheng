@@ -27,17 +27,45 @@ uint32_t wn8030_sum32(const uint8_t *bytes, uint32_t length)
     return sum;
 }
 
-uint32_t wn8030_control(uint8_t out[1 + WN8030_COMMAND_BYTES], uint8_t command, const uint8_t *payload, uint8_t length)
+static uint32_t wn8030_command_frame(uint8_t out[1 + WN8030_COMMAND_BYTES], uint8_t route, uint8_t command,
+                                     const uint8_t *payload, uint8_t length)
 {
     if (length > WN8030_COMMAND_BYTES - 9u || (length && !payload)) return 0;
     uint8_t *f = out + 1;
     out[0] = WN8030_REG_WRITE;
     zero(f, WN8030_COMMAND_BYTES);
-    f[0] = 0x32; f[2] = 0x4e; f[3] = 0x31; f[4] = 0x80; f[5] = 0x38;
+    f[0] = 0x32; f[2] = route; f[3] = 0x31; f[4] = 0x80; f[5] = 0x38;
     f[6] = command; f[7] = length;
     for (uint32_t i = 0; i < length; ++i) f[8 + i] = payload[i];
     f[8 + length] = wn8030_sum8(f + 2, 6u + length);
     return 1 + WN8030_COMMAND_BYTES;
+}
+
+uint32_t wn8030_control(uint8_t out[1 + WN8030_COMMAND_BYTES], uint8_t command, const uint8_t *payload, uint8_t length)
+{
+    return wn8030_command_frame(out, 0x4eu, command, payload, length);
+}
+
+uint32_t wn8030_auth_init(uint8_t out[1 + WN8030_COMMAND_BYTES])
+{
+    static const uint8_t miauth[6] = {'M', 'I', 'A', 'U', 'T', 'H'};
+    return wn8030_command_frame(out, 0x4fu, WN8030_AUTH_CMD_INIT, miauth, sizeof miauth);
+}
+
+uint32_t wn8030_auth_s3t1(uint8_t out[1 + WN8030_COMMAND_BYTES], const uint8_t key_meta[WN8030_AUTH_KEY_META_BYTES],
+                          const uint8_t challenge[WN8030_AUTH_CHALLENGE_BYTES])
+{
+    if (!key_meta || !challenge) return 0;
+    uint8_t body[WN8030_AUTH_KEY_META_BYTES + WN8030_AUTH_CHALLENGE_BYTES];
+    for (uint32_t i = 0; i < WN8030_AUTH_KEY_META_BYTES; ++i) body[i] = key_meta[i];
+    for (uint32_t i = 0; i < WN8030_AUTH_CHALLENGE_BYTES; ++i) body[WN8030_AUTH_KEY_META_BYTES + i] = challenge[i];
+    return wn8030_command_frame(out, 0x4fu, WN8030_AUTH_CMD_S3T1, body, sizeof body);
+}
+
+uint32_t wn8030_auth_s5t1(uint8_t out[1 + WN8030_COMMAND_BYTES], const uint8_t token[WN8030_AUTH_TOKEN_BYTES])
+{
+    if (!token) return 0;
+    return wn8030_command_frame(out, 0x4fu, WN8030_AUTH_CMD_S5T1, token, WN8030_AUTH_TOKEN_BYTES);
 }
 
 int wn8030_image_check(const uint8_t *image, uint32_t size, uint32_t *code_size)
@@ -117,9 +145,15 @@ int wn8030_parse(const uint8_t frame[WN8030_FRAME_BYTES], Wn8030Frame *out)
     case 0xa2:
         out->attached = (frame[12] & 3) == 3 ? 1 : (frame[12] & 3) == 0 ? 0 : -1;
         return out->kind = Wn8030Attach;
-    case 0x24: return out->kind = Wn8030AuthRequest;
-    case 0x31: return out->kind = Wn8030AuthInit;
-    case 0x32: return out->kind = Wn8030AuthChallenge;
+    case 0x24:
+        out->auth_state = frame[9];
+        return out->kind = Wn8030AuthRequest;
+    case 0x31:
+        out->auth_uid = frame + 11;
+        return out->kind = Wn8030AuthInit;
+    case 0x32:
+        out->auth_challenge = frame + 25;
+        return out->kind = Wn8030AuthChallenge;
     default: return out->kind = Wn8030Other;
     }
 }

@@ -42,6 +42,15 @@ enum {Wn8030RomIdle = 0, Wn8030RomHeader = 1, Wn8030RomVerified = 3};
 #define WN8030_LED_MIC_OFF 0xf3u
 #define WN8030_BACKLIGHT_MAX 100u
 
+/* MiAuth commands (66-byte frames {0x32, 0, 0x4f, 0x31, 0x80, 0x38, cmd, len, payload, checksum}). */
+#define WN8030_AUTH_UID_BYTES 16u
+#define WN8030_AUTH_KEY_META_BYTES 4u
+#define WN8030_AUTH_CHALLENGE_BYTES 16u
+#define WN8030_AUTH_TOKEN_BYTES 16u
+#define WN8030_AUTH_CMD_INIT 0x31u
+#define WN8030_AUTH_CMD_S3T1 0x32u
+#define WN8030_AUTH_CMD_S5T1 0x33u
+
 /* Input report sizes, report ID included. */
 #define WN8030_KEYBOARD_REPORT 9u
 #define WN8030_CONSUMER_REPORT 3u
@@ -73,6 +82,9 @@ typedef struct {
     uint32_t length;
     int attached;
     int16_t x, y, z;
+    uint8_t auth_state;
+    const uint8_t *auth_uid;
+    const uint8_t *auth_challenge;
 } Wn8030Frame;
 
 uint8_t wn8030_sum8(const uint8_t *bytes, uint32_t length);
@@ -82,6 +94,11 @@ uint32_t wn8030_sum32(const uint8_t *bytes, uint32_t length);
 /* A control command with its register byte: out[0] = 0x5c, then the 66-byte frame. Returns the bytes to write (67), 0 for a payload
  * over 57 bytes. */
 uint32_t wn8030_control(uint8_t out[1 + WN8030_COMMAND_BYTES], uint8_t command, const uint8_t *payload, uint8_t length);
+/* MiAuth commands (route byte 0x4f): init ("MIAUTH"), step-3 challenge, step-5 pad token. */
+uint32_t wn8030_auth_init(uint8_t out[1 + WN8030_COMMAND_BYTES]);
+uint32_t wn8030_auth_s3t1(uint8_t out[1 + WN8030_COMMAND_BYTES], const uint8_t key_meta[WN8030_AUTH_KEY_META_BYTES],
+                          const uint8_t challenge[WN8030_AUTH_CHALLENGE_BYTES]);
+uint32_t wn8030_auth_s5t1(uint8_t out[1 + WN8030_COMMAND_BYTES], const uint8_t token[WN8030_AUTH_TOKEN_BYTES]);
 
 /* Checks a RAM image (size, header magic, code inside the file, the header's byte sum of the code); returns 0 and the code size, or a
  * negative step: -1 size, -2 magic, -3 code size, -4 code checksum. */
