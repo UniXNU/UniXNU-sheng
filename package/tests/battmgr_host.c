@@ -335,6 +335,29 @@ int main(void)
     sheng_battmgr_refresh(&b, 1);
     run_cycle(&b);
     CHECK(!b.limit_due && sheng_battmgr_next(&b, request) == 0);
+
+    /* Stale/default BmPowerMax (33 W) on CDP or unverified DCP does not override measured V*I; verified PD uses BmPowerMax. */
+    board_answers = 1;
+    board[0x8a] = 3100000; board[0x8b] = 4600000; board[0xa6] = 3139000; board[0xa7] = 4487000;
+    board[0x33] = 33; board[0x18] = 0; board[0x07] = 0;
+    usb[0] = 1; usb[6] = 3; usb[7] = 3; usb[1] = 4572000; usb[4] = 900000; usb[3] = 900000;
+    sheng_battmgr_init(&b);
+    sheng_battmgr_refresh(&b, 1);
+    run_cycle(&b);
+    sheng_battmgr_snapshot(&b, &s);
+    CHECK(s.raw_mah == 6239 && s.adapter_family == 0xe0004005u && s.adapter_watts == 4);
+    usb[6] = 2; usb[7] = 2; usb[1] = 8824000; usb[4] = 3000000;
+    sheng_battmgr_refresh(&b, 0);
+    run_cycle(&b);
+    sheng_battmgr_snapshot(&b, &s);
+    CHECK(s.adapter_family == 0xe0004004u && s.adapter_watts == 26);
+    board[0x07] = 8; board[0x18] = 1; board[0x33] = 120;
+    sheng_battmgr_refresh(&b, 0);
+    run_cycle(&b);
+    sheng_battmgr_snapshot(&b, &s);
+    CHECK(s.adapter_family == 0xe000400au && s.adapter_watts == 120);
+    board_answers = 0;
+
     printf("PASS battery manager: %u checks\n", checks);
     return 0;
 }
