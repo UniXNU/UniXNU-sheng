@@ -210,6 +210,8 @@ class ShengBattery : public IOPMPowerSource {
         if (s.external_known) {
             setExternalConnected(s.external);
             setExternalChargeCapable(s.external);
+            // macOS powerd reads AppleRawExternalConnected to decide whether displayed capacity may rise while charging.
+            flag("AppleRawExternalConnected", s.external);
         }
         if (s.external_known && s.status_known) setIsCharging(s.charging);
         setAtCriticalLevel(s.critical);
