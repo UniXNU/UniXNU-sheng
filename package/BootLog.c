@@ -705,14 +705,16 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     vm_statistics64_data_t vm = {0};
     mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
     kern_return_t status = host_statistics64(host_self(), HOST_VM_INFO64, (host_info64_t)&vm, &count);
-    char row[320];
+    char row[512];
     if (status == KERN_SUCCESS) {
       snprintf(row, sizeof row,
-               "[vm memory] physical=%llu page=%u wired=%u free=%u speculative=%u external=%u compressed=%u uncompressed=%llu swapins=%llu swapouts=%llu",
+               "[vm memory] physical=%llu page=%u wired=%u free=%u speculative=%u external=%u compressed=%u uncompressed=%llu swapins=%llu swapouts=%llu active=%u inactive=%u purgeable=%u internal=%u pageouts=%llu",
                (unsigned long long)(&max_mem_actual ? max_mem_actual : 0), (unsigned)PAGE_SIZE,
                vm.wire_count, vm.free_count, vm.speculative_count, vm.external_page_count,
                vm.compressor_page_count, (unsigned long long)vm.total_uncompressed_pages_in_compressor,
-               (unsigned long long)vm.swapins, (unsigned long long)vm.swapouts);
+               (unsigned long long)vm.swapins, (unsigned long long)vm.swapouts,
+               vm.active_count, vm.inactive_count, vm.purgeable_count, vm.internal_page_count,
+               (unsigned long long)vm.pageouts);
     } else {
       snprintf(row, sizeof row, "[vm memory] host_statistics64 failed=%d", status);
     }
