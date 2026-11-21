@@ -15,7 +15,7 @@
 // cover is neither closed over the screen (lid) nor folded behind the tablet (tablet mode); otherwise keys and fingers are released, the
 // touchpad and LEDs are turned off and the device reports Keyboard Power 0, so the system shows the on-screen keyboard. The cover's
 // controller is told to stay awake every 12 s while attached. Every transfer is driven by the engine interrupt; the thread sleeps
-// between events. Authentication requests of the cover are counted and left unanswered.
+// between events. Cover authentication (MiAuth) runs asynchronously on a helper thread via QTEE devauth.mbn and UFS RPMB (QcomDevAuth.cpp).
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IODeviceMemory.h>
@@ -49,6 +49,7 @@ extern "C" void sheng_keyboard_cover_input(IOService *, const uint8_t *, uint32_
 extern "C" void sheng_keyboard_cover_enable(IOService *, bool);
 extern "C" void sheng_keyboard_cover_output_sink(void (*)(void *, uint8_t), void *);
 extern "C" void sheng_battery_keyboard_attached(int) __attribute__((weak_import));
+extern "C" int sheng_devauth_offline_token(const uint8_t uid[16], const uint8_t challenge[16], uint8_t token[16]) __attribute__((weak_import));
 extern "C" int armcpu_spi_attach(uint32_t, bool, void (*)(void *), void *, uint32_t *, uint64_t *) __attribute__((weak_import));
 extern "C" int armcpu_spi_share(uint32_t, void (*)(void *), void *) __attribute__((weak_import));
 extern "C" bool sm8550_gcc_update32(volatile uint32_t *, uint32_t, uint32_t) __attribute__((weak_import));
@@ -147,10 +148,23 @@ struct Keyboard {
     uint8_t command[1 + WN8030_DATA_COMMAND_BYTES];
     kb_trace trace;               // the last frames, for the attach and detach log lines (KeyboardTrace.h)
     uint32_t reloads;             // controller reloads started by the service
+    // MiAuth state (asynchronous: kb-auth worker calls QTEE devauth.mbn + RPMB so keyboardThread never stalls).
+    uint8_t authUid[WN8030_AUTH_UID_BYTES];
+    bool authUidValid;
+    uint8_t authReqUid[WN8030_AUTH_UID_BYTES];
+    uint8_t authReqChallenge[WN8030_AUTH_CHALLENGE_BYTES];
+    uint8_t authToken[WN8030_AUTH_TOKEN_BYTES];
+    volatile uint32_t authReqGen;
+    volatile uint32_t authBusy;
+    volatile uint32_t authTokenReady;
+    uint32_t authTokenEpoch;
+    uint32_t authEpoch;
+    bool authThreadStarted;
 };
 Keyboard *gKb;
 volatile uint32_t gWake;      // the thread's event
 volatile uint32_t gBusWake;   // a transfer ended
+volatile uint32_t gAuthWake;  // MiAuth worker wakeup
 
 enum PinIndex {PinStatus, PinSleep, PinReset, PinSda, PinScl, PinIrq, PinLid, PinTablet};
 constexpr unsigned kPins[] = {kStatusPin, kSleepPin, kResetPin, kSdaPin, kSclPin, kIrqPin, kLidPin, kTabletPin};
@@ -244,6 +258,54 @@ bool control(uint8_t command, uint8_t value) {
     const bool ok = n && writeBuffer(out, n);
     if (ok) bump(14);
     return ok;
+}
+
+bool sendAuthCmd(const uint8_t *out, uint32_t n) {
+    const bool ok = n && writeBuffer(out, n);
+    if (ok) bump(14);
+    return ok;
+}
+
+void kbAuthThread(void *, wait_result_t) {
+    thread_set_thread_name(current_thread(), "kb-auth");
+    Keyboard *kb = gKb;
+    uint32_t seen = 0;
+    for (;;) {
+        uint32_t gen = __atomic_load_n(&kb->authReqGen, __ATOMIC_ACQUIRE);
+        while (gen == seen) {
+            assert_wait((event_t)&gAuthWake, THREAD_UNINT);
+            gen = __atomic_load_n(&kb->authReqGen, __ATOMIC_ACQUIRE);
+            if (gen != seen) {
+                clear_wait(current_thread(), THREAD_AWAKENED);
+                break;
+            }
+            thread_block(THREAD_CONTINUE_NULL);
+            gen = __atomic_load_n(&kb->authReqGen, __ATOMIC_ACQUIRE);
+        }
+        seen = gen;
+        uint8_t uid[WN8030_AUTH_UID_BYTES], challenge[WN8030_AUTH_CHALLENGE_BYTES], token[WN8030_AUTH_TOKEN_BYTES];
+        memcpy(uid, kb->authReqUid, sizeof uid);
+        memcpy(challenge, kb->authReqChallenge, sizeof challenge);
+        const uint32_t epoch = kb->authTokenEpoch;
+        int rc = -1;
+        if (&sheng_devauth_offline_token) rc = sheng_devauth_offline_token(uid, challenge, token);
+        if (rc == 0) {
+            memcpy(kb->authToken, token, sizeof token);
+            __atomic_store_n(&kb->authTokenReady, epoch, __ATOMIC_RELEASE);
+            thread_wakeup((event_t)&gWake);
+        }
+        __atomic_store_n(&kb->authBusy, 0, __ATOMIC_RELEASE);
+    }
+}
+
+void startAuthWorker() {
+    Keyboard *kb = gKb;
+    if (kb->authThreadStarted) return;
+    thread_t thread = nullptr;
+    if (kernel_thread_start(kbAuthThread, nullptr, &thread) == KERN_SUCCESS) {
+        thread_deallocate(thread);
+        kb->authThreadStarted = true;
+    }
 }
 
 bool setupPins() {
@@ -489,6 +551,10 @@ void detachCover() {
     Keyboard *kb = gKb;
     kb->attached = false;
     kb->service.statePending = false;
+    kb->authUidValid = false;
+    ++kb->authEpoch;
+    if (!kb->authEpoch) kb->authEpoch = 1;
+    __atomic_store_n(&kb->authTokenReady, 0, __ATOMIC_RELEASE);
     if (sheng_battery_keyboard_attached) sheng_battery_keyboard_attached(0);
     if (IOService *hid = kb->hid) {
         kb->hid = nullptr;
@@ -611,8 +677,42 @@ bool handleFrame() {
         native_keyboard_accel[0] = f.x; native_keyboard_accel[1] = f.y; native_keyboard_accel[2] = f.z;
         native_keyboard_accel[3] = native_keyboard_accel[3] + 1;
         break;
-    case Wn8030AuthRequest: case Wn8030AuthInit: case Wn8030AuthChallenge:
+    case Wn8030AuthRequest:
         bump(15);
+        if (&sheng_devauth_offline_token && (f.auth_state == 0x00u || f.auth_state == 0x01u || f.auth_state == 0x64u) &&
+            !__atomic_load_n(&kb->authBusy, __ATOMIC_ACQUIRE)) {
+            uint8_t out[1 + WN8030_COMMAND_BYTES];
+            const uint32_t n = wn8030_auth_init(out);
+            sendAuthCmd(out, n);
+        }
+        break;
+    case Wn8030AuthInit:
+        bump(15);
+        if (&sheng_devauth_offline_token && f.auth_uid) {
+            static const uint8_t kKeyMeta[WN8030_AUTH_KEY_META_BYTES] = {0x00, 0x00, 0x00, 0x02};
+            static const uint8_t kChallenge[WN8030_AUTH_CHALLENGE_BYTES] = {
+                0x80, 0x3d, 0x84, 0x36, 0x29, 0x82, 0xde, 0x6a,
+                0x0e, 0x68, 0x1d, 0x3d, 0x6b, 0x32, 0xa5, 0xa6
+            };
+            memcpy(kb->authUid, f.auth_uid, sizeof kb->authUid);
+            kb->authUidValid = true;
+            uint8_t out[1 + WN8030_COMMAND_BYTES];
+            const uint32_t n = wn8030_auth_s3t1(out, kKeyMeta, kChallenge);
+            sendAuthCmd(out, n);
+        }
+        break;
+    case Wn8030AuthChallenge:
+        bump(15);
+        if (&sheng_devauth_offline_token && kb->authUidValid && f.auth_challenge) {
+            startAuthWorker();
+            if (kb->authThreadStarted && __atomic_exchange_n(&kb->authBusy, 1, __ATOMIC_ACQ_REL) == 0) {
+                memcpy(kb->authReqUid, kb->authUid, sizeof kb->authReqUid);
+                memcpy(kb->authReqChallenge, f.auth_challenge, sizeof kb->authReqChallenge);
+                kb->authTokenEpoch = kb->authEpoch;
+                __atomic_fetch_add(&kb->authReqGen, 1, __ATOMIC_RELEASE);
+                thread_wakeup((event_t)&gAuthWake);
+            }
+        }
         break;
     case Wn8030Invalid: break;
     default: bump(15, 0x10000); break;
@@ -625,6 +725,10 @@ bool handleFrame() {
 bool recoverController() {
     Keyboard *kb = gKb;
     releaseInputs();
+    kb->authUidValid = false;
+    ++kb->authEpoch;
+    if (!kb->authEpoch) kb->authEpoch = 1;
+    __atomic_store_n(&kb->authTokenReady, 0, __ATOMIC_RELEASE);
     setOutput(PinSleep, false);
     setOutput(PinReset, false);
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(kb->busLock);
@@ -697,6 +801,12 @@ void serve() {
             kb->caps = __atomic_load_n(&kb->capsWanted, __ATOMIC_ACQUIRE) != 0;
             kb->service.statePending = kb->attached;
         }
+        const uint32_t readyEpoch = __atomic_exchange_n(&kb->authTokenReady, 0, __ATOMIC_ACQ_REL);
+        if (readyEpoch && readyEpoch == kb->authEpoch) {
+            uint8_t out[1 + WN8030_COMMAND_BYTES];
+            const uint32_t n = wn8030_auth_s5t1(out, kb->authToken);
+            sendAuthCmd(out, n);
+        }
         kb->service.step(io);
         const uint64_t next = kb->service.deadline(nowMs(), io.irqs());
         const uint64_t hallDeadline = kb->hallPending ? kb->hallDue : kb->hallPoll;
@@ -705,7 +815,8 @@ void serve() {
         assert_wait_deadline((event_t)&gWake, THREAD_UNINT, deadlineMs(due > current ? (uint32_t)(due - current) : 1));
         if (kb->service.deadline(nowMs(), io.irqs()) <= nowMs() ||
             kb->hallSeen != __atomic_load_n(&kb->hallIrqs, __ATOMIC_ACQUIRE) ||
-            kb->capsSeen != __atomic_load_n(&kb->capsRequests, __ATOMIC_ACQUIRE))
+            kb->capsSeen != __atomic_load_n(&kb->capsRequests, __ATOMIC_ACQUIRE) ||
+            __atomic_load_n(&kb->authTokenReady, __ATOMIC_ACQUIRE) != 0)
             clear_wait(current_thread(), THREAD_AWAKENED);
         else thread_block(THREAD_CONTINUE_NULL);
     }
@@ -754,6 +865,7 @@ extern "C" void sheng_keyboard_probe(void) {
     PE_parse_boot_argn("keyboard-backlight", &backlight, sizeof backlight);
     kb->khz = khz == 100 || khz == 400 ? khz : 1000;
     kb->backlight = static_cast<uint8_t>(backlight > WN8030_BACKLIGHT_MAX ? WN8030_BACKLIGHT_MAX : backlight);
+    kb->authEpoch = 1;
     gKb = kb;
     thread_t thread = nullptr;
     if (kernel_thread_start(keyboardThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);

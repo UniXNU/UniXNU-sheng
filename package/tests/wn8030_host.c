@@ -393,6 +393,33 @@ int main(int argc, char **argv)
               native_keyboard_census.palms[0] == before.palms[0] + 1);
 #undef CONTACT
     }
+    {   /* MiAuth frame parsing (0x24/0x31/0x32) and route-0x4f command encoding (0x31/0x32/0x33). */
+        uint8_t fr[WN8030_FRAME_BYTES], cmd[1 + WN8030_COMMAND_BYTES];
+        Wn8030Frame f;
+        memset(fr, 0, sizeof fr);
+        fr[0] = 0x57; fr[2] = 0x39; fr[3] = 0x22; fr[4] = 0x31; fr[5] = 0x38; fr[6] = 0x80; fr[7] = 0x24; fr[8] = 0x01; fr[9] = 0x64;
+        CHECK(wn8030_parse(fr, &f) == Wn8030AuthRequest && f.auth_state == 0x64);
+        fr[3] = 0x24; fr[7] = 0x31; fr[8] = 0x1a;
+        for (unsigned i = 0; i < 16; ++i) fr[11 + i] = (uint8_t)(0x10 + i);
+        CHECK(wn8030_parse(fr, &f) == Wn8030AuthInit && f.auth_uid == fr + 11 && f.auth_uid[0] == 0x10 && f.auth_uid[15] == 0x1f);
+        fr[7] = 0x32; fr[8] = 0x20;
+        for (unsigned i = 0; i < 16; ++i) fr[25 + i] = (uint8_t)(0xa0 + i);
+        CHECK(wn8030_parse(fr, &f) == Wn8030AuthChallenge && f.auth_challenge == fr + 25 &&
+              f.auth_challenge[0] == 0xa0 && f.auth_challenge[15] == 0xaf);
+        CHECK(wn8030_auth_init(cmd) == 1 + WN8030_COMMAND_BYTES && cmd[0] == WN8030_REG_WRITE &&
+              cmd[1] == 0x32 && cmd[3] == 0x4f && cmd[7] == 0x31 && cmd[8] == 0x06 &&
+              memcmp(cmd + 9, "MIAUTH", 6) == 0 && cmd[15] == wn8030_sum8(cmd + 3, 12));
+        const uint8_t meta[4] = {0, 0, 0, 2};
+        uint8_t chal[16], tok[16];
+        for (unsigned i = 0; i < 16; ++i) { chal[i] = (uint8_t)(0x20 + i); tok[i] = (uint8_t)(0x80 + i); }
+        CHECK(wn8030_auth_s3t1(cmd, meta, chal) == 1 + WN8030_COMMAND_BYTES &&
+              cmd[3] == 0x4f && cmd[7] == 0x32 && cmd[8] == 0x14 &&
+              memcmp(cmd + 9, meta, 4) == 0 && memcmp(cmd + 13, chal, 16) == 0 &&
+              cmd[29] == wn8030_sum8(cmd + 3, 26));
+        CHECK(wn8030_auth_s5t1(cmd, tok) == 1 + WN8030_COMMAND_BYTES &&
+              cmd[3] == 0x4f && cmd[7] == 0x33 && cmd[8] == 0x10 &&
+              memcmp(cmd + 9, tok, 16) == 0 && cmd[25] == wn8030_sum8(cmd + 3, 22));
+    }
     printf("PASS WN8030: %u checks\n", checks);
     return 0;
 }
