@@ -900,6 +900,9 @@ for directory in ('include', 'kernel', 'src', 'shim'):
     sources += sorted((IRIS / directory).rglob('*.h')) + sorted((IRIS / directory).glob('*.cpp'))
 sources += [KITS / name for name in ('SmmuBypass.h', 'AppsSmmuLock.h', 'UsbProbe.cpp')]
 sources += [KITS / name for name in ('KeyboardCover.cpp', 'KeyboardProbe.cpp', 'KeyboardService.h', 'KeyboardTrace.h', 'TouchLid.h', 'LidClamshell.h', 'ShengSleep.cpp', 'ShengSleep.h', 'Wn8030.c', 'Wn8030.h', 'GeniI2c.c', 'GeniI2c.h')]
+if MACOS:
+    sources += [ROOT / 'drivers/SoftwareAES/NativeAES.cpp', ROOT / 'drivers/SoftwareAES/OriginalAESABI.h',
+                KITS / 'SoftwareAesProbe.cpp', Path(__file__).resolve().with_name(f'software-aes-{BUILD}.json')]
 sources += [keyboard_firmware]
 sources += [USB / 'QcomDwc3.cpp', USB / 'QcomEusb2Phy.h', USB / 'QcomQmpUsb3.h', USB / 'QcomUcsi.h', ROOT / f'scripts/usb-xdci-{BUILD}.json', ROOT / f'scripts/usb-xhci-{BUILD}.json']
 
