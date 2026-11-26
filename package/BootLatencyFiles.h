@@ -50,7 +50,7 @@ static inline unsigned bl_macos_file_limit(const char *path) {
   if(!strcmp(name,"desktop-180.png") || !strcmp(name,"desktop-270.png"))return 2*1024*1024;
   if(!strcmp(name,"gpu-debug-report.json"))return 512*1024;
   if(!strcmp(name,"api-boundary-report.json"))return 256*1024;
-  if(!strcmp(name,"ycbcr-probe.json") || !strcmp(name,"testufo-report.json"))return 128*1024;
+  if(!strcmp(name,"ycbcr-probe.json") || !strcmp(name,"testufo-report.json") || !strcmp(name,"browser-gpu-matrix.json") || !strcmp(name,"webkit-gpu-recovery.json"))return 128*1024;
  }
  return 0;
 }
