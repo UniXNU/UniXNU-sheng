@@ -36,6 +36,8 @@ extern "C" {
 #include <stdarg.h>
 #include "nw_abi.h"
 #include "nw_control_endpoint.h"
+#include "WifiHotspotIe.h"
+#include "WifiRaFilter.h"
 #include "WifiScan.h"
 #include "WifiScanResult.h"
 #include "WifiScanPolicy.h"
@@ -82,14 +84,14 @@ enum {
   kSsid = 1, kAuthType = 2, kCipherKey = 3, kChannel = 4, kPowerSave = 5, kTxPower = 7, kRate = 8, kBssid = 9, kScanReq = 10, kScanResult = 11,
   kCardCaps = 12, kState = 13, kPhyMode = 14, kOpMode = 15, kRssi = 16, kNoise = 17, kPower = 19, kAssociate = 20, kAssociateResult = 21,
   kDisassociate = 22, kSupportedChannels = 27, kLocale = 28, kDeauth = 29, kDriverVersion = 43, kHardwareVersion = 44, kCountryCode = 51,
-  kRadioInfo = 54, kScanReqMultiple = 86, kScanCacheClear = 90, kCurrentNetwork = 103, kChannelsInfo = 207, kHwSupportedChannels = 254,
+  kRadioInfo = 54, kIe = 85, kScanReqMultiple = 86, kScanCacheClear = 90, kLinkChangedEventData = 102, kCurrentNetwork = 103, kChannelsInfo = 207, kHwSupportedChannels = 254,
   kAbortScan = 382,
 };
 // The scan request's type field (offset 0x34): 3 asks for the results already held; the framework reads them at once, without waiting
 // for the scan-done event.
 enum { kScanTypeCached = 3 };
 // events
-enum { kEvPowerChanged = 1, kEvSsidChanged = 2, kEvBssidChanged = 3, kEvLinkChanged = 4, kEvAssocDone = 9, kEvScanDone = 10 };
+enum { kEvPowerChanged = 1, kEvSsidChanged = 2, kEvBssidChanged = 3, kEvLinkChanged = 4, kEvAssocDone = 9, kEvScanDone = 10, kEvRssiChanged = 13 };
 // results of an association, as the framework numbers them
 enum { kAssocPending = 0, kAssocOk = 1, kAssocFailed = 2, kAssocTimeout = 9, kAssocBadKey = 21 };
 
@@ -159,9 +161,29 @@ unsigned gScanCursor, gScanning;
 // When the channels were last scanned on the air and since when the link is up (WifiScanPolicy.h), in ms of the clock that counts sleep.
 sheng_wifi_air gAir;
 uint64_t gLinkUpMs;
+uint64_t gLastDirectedMs;
 uint64_t continuous_ms() { uint64_t ns = 0; absolutetime_to_nanoseconds(mach_continuous_time(), &ns); return ns / 1000000; }
 bool gUserJoin;  // the wireless daemon joined, left or switched the radio itself: the unattended test join steps aside
 uint32_t gLogged[256 / 32];
+link_event gLastLinkEvent;
+uint8_t gHotspotBssids[16][6];
+uint32_t gHotspotBssidCount;
+bool is_known_hotspot_bssid(const uint8_t bssid[6]) {
+  if (!bssid) return false;
+  const uint32_t n = __atomic_load_n(&gHotspotBssidCount, __ATOMIC_ACQUIRE);
+  const uint32_t lim = n < 16u ? n : 16u;
+  for (uint32_t i = 0; i < lim; ++i) {
+    if (!memcmp(gHotspotBssids[i], bssid, 6)) return true;
+  }
+  return false;
+}
+bool mark_hotspot_bssid(const uint8_t bssid[6]) {
+  if (!bssid || !(bssid[0] | bssid[1] | bssid[2] | bssid[3] | bssid[4] | bssid[5])) return false;
+  if (is_known_hotspot_bssid(bssid)) return false;
+  const uint32_t idx = __atomic_fetch_add(&gHotspotBssidCount, 1u, __ATOMIC_ACQ_REL);
+  memcpy(gHotspotBssids[idx & 15u], bssid, 6);
+  return true;
+}
 
 void log(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void log(int level, const char *fmt, ...) {
@@ -197,8 +219,10 @@ void post_link(bool up) {
 }
 
 void post_link_down(bool involuntary, int reason) {
+  if (gIf) ifnet_set_eflags(gIf, 0, IFEF_EXPENSIVE);
   post_link(false);
   link_event ev{}; ev.down = 1; ev.involuntary = involuntary; ev.reason = static_cast<uint32_t>(reason);
+  gLastLinkEvent = ev;
   post_event(kEvLinkChanged, &ev, sizeof ev);
   post_event(kEvSsidChanged, nullptr, 0); post_event(kEvBssidChanged, nullptr, 0);
 }
@@ -264,9 +288,14 @@ void on_connect_done(int result) {
   post_link(result == NW_RES_OK);
   if (pending) post_association_result();
   if (result == NW_RES_OK) {
-    post_event(kEvSsidChanged, nullptr, 0); post_event(kEvBssidChanged, nullptr, 0);
     nw_wifi_status st; nw_wifi_status_get(&st);
+    if (gIf) {
+      const bool hot = is_known_hotspot_bssid(st.bssid);
+      ifnet_set_eflags(gIf, hot ? IFEF_EXPENSIVE : 0, IFEF_EXPENSIVE);
+    }
+    post_event(kEvSsidChanged, nullptr, 0); post_event(kEvBssidChanged, nullptr, 0);
     link_event ev; memset(&ev, 0, sizeof ev); ev.rssi = st.signal_dbm; ev.noise = static_cast<uint16_t>(-95); ev.snr = st.signal_dbm > -95 ? st.signal_dbm + 95 : 0;
+    gLastLinkEvent = ev;
     post_event(kEvLinkChanged, &ev, sizeof ev);
   }
 }
@@ -279,7 +308,8 @@ void on_link_update(const nw_wifi_status *status) {
   if (!gPower || gLinkSuppressed || status->state != NW_STA_UP || status->signal_dbm >= 0) return;
   link_event event{}; event.rssi = status->signal_dbm;
   event.noise = static_cast<uint16_t>(-95); event.snr = status->signal_dbm > -95 ? status->signal_dbm + 95 : 0;
-  post_event(kEvLinkChanged, &event, sizeof event);
+  gLastLinkEvent = event;
+  post_event(kEvRssiChanged, &event, sizeof event);
 }
 // What the address configuration exchanges, as it crosses the interface: DHCP messages (type, transaction, offered address) and ARP, the first
 // ones of each direction, and per-kind counts for the traffic line.
@@ -309,6 +339,25 @@ void note_frame(const uint8_t *e, size_t n, bool out) {
     if (!b[o]) continue;
     const unsigned code = b[o], len = b[o + 1]; const uint8_t *v = b + o + 2;
     if (o + 2 + len > bl) break;
+    if (code == 43 && len >= 15) {
+      for (unsigned mi = 0; mi + 15 <= len; ++mi) {
+        if (!memcmp(v + mi, "ANDROID_METERED", 15)) {
+          nw_wifi_status hst; nw_wifi_status_get(&hst);
+          if (hst.state >= NW_STA_ASSOC) {
+            if (gIf) ifnet_set_eflags(gIf, IFEF_EXPENSIVE, IFEF_EXPENSIVE);
+            if (mark_hotspot_bssid(hst.bssid)) {
+              log(6, "wifi-net: detected ANDROID_METERED hotspot %02x:%02x:%02x:%02x:%02x:%02x",
+                  hst.bssid[0], hst.bssid[1], hst.bssid[2], hst.bssid[3], hst.bssid[4], hst.bssid[5]);
+              post_event(kEvSsidChanged, nullptr, 0);
+              post_event(kEvBssidChanged, nullptr, 0);
+              post_event(kEvRssiChanged, &gLastLinkEvent, sizeof gLastLinkEvent);
+              post_event(kEvScanDone, nullptr, 0);
+            }
+          }
+          break;
+        }
+      }
+    }
     if ((code == 1 || code == 3 || code == 6 || code == 54) && len >= 4)
       for (unsigned i = 0; i + 4 <= len && at < static_cast<int>(sizeof opts) - 24; i += 4)
         at += snprintf(opts + at, sizeof opts - at, " %u=%u.%u.%u.%u", code, v[i], v[i + 1], v[i + 2], v[i + 3]);
@@ -386,11 +435,22 @@ void flush_rx() {
     gRxHead = gRxTail = nullptr; gRxPendingPackets = gRxPendingBytes = 0;
     struct ifnet_stat_increment_param inc{}; inc.packets_in = count; inc.bytes_in = bytes;
     const uint64_t began = rx_now();
+#if SHENG_WIFI_ETHERNET
+    for (mbuf_t p = packets; p; p = mbuf_nextpkt(p)) {
+      if (void *hdr = mbuf_pkthdr_header(p)) bpf_tap_in(gIf, DLT_EN10MB, p, hdr, 14);
+    }
+#endif
     const errno_t error = ifnet_input(gIf, packets, &inc);
     gRxTime.input += rx_now() - began;
     gRxBatches++; if (count > gRxLargestBatch) gRxLargestBatch = count;
     gRxBatchSizes[count >= 64 ? 6 : count >= 32 ? 5 : count >= 16 ? 4 : count >= 8 ? 3 : count >= 4 ? 2 : count >= 2 ? 1 : 0]++;
-    if (error) { gRxErrors += count; gRxLastError = error; } else gRxFrames += count;
+    if (error) { gRxErrors += count; gRxLastError = error; }
+    else {
+      gRxFrames += count;
+#if SHENG_WIFI_ETHERNET
+      ifnet_stat_increment_in(gIf, count, bytes, 0);
+#endif
+    }
   }
   // The spare packets of a refill (at most 15) wait for the next batch instead of being freed and allocated again around every
   // batch of a few frames. They are parked where the traffic thread finds them: it frees them when a second passes without a batch.
@@ -461,7 +521,11 @@ void on_rx_packet(void *context, size_t length, nw_packet_reader reader) {
   gRxTime.alloc += allocated - began; gRxTime.copy += rx_now() - allocated;
   // What the frame is, read from the copy and not a second time from the module's buffer: that one is device memory, which this
   // board maps uncached for the CPU. The first buffer holds the whole frame unless it took a chain.
-  const uint8_t *frame = static_cast<const uint8_t *>(mbuf_data(m)); const size_t held = mbuf_len(m);
+  uint8_t *frame = static_cast<uint8_t *>(mbuf_data(m)); const size_t held = mbuf_len(m);
+  if (sheng_wifi_scrub_ula_only_ra(frame, held)) {
+    static unsigned scrubbed;
+    if (++scrubbed <= 8) log(6, "wifi-net: scrubbed unroutable ULA-only IPv6 RA (%u)", scrubbed);
+  }
   note_frame(frame, held, false);
   if (gRxProfile) note_order(frame, held);
   mbuf_pkthdr_setlen(m, length); mbuf_pkthdr_setrcvif(m, gIf);
@@ -499,14 +563,17 @@ int ethernet_output(mbuf_t m) { return if_output(gIf, m); }
 // ---- Apple80211 ----
 void fill_channel(channel &c, uint32_t mhz) {
   c.version = 1;
-  if (mhz >= 4900) { c.channel = (mhz - 5000) / 5; c.flags = 0x2 | 0x10; } else { c.channel = mhz == 2484 ? 14 : (mhz - 2407) / 5; c.flags = 0x2 | 0x8; }
+  uint32_t ch = 0, fl = 0;
+  wifi_freq_to_channel(mhz, &ch, &fl);
+  c.channel = ch; c.flags = fl;
 }
 // The time the network was heard goes out with the record: now on the clock that counts sleep, less the age (WifiScanResult.h).
-void fill_result(scan_result &r, const nw_bss_info &b, uint32_t requestBytes) {
+void fill_result(scan_result &r, const nw_bss_info &b, uint32_t requestBytes, uint8_t clean_ie[1600]) {
   memset(&r, 0, sizeof r); r.version = 1; fill_channel(r.ch, b.freq_mhz); r.noise_known = 1; r.noise = -95; r.rssi = b.signal_dbm; r.snr = b.signal_dbm + 95;
   r.beacon_interval = b.beacon_int; r.capability = b.caps; memcpy(r.bssid, b.bssid, 6); r.ssid_length = b.ssid_len; memcpy(r.ssid, b.ssid, 32);
+  const uint16_t clean_len = wifi_sanitize_hotspot_ies_ex(b.ie, b.ie_len, clean_ie, 1600, is_known_hotspot_bssid(b.bssid));
   uint64_t now = 0; absolutetime_to_nanoseconds(mach_continuous_time(), &now);
-  sheng_wifi_scan_result_stamp(&r, b.ie, b.ie_len, b.age_ms, now, requestBytes);
+  sheng_wifi_scan_result_stamp(&r, clean_ie, clean_len, b.age_ms, now, requestBytes);
   r.rate_count = 0;
 }
 int copy_out(const apple80211req &rq, const void *src, size_t size) {
@@ -557,8 +624,8 @@ int copy_association(const apple80211req &rq, assoc_parameters &out) {
 }
 unsigned gResultsShown;
 // The regulatory country as the access points announce it (802.11d: the Country element, id 7, of the strongest network that has one), else "XX".
-void country(char cc[3]) {
-  cc[0] = 'X'; cc[1] = 'X'; cc[2] = 0; int best = -200; nw_bss_info b;
+void country(char cc[3], nw_bss_info &b) {
+  cc[0] = 'X'; cc[1] = 'X'; cc[2] = 0; int best = -200;
   for (int i = 0, n = nw_wifi_bss_count(); i < n; ++i) {
     if (nw_wifi_bss_get(i, &b) || b.signal_dbm <= best) continue;
     for (unsigned o = 0; o + 2 <= b.ie_len && o + 2 + b.ie[o + 1] <= b.ie_len; o += 2 + b.ie[o + 1])
@@ -572,7 +639,8 @@ int apple80211(bool set, apple80211req &rq) {
   nw_wifi_status st; visible_status(st);
   const int type = rq.req_type;
   // (not on the stack: the largest answer is 4824 bytes)
-  union Out { uint8_t raw[5120]; channels_list chans; scan_result res; };
+  struct ScanScratch { scan_result res; nw_bss_info bss; uint8_t clean_ie[1600]; };
+  union Out { uint8_t raw[6144]; channels_list chans; ScanScratch scan; };
   Out *outp = static_cast<Out *>(IOMallocData(sizeof(Out)));
   if (!outp) return ENOMEM;
   memset(outp, 0, sizeof(Out));
@@ -619,7 +687,13 @@ int apple80211(bool set, apple80211req &rq) {
       const uint64_t now = continuous_ms();
       if (st.state != NW_STA_UP) gLinkUpMs = 0; else if (!gLinkUpMs) gLinkUpMs = now;
       const sheng_wifi_link link = st.state == NW_STA_UP ? ShengWifiLinkUp : st.state >= NW_STA_AUTH ? ShengWifiLinkJoining : ShengWifiLinkNone;
-      if (!sheng_wifi_scan_on_air(&gAir, link, now - gLinkUpMs, nw_wifi_bss_count() > 0, mhz, frequencies, now)) {
+      const bool directed = ssid && ssidLength > 0 && ssidLength <= 32;
+      const bool sameSsid = directed && ssidLength == st.ssid_len && !memcmp(ssid, st.ssid, ssidLength);
+      const bool allowDirected = (link == ShengWifiLinkUp && directed && !sameSsid && frequencies > 0 && frequencies <= 6 &&
+                                  (now - gLinkUpMs >= SHENG_WIFI_LINK_SETTLE_MS) &&
+                                  (!gLastDirectedMs || now - gLastDirectedMs >= 30000u));
+      if (!allowDirected &&
+          !sheng_wifi_scan_on_air(&gAir, link, now - gLinkUpMs, nw_wifi_bss_count() > 0, mhz, frequencies, now)) {
         if (!gCachedScan) gCachedScan = thread_call_allocate(cached_scan_done, nullptr);
         static unsigned answered; if (++answered <= 8 || answered % 64 == 0) log(6, "wifi-net: scan %u while joined: answered from the cache", answered);
         gScanning = 1; gScanCursor = 0; gResultsShown = 24; uint64_t at; clock_interval_to_deadline(2000, kMillisecondScale, &at); thread_call_enter_delayed(gCachedScan, at); return 0; }
@@ -629,6 +703,7 @@ int apple80211(bool set, apple80211req &rq) {
       int result = nw_wifi_scan_frequencies(ssid && ssidLength && ssidLength <= 32 ? ssid : nullptr, ssid && ssidLength <= 32 ? ssidLength : 0,
                                             frequencies ? mhz : nullptr, frequencies);
       if (result) { __atomic_store_n(&gScanning, 0u, __ATOMIC_RELEASE); return ENETDOWN; }
+      if (allowDirected) gLastDirectedMs = now;
       if (!merged) sheng_wifi_air_mark(&gAir, mhz, frequencies, now);
       sheng_wifi_wake(); return 0; }
     case kAssociate: {
@@ -638,8 +713,12 @@ int apple80211(bool set, apple80211req &rq) {
       if (!a.ssid_length || a.ssid_length > 32 || a.key_length > 64) return EINVAL;
       // The station accepts open networks, WPA passphrases and a 32-byte PMK.
       // Do not silently interpret an unknown cipher as a password or an open network.
-      if (a.key_length && !((a.key_cipher == 6 && a.key_length == 32) ||
-                            (a.key_cipher == 10 && a.key_length >= 8 && a.key_length <= 63))) return EINVAL;
+      const bool isPmk32 = (a.key_cipher == 6 && a.key_length == 32);
+      const bool isAsciiPass = (a.key_cipher != 6 && a.key_length >= 8 && a.key_length <= 63 && memchr(a.key, 0, a.key_length) == nullptr);
+      if (a.key_length && !(isPmk32 || isAsciiPass)) {
+        log(4, "wifi-net: unsupported key_cipher %u key_length %u", a.key_cipher, a.key_length);
+        return EINVAL;
+      }
       const bool hasBssid = (a.bssid[0] | a.bssid[1] | a.bssid[2] | a.bssid[3] | a.bssid[4] | a.bssid[5]) != 0;
       const bool hasKey = a.key_length != 0 && a.key_length <= 64;
       if (!gPower) return ENETDOWN;
@@ -690,30 +769,50 @@ int apple80211(bool set, apple80211req &rq) {
   case kRate: return answer_value(rq, st.state == NW_STA_UP ? st.tx_rate_100kbps / 10 : 0);
   case kTxPower: return answer_value(rq, 15);
   case kDriverVersion: case kHardwareVersion: { const char *v = type == kDriverVersion ? "nativewifi 1" : "WCN7850"; strlcpy(reinterpret_cast<char *>(out.raw), v, 256); return copy_out(rq, out.raw, 256); }
-  case kCountryCode: { char cc[3]; country(cc); return answer_bytes(rq, cc, 3); }   // the two letters and a NUL (the daemon asks with a 3-byte buffer)
+  case kCountryCode: { char cc[3]; country(cc, out.scan.bss); return answer_bytes(rq, cc, 3); }   // the two letters and a NUL (the daemon asks with a 3-byte buffer)
   case kAssociateResult: return answer_value(rq, static_cast<uint32_t>(gAssocResult));
+  case kRadioInfo: if (rq.req_len >= 8) { w[0] = 1; w[1] = 1; return copy_out(rq, w, 8); } return answer_value(rq, 1);
+  case kLinkChangedEventData: return copy_out(rq, &gLastLinkEvent, sizeof gLastLinkEvent);
   case kSupportedChannels: case kHwSupportedChannels: {
     out.chans.version = 1; unsigned n = 0;
-    static const uint16_t known[] = { 2412, 2417, 2422, 2427, 2432, 2437, 2442, 2447, 2452, 2457, 2462, 5180, 5200, 5220, 5240, 5745, 5765, 5785, 5805, 5825 };
+    static const uint16_t known[] = {
+      2412, 2417, 2422, 2427, 2432, 2437, 2442, 2447, 2452, 2457, 2462, 2467, 2472,
+      5180, 5200, 5220, 5240, 5260, 5280, 5300, 5320,
+      5500, 5520, 5540, 5560, 5580, 5600, 5620, 5640, 5660, 5680, 5700, 5720,
+      5745, 5765, 5785, 5805, 5825, 5845, 5865, 5885,
+      5955, 5975, 6055, 6135, 6215, 6295, 6375, 6455, 6535, 6615, 6695, 6775, 6855, 6935, 7015, 7095
+    };
     for (uint16_t f : known) { fill_channel(*reinterpret_cast<channel *>(&out.chans.list[n]), f); out.chans.list[n].flags |= 0x80; n++; }
     out.chans.count = n; return copy_out(rq, &out.chans, sizeof out.chans); }
+  case kIe: {
+    if (st.state < NW_STA_ASSOC) return ENOENT;
+    nw_bss_info &b = out.scan.bss; const int count = nw_wifi_bss_count();
+    for (int i = 0; i < count; i++) if (!nw_wifi_bss_get(i, &b) && !memcmp(b.bssid, st.bssid, 6)) {
+      const uint16_t clean_len = wifi_sanitize_hotspot_ies_ex(b.ie, b.ie_len, out.scan.clean_ie, sizeof out.scan.clean_ie, is_known_hotspot_bssid(b.bssid));
+      return answer_bytes(rq, out.scan.clean_ie, clean_len);
+    }
+    if (is_known_hotspot_bssid(st.bssid)) {
+      static const uint8_t kFallbackHotspotIe[10] = {0xdd, 0x08, 0x00, 0x17, 0xf2, 0x06, 0x01, 0x01, 0x01, 0x01};
+      return answer_bytes(rq, kFallbackHotspotIe, sizeof kFallbackHotspotIe);
+    }
+    return ENOENT; }
   case kScanResult: {
     // A held network that has not been heard for a minute is passed over (WifiScanPolicy.h).
-    nw_bss_info b; const int count = nw_wifi_bss_count();
+    nw_bss_info &b = out.scan.bss; const int count = nw_wifi_bss_count();
     do {
       if (gScanCursor >= static_cast<unsigned>(count) || nw_wifi_bss_get(static_cast<int>(gScanCursor), &b)) { gScanCursor = 0; return EIO; }   // after the last record
       gScanCursor++;
     } while (sheng_wifi_held_stale(b.age_ms));
-    fill_result(out.res, b, rq.req_len);
+    fill_result(out.scan.res, b, rq.req_len, out.scan.clean_ie);
     if (gResultsShown < 24) { ++gResultsShown; log(6, "wifi-net: scan result %u: %u MHz, %d dBm, %.*s", gScanCursor, b.freq_mhz, b.signal_dbm, b.ssid_len, reinterpret_cast<const char *>(b.ssid)); }
-    return copy_out(rq, &out.res, sizeof out.res); }
+    return copy_out(rq, &out.scan.res, sizeof out.scan.res); }
   case kCurrentNetwork: {
     if (st.state < NW_STA_ASSOC) return ENOENT;
-    nw_bss_info b; const int count = nw_wifi_bss_count();
+    nw_bss_info &b = out.scan.bss; const int count = nw_wifi_bss_count();
     for (int i = 0; i < count; i++) if (!nw_wifi_bss_get(i, &b) && !memcmp(b.bssid, st.bssid, 6)) {
-      fill_result(out.res, b, rq.req_len); out.res.rssi = st.signal_dbm;
-      out.res.snr = st.signal_dbm > -95 && st.signal_dbm < 0 ? st.signal_dbm + 95 : 0;
-      return copy_out(rq, &out.res, sizeof out.res);
+      fill_result(out.scan.res, b, rq.req_len, out.scan.clean_ie); out.scan.res.rssi = st.signal_dbm;
+      out.scan.res.snr = st.signal_dbm > -95 && st.signal_dbm < 0 ? st.signal_dbm + 95 : 0;
+      return copy_out(rq, &out.scan.res, sizeof out.scan.res);
     }
     return ENOENT; }
   default: return EOPNOTSUPP;
@@ -901,7 +1000,7 @@ void check_input() {
   if (!offered) return;   // nothing new handed over: an idle link, not a stall
   if (++stalled > gStall.longest) gStall.longest = stalled;
   if (stalled == 1) gStall.count++;
-  if (stalled > 3) return;   // reported and kicked twice; the per-ten-seconds line keeps the counts
+  if (stalled > 3 && (stalled % 4) != 0) return;   // continue periodic AST recovery kick every 4s if dlil_input_en0 stays stuck
   char where[240];
   if (boot_kthread_report("dlil_input_en0", where, sizeof where)) log(6, "wifi-net: input thread not found");
   else for (size_t at = 0, n = strlen(where); at < n; at += 90) log(6, "wifi-net: input thread %u: %.90s", static_cast<unsigned>(at / 90), where + at);
@@ -975,9 +1074,12 @@ void autoJoin(void *, wait_result_t) {
     nw_wifi_status st; nw_wifi_status_get(&st);
     if (st.state == NW_STA_UP) continue;   // the traffic thread logs the address and the packets
     if (st.state >= NW_STA_AUTH) continue;
-    bool found = false; nw_bss_info b;
-    for (int i = 0, n = nw_wifi_bss_count(); i < n; ++i)
-      if (!nw_wifi_bss_get(i, &b) && b.ssid_len == sl && !memcmp(b.ssid, ssid, sl)) { found = true; break; }
+    bool found = false;
+    if (nw_bss_info *bp = static_cast<nw_bss_info *>(IOMallocData(sizeof(nw_bss_info)))) {
+      for (int i = 0, n = nw_wifi_bss_count(); i < n; ++i)
+        if (!nw_wifi_bss_get(i, bp) && bp->ssid_len == sl && !memcmp(bp->ssid, ssid, sl)) { found = true; break; }
+      IOFreeData(bp, sizeof(nw_bss_info));
+    }
     log(6, "wifi-net: auto join round %u: %d networks seen, wanted one %s", round, nw_wifi_bss_count(), found ? "found" : "not found");
     if (found) { gKeyed = hasPsk; const int r = nw_wifi_connect(reinterpret_cast<const uint8_t *>(ssid), sl, nullptr, hasPsk ? psk : nullptr, hasPsk ? pl : 0); log(6, "wifi-net: auto join requested: %d", r); }
     else nw_wifi_scan(nullptr, 0);
@@ -1037,6 +1139,7 @@ extern "C" void sheng_wifi_net_start(const uint8_t mac[6]) {
   if (!attached) { log(3, "wifi-net: no Ethernet controller (ethernet=1) to carry the module's frames"); return; }
   gIf = sheng_ethernet_ifnet();
   nw_wifi_set_events(&gEvents);
+  post_event(kEvPowerChanged, nullptr, 0);
   { uint32_t aj = 0; PE_parse_boot_argn("wifi-aj", &aj, sizeof aj);
     thread_t t = nullptr; if (aj && kernel_thread_start(autoJoin, nullptr, &t) == KERN_SUCCESS) thread_deallocate(t);
     t = nullptr; if (kernel_thread_start(trafficLog, nullptr, &t) == KERN_SUCCESS) thread_deallocate(t); }

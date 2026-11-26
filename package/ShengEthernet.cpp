@@ -234,7 +234,7 @@ public:
     }
     IOReturn enable(IONetworkInterface *) override {
         enabled = true;
-        link(!gWifiOutput || gWifiLink);
+        link(gWifiOutput && gWifiLink);
         return kIOReturnSuccess;
     }
     IOReturn disable(IONetworkInterface *) override {
@@ -280,7 +280,7 @@ bool ShengEthernet::start(IOService *provider)
     if (!attachInterface(reinterpret_cast<IONetworkInterface **>(&interface), false)) return false;
     interface->setProperty("IO80211InterfaceRole", "Infrastructure");
     // The daemons whose profiles allow the original Wi-Fi user client and that open this one.
-    interface->setProperty("NativeSandboxGrantProcess", "airportd,sharingd,wifivelocityd");
+    interface->setProperty("NativeSandboxGrantProcess", "airportd,sharingd,wifivelocityd,ControlCenter,SystemUIServer,WiFiAgent,System Settings,configd,symptomsd,nesessionmanager,UserEventAgent");
     interface->registerService();
     return true;
 }

@@ -18,6 +18,8 @@ prefix = r'''
 #include <cstring>
 #include <cstdio>
 #include <vector>
+#include "WifiRaFilter.h"
+static void log(int, const char *, ...) {}
 struct Mbuf {
   std::array<uint8_t, 2048> data{};
   size_t offset{}, length{}, packet_length{};
@@ -151,7 +153,7 @@ int main() {
 '''
 (out / "test.cpp").write_text(prefix + production + tests)
 subprocess.run(["clang++", "-std=c++17", "-Wall", "-Wextra", "-Werror", "-O1", "-g",
-                "-fsanitize=address,undefined", str(out / "test.cpp"), "-o", str(out / "test")], check=True)
+                "-fsanitize=address,undefined", "-I", str(root / "package"), str(out / "test.cpp"), "-o", str(out / "test")], check=True)
 result = subprocess.run([str(out / "test")], check=True, text=True, capture_output=True)
 print(result.stdout, end="")
 (out / "report.json").write_text(json.dumps({

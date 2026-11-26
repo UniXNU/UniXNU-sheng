@@ -44,7 +44,7 @@ using test_user_addr_t = uintptr_t;
 struct apple80211req { uint32_t req_len; user_addr_t req_data; uint32_t req_kernel = 0; };
 static bool copy_fault, gUserJoin, gKeyed, gKeepJoin, had_bssid, had_key;
 static sheng_wifi_air gAir;
-static uint64_t gLinkUpMs;
+static uint64_t gLinkUpMs, gLastDirectedMs;
 static uint64_t continuous_ms() { return 100000; }
 static constexpr uint32_t kScanReq = 10, kScanTypeCached = 3;
 static bool gPower = true, gLinkSuppressed, gAssocModern, gJoinPending;
@@ -85,7 +85,10 @@ static int gIf = 1;
 static constexpr unsigned IFF_RUNNING = 0x40;
 static constexpr unsigned KEV_VENDOR_APPLE = 1, KEV_NETWORK_CLASS = 1, KEV_DL_SUBCLASS = 2;
 static constexpr unsigned KEV_DL_LINK_ON = 16, KEV_DL_LINK_OFF = 17, IFNET_FAMILY_ETHERNET = 2;
-static unsigned if_flags;
+static constexpr unsigned IFEF_EXPENSIVE = 0x400000;
+static unsigned if_flags, if_eflags;
+static void ifnet_set_eflags(int, unsigned set, unsigned clr) { if_eflags = (if_eflags & ~clr) | (set & clr); }
+static bool is_known_hotspot_bssid(const uint8_t[6]) { return false; }
 struct net_event_data { uint32_t if_family, if_unit; char if_name[16]; };
 struct kev_msg {
     uint32_t vendor_code, kev_class, kev_subclass, event_code;
@@ -266,7 +269,7 @@ int main() {
     puts("PASS: wire layouts, credentials, real duplicate/switch joins, pending result, full async success/failure events, unauthorized callback rejection and power-off/leave");
 }
 '''
-unit = prefix + '#include <initializer_list>\n' + events + types + link_type + assertions + decoder + notifications + callbacks + power + power_get + scan + auth + join + fixtures
+unit = prefix + '#include <initializer_list>\n' + events + types + link_type + 'static link_event gLastLinkEvent;\n' + assertions + decoder + notifications + callbacks + power + power_get + scan + auth + join + fixtures
 (out / 'test.cpp').write_text(unit)
 subprocess.run(['clang++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-O1', '-g',
                 '-fsanitize=address,undefined', '-I', str(root / 'drivers/Ath12kWifi/include'), '-I', str(root / 'package'),
