@@ -887,6 +887,7 @@ sources = [ROOT / 'drivers/GopFramebuffer/NativeLegacyDisplay.cpp', ROOT / 'driv
            ROOT / 'drivers/GopFramebuffer/NativeHalfCodes.h', source,
            ROOT / 'scripts' / ABI_PATH.name, keystore_source, ROOT / 'drivers/AppleKeyStoreState/NativeKeyStoreEvents.cpp',
            ROOT / f'scripts/hid-device-{BUILD}.json', hid_probe]
+sources += [KITS / name for name in ('AppleARMBacklight.cpp', 'Ktz8866Diagnostics.h')]
 sources += [KITS / name for name in ('BluetoothProbe.cpp', 'BluetoothFirmware.h', 'BluetoothHciTrace.h', 'WcnPower.h')]
 sources += [ROOT / 'scripts/build-qca-bluetooth.py', BLUETOOTH / 'tools/source-lock.json']
 sources += [Path(name) for name in json.loads((board_dir / 'qca-bluetooth/report.json').read_text())['source']]

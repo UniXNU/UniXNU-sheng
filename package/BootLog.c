@@ -167,6 +167,8 @@ extern volatile int32_t native_keyboard_touch_range[4] __attribute__((weak_impor
 #include "Wn8030.h"
 extern struct wn8030_census native_keyboard_census __attribute__((weak_import));
 extern volatile int32_t native_backlight_stats[16] __attribute__((weak_import));
+#include "Ktz8866Diagnostics.h"
+extern volatile int32_t native_backlight_ktz[2][KtzDiagCount] __attribute__((weak_import));
 extern volatile int native_staged_apps_dirs __attribute__((weak_import));
 extern volatile int native_staged_apps_files __attribute__((weak_import));
 extern volatile int native_staged_apps_mib __attribute__((weak_import));
@@ -904,6 +906,19 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     // attach tries and transfers done.
     snprintf(row, sizeof row, "L2 ia=%d ib=%d mode=%d to=%d tries=%d done=%d", native_backlight_stats[10], native_backlight_stats[11],
              native_backlight_stats[12], native_backlight_stats[13], native_backlight_stats[14], native_backlight_stats[15]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // KTZ chip response, independently of the GENI interrupt mode above. v bits follow 02/03/15/04/05;
+  // invalid reads are -1. tgt is the sampled target, ok is the last successful MSB write, br is a read.
+  if (&native_backlight_ktz) for (unsigned i = 0; i < 2; ++i) {
+    char row[192];
+    int32_t d[KtzDiagCount];
+    if (ktz_diag_load(native_backlight_ktz[i], d))
+      snprintf(row, sizeof row, "KTZ %c seq=%u v=%02x e=%d/%u cfg=%d/%d cur=%d br=%d tgt=%d ok=%d run=%d use=%d", 'a' + i,
+               (unsigned)d[KtzDiagSequence], (unsigned)d[KtzDiagValidMask], d[KtzDiagError], (unsigned)d[KtzDiagErrors],
+               d[KtzDiagCfg1], d[KtzDiagCfg2], d[KtzDiagCurrent], d[KtzDiagReadback], d[KtzDiagTarget],
+               d[KtzDiagLastWrite], d[KtzDiagActive], d[KtzDiagUsable]);
+    else snprintf(row, sizeof row, "KTZ %c unavailable", 'a' + i);
     at = put(out, at, cap, row, sizeof row);
   }
   if (&boot_progress_ext_wide)
