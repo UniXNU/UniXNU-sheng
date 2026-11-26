@@ -67,6 +67,7 @@ extern "C" {volatile int32_t native_keyboard_stats[17];}
 // 1 while the lid hall sensor sees the cover closed over the screen; the macOS touchscreen drops its reports then (TouchLid.h). Written
 // only once the thread serves the cover (stage 7), so a cover that never comes up leaves it 0 and the touchscreen as it was.
 extern "C" {volatile uint32_t native_keyboard_lid_closed;}
+extern "C" {volatile uint64_t native_keyboard_last_input_abs;}
 // The cover's last accelerometer sample (x, y, z in 1/256 g, tablet axes) and the number of samples.
 extern "C" {volatile int32_t native_keyboard_accel[4];}
 // The range of the controller's own touchpad coordinates over every touching contact: X min, X max, Y min, Y max (-1 before the first).
@@ -151,6 +152,7 @@ struct Keyboard {
     // MiAuth state (asynchronous: kb-auth worker calls QTEE devauth.mbn + RPMB so keyboardThread never stalls).
     uint8_t authUid[WN8030_AUTH_UID_BYTES];
     bool authUidValid;
+    bool authOk;
     uint8_t authReqUid[WN8030_AUTH_UID_BYTES];
     uint8_t authReqChallenge[WN8030_AUTH_CHALLENGE_BYTES];
     uint8_t authToken[WN8030_AUTH_TOKEN_BYTES];
@@ -160,6 +162,10 @@ struct Keyboard {
     uint32_t authTokenEpoch;
     uint32_t authEpoch;
     bool authThreadStarted;
+    uint64_t cycleDueMs, detachDueMs;
+    uint32_t authSinceEpoch, coverCycles;
+    uint8_t cyclePhase;           // 0 normal, 1 fallback VBUS off (350ms), 2 fallback VBUS on (450ms)
+    bool detachPending;
 };
 Keyboard *gKb;
 volatile uint32_t gWake;      // the thread's event
@@ -536,13 +542,18 @@ bool applyInputState() {
 
 void attachCover() {
     Keyboard *kb = gKb;
+    const uint64_t now = nowMs();
     kb->attached = true;
+    kb->detachPending = false;
+    kb->cyclePhase = 0;
+    kb->authSinceEpoch = 0;
+    kb->authOk = false;
     kb->caps = false;                 // the controller keeps the Caps Lock LED between attaches; the system starts with it off
     kb->service.statePending = true;
-    kb->hid = createHid();
+    if (!kb->hid) kb->hid = createHid();
     if (kb->hid) sheng_keyboard_cover_enable(kb->hid, kb->inputEnabled);
     else bump(8, 1 << 24);
-    kb->service.keepalive = nowMs();
+    kb->service.keepalive = now;
     if (sheng_battery_keyboard_attached) sheng_battery_keyboard_attached(1);
     native_keyboard_stats[8] = (native_keyboard_stats[8] & ~0xff) + 0x100 + 1;
 }
@@ -550,18 +561,39 @@ void attachCover() {
 void detachCover() {
     Keyboard *kb = gKb;
     kb->attached = false;
+    kb->detachPending = false;
+    kb->cyclePhase = 0;
+    kb->authSinceEpoch = 0;
+    kb->authOk = false;
     kb->service.statePending = false;
     kb->authUidValid = false;
     ++kb->authEpoch;
     if (!kb->authEpoch) kb->authEpoch = 1;
     __atomic_store_n(&kb->authTokenReady, 0, __ATOMIC_RELEASE);
+    releaseInputs();
+    if (kb->hid) sheng_keyboard_cover_enable(kb->hid, false);
     if (sheng_battery_keyboard_attached) sheng_battery_keyboard_attached(0);
-    if (IOService *hid = kb->hid) {
-        kb->hid = nullptr;
-        hid->terminate();
-        hid->release();
-    }
+    // Keep kb->hid persistent across cover detach/re-attach so WindowServer/systemsettingsagent never churns.
     native_keyboard_stats[8] = native_keyboard_stats[8] & ~0xff;
+}
+
+void startCoverCycle(uint64_t now) {
+    Keyboard *kb = gKb;
+    if (!kb->attached || kb->cyclePhase != 0) return;
+    kb->cyclePhase = 1;
+    kb->cycleDueMs = now + 350;
+    kb->detachPending = false;
+    kb->authOk = false;
+    kb->authUidValid = false;
+    ++kb->authEpoch;
+    if (!kb->authEpoch) kb->authEpoch = 1;
+    __atomic_store_n(&kb->authTokenReady, 0, __ATOMIC_RELEASE);
+    kb->service.statePending = false;
+    releaseInputs();
+    control(WN8030_CMD_KEYBOARD_POWER, 0);
+    if (sheng_battery_keyboard_attached) sheng_battery_keyboard_attached(0);
+    IOLog("[keyboard] fallback cover MiAuth refresh cycle #%u started (auth=%u)\n",
+          kb->coverCycles + 1, kb->authSinceEpoch);
 }
 
 #if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
@@ -569,6 +601,11 @@ lid_clamshell gClamshell = LID_CLAMSHELL_INIT;   // the keyboard thread's only
 #endif
 }  // namespace
 extern "C" void sheng_backlight_lid(bool closed) __attribute__((weak_import));   // AppleARMBacklight.cpp
+extern "C" volatile uint32_t sheng_screen_blanked __attribute__((weak_import));
+extern "C" void sheng_keyboard_blank_changed(void) {
+    __atomic_fetch_add(&gWake, 1u, __ATOMIC_RELEASE);
+    thread_wakeup((event_t)&gWake);
+}
 namespace {
 
 void publishLid(bool closed, bool changed) {
@@ -598,7 +635,8 @@ void readHall() {
     kb->tablet = !level(PinTablet);
     native_keyboard_stats[9] = (native_keyboard_stats[9] & ~3) | (kb->lid ? 1 : 0) | (kb->tablet ? 2 : 0);
     publishLid(kb->lid, kb->lid != wasLid);
-    const bool enabled = !kb->lid && !kb->tablet;
+    const bool blanked = &sheng_screen_blanked && __atomic_load_n(&sheng_screen_blanked, __ATOMIC_ACQUIRE) != 0;
+    const bool enabled = !kb->lid && !kb->tablet && !blanked;
     if (enabled == kb->inputEnabled) return;
     kb->inputEnabled = enabled;
     native_keyboard_stats[10] = enabled;
@@ -649,7 +687,7 @@ bool handleFrame() {
     kb_trace_push(&kb->trace, now, traceKind(kind));
     switch (kind) {
     case Wn8030Keyboard: case Wn8030Consumer: case Wn8030Touchpad:
-        if (kb->hid && kb->inputEnabled) {
+        if (kb->hid && kb->inputEnabled && !(&sheng_screen_blanked && __atomic_load_n(&sheng_screen_blanked, __ATOMIC_ACQUIRE) != 0)) {
             uint8_t touchpad[WN8030_TOUCHPAD_REPORT];
             if (f.kind == Wn8030Touchpad) {
                 for (uint32_t i = 0; i < WN8030_TOUCHPAD_FINGERS; ++i) {
@@ -664,26 +702,60 @@ bool handleFrame() {
                 }
                 bump(16, (int32_t)wn8030_touchpad_report(f.report, touchpad));
             }
+            bool activeCover = (f.kind != Wn8030Touchpad) || (touchpad[1] != 0);
+            if (!activeCover) {
+                for (uint32_t i = 0; i < WN8030_TOUCHPAD_FINGERS; ++i) {
+                    if (touchpad[2 + 6 * i] & 1u) { activeCover = true; break; }
+                }
+            }
+            if (activeCover) __atomic_store_n(&native_keyboard_last_input_abs, mach_absolute_time(), __ATOMIC_RELEASE);
             sheng_keyboard_cover_input(kb->hid, f.kind == Wn8030Touchpad ? touchpad : f.report, f.length);
             bump(7, f.kind == Wn8030Keyboard ? 1 : f.kind == Wn8030Consumer ? 0x100 : 0x10000);
         }
         break;
-    case Wn8030Attach:
-        if (f.attached == 1 && !kb->attached) attachCover();
-        else if (f.attached == 0 && kb->attached) detachCover();
-        else if (f.attached >= 0 && sheng_battery_keyboard_attached) sheng_battery_keyboard_attached(f.attached);
+    case Wn8030Attach: {
+        const uint64_t now64 = nowMs();
+        if (f.attached == 1) {
+            kb->detachPending = false;
+            if (!kb->attached) {
+                attachCover();
+            } else if (kb->cyclePhase != 0) {
+                kb->cyclePhase = 0;
+                kb->authSinceEpoch = 0;
+                kb->service.keepalive = now64;
+                kb->service.statePending = true;
+                if (kb->hid) sheng_keyboard_cover_enable(kb->hid, kb->inputEnabled);
+            } else if (sheng_battery_keyboard_attached) {
+                sheng_battery_keyboard_attached(1);
+            }
+        } else if (f.attached == 0 && kb->attached && kb->cyclePhase == 0) {
+            releaseInputs();
+            if (!kb->detachPending) {
+                kb->detachPending = true;
+                kb->detachDueMs = now64 + 500;
+            }
+        }
         break;
+    }
     case Wn8030Accel:
         native_keyboard_accel[0] = f.x; native_keyboard_accel[1] = f.y; native_keyboard_accel[2] = f.z;
         native_keyboard_accel[3] = native_keyboard_accel[3] + 1;
         break;
     case Wn8030AuthRequest:
         bump(15);
-        if (&sheng_devauth_offline_token && (f.auth_state == 0x00u || f.auth_state == 0x01u || f.auth_state == 0x64u) &&
-            !__atomic_load_n(&kb->authBusy, __ATOMIC_ACQUIRE)) {
-            uint8_t out[1 + WN8030_COMMAND_BYTES];
-            const uint32_t n = wn8030_auth_init(out);
-            sendAuthCmd(out, n);
+        if (f.auth_state != 0x00u && f.auth_state != 0x01u && f.auth_state != 0x64u) {
+            kb->authOk = true;
+            kb->authSinceEpoch = 0;
+        } else {
+            if (&sheng_devauth_offline_token && !__atomic_load_n(&kb->authBusy, __ATOMIC_ACQUIRE)) {
+                uint8_t out[1 + WN8030_COMMAND_BYTES];
+                const uint32_t n = wn8030_auth_init(out);
+                sendAuthCmd(out, n);
+            }
+            if (kb->attached && kb->cyclePhase == 0 && !kb->authOk) {
+                ++kb->authSinceEpoch;
+                if (kb->authSinceEpoch >= 4) startCoverCycle(nowMs());
+            }
         }
         break;
     case Wn8030AuthInit:
@@ -725,6 +797,8 @@ bool handleFrame() {
 bool recoverController() {
     Keyboard *kb = gKb;
     releaseInputs();
+    kb->authOk = false;
+    kb->authSinceEpoch = 0;
     kb->authUidValid = false;
     ++kb->authEpoch;
     if (!kb->authEpoch) kb->authEpoch = 1;
@@ -751,10 +825,15 @@ bool recoverController() {
 struct KeyboardIO {
     uint64_t now() const {return nowMs();}
     uint32_t irqs() const {return __atomic_load_n(&gKb->mcuIrqs, __ATOMIC_ACQUIRE);}
-    bool attached() const {return gKb->attached;}
+    bool attached() const {return gKb->attached && gKb->cyclePhase == 0;}
     bool read() const {return handleFrame();}
     void consumed(uint32_t seen) const {native_keyboard_stats[5] = (int32_t)seen;}
-    bool power() const {setOutput(PinSleep, true); return control(WN8030_CMD_KEYBOARD_POWER, 1);}
+    bool power() const {
+        setOutput(PinSleep, true);
+        bool ok = control(WN8030_CMD_KEYBOARD_POWER, 1);
+        if (ok && gKb->attached) ok = control(WN8030_CMD_TOUCHPAD, gKb->inputEnabled ? 1 : 0);
+        return ok;
+    }
     bool apply() const {return applyInputState();}
     void release() const {releaseInputs();}
     void wake() const {
@@ -805,15 +884,41 @@ void serve() {
         if (readyEpoch && readyEpoch == kb->authEpoch) {
             uint8_t out[1 + WN8030_COMMAND_BYTES];
             const uint32_t n = wn8030_auth_s5t1(out, kb->authToken);
-            sendAuthCmd(out, n);
+            if (sendAuthCmd(out, n)) {
+                kb->authOk = true;
+                kb->authSinceEpoch = 0;
+            }
+        }
+        const uint64_t tNow = nowMs();
+        if (kb->detachPending && kb->cyclePhase == 0 && tNow >= kb->detachDueMs) {
+            detachCover();
+        }
+        if (kb->cyclePhase == 1 && tNow >= kb->cycleDueMs) {
+            kb->cyclePhase = 2;
+            kb->cycleDueMs = tNow + 450;
+            kb->authSinceEpoch = 0;
+            ++kb->coverCycles;
+            if (sheng_battery_keyboard_attached) sheng_battery_keyboard_attached(1);
+            setOutput(PinSleep, true);
+            control(WN8030_CMD_KEYBOARD_POWER, 1);
+        } else if (kb->cyclePhase == 2 && tNow >= kb->cycleDueMs) {
+            kb->cyclePhase = 0;
+            kb->authSinceEpoch = 0;
+            kb->service.keepalive = tNow;
+            kb->service.statePending = kb->attached;
+            if (kb->hid && kb->attached) sheng_keyboard_cover_enable(kb->hid, kb->inputEnabled);
         }
         kb->service.step(io);
         const uint64_t next = kb->service.deadline(nowMs(), io.irqs());
         const uint64_t hallDeadline = kb->hallPending ? kb->hallDue : kb->hallPoll;
-        const uint64_t due = next < hallDeadline ? next : hallDeadline;
+        uint64_t due = next < hallDeadline ? next : hallDeadline;
+        if (kb->detachPending && kb->detachDueMs < due) due = kb->detachDueMs;
+        if (kb->cyclePhase != 0 && kb->cycleDueMs < due) due = kb->cycleDueMs;
         const uint64_t current = nowMs();
         assert_wait_deadline((event_t)&gWake, THREAD_UNINT, deadlineMs(due > current ? (uint32_t)(due - current) : 1));
         if (kb->service.deadline(nowMs(), io.irqs()) <= nowMs() ||
+            (kb->detachPending && kb->detachDueMs <= nowMs()) ||
+            (kb->cyclePhase != 0 && kb->cycleDueMs <= nowMs()) ||
             kb->hallSeen != __atomic_load_n(&kb->hallIrqs, __ATOMIC_ACQUIRE) ||
             kb->capsSeen != __atomic_load_n(&kb->capsRequests, __ATOMIC_ACQUIRE) ||
             __atomic_load_n(&kb->authTokenReady, __ATOMIC_ACQUIRE) != 0)
@@ -860,6 +965,9 @@ extern "C" void sheng_keyboard_probe(void) {
     if (!kb->busLock) {IOFreeType(kb, Keyboard); fail(8, -12); return;}
     unsigned khz = 1000, backlight = 0;
     PE_parse_boot_argn("keyboard-khz", &khz, sizeof khz);
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+    wn8030_keep_lone_contact = 1;
+#endif
     uint32_t lone = 0;
     if (PE_parse_boot_argn("keyboard-lone", &lone, sizeof lone)) wn8030_keep_lone_contact = lone == 1;
     PE_parse_boot_argn("keyboard-backlight", &backlight, sizeof backlight);
