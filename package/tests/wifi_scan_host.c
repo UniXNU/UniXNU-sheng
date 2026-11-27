@@ -156,12 +156,12 @@ static void channel_lists_are_cleaned(void)
     static uint8_t req[0x80 + 64 * 12];
     uint32_t mhz[SHENG_WIFI_SCAN_FREQUENCIES];
     memset(req, 0, sizeof req);
-    static const uint32_t repeated[][2] = {{6, 0x8}, {6, 0x8}, {36, 0x10}, {37, 0x2000}};
-    put_channels(req, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, repeated, 4);
-    CHECK(sheng_wifi_scan_frequencies(req, sizeof req, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, mhz) == 2);
-    CHECK(mhz[0] == 2437 && mhz[1] == 5180);
-    static const uint32_t six[][2] = {{37, 0x2000}};
-    put_channels(req, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, six, 1);
+    static const uint32_t repeated[][2] = {{6, 0x8}, {6, 0x8}, {36, 0x10}, {37, 0x2000}, {99, 0x4000}};
+    put_channels(req, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, repeated, 5);
+    CHECK(sheng_wifi_scan_frequencies(req, sizeof req, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, mhz) == 3);
+    CHECK(mhz[0] == 2437 && mhz[1] == 5180 && mhz[2] == 6135);
+    static const uint32_t unk[][2] = {{99, 0x4000}};
+    put_channels(req, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, unk, 1);
     CHECK(sheng_wifi_scan_frequencies(req, sizeof req, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, mhz) == 0);
     put_u32(req + SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, 0);
     CHECK(sheng_wifi_scan_frequencies(req, sizeof req, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, mhz) == 0);
@@ -172,10 +172,13 @@ static void channel_lists_are_cleaned(void)
     put_channels(req, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, two, 2);
     CHECK(sheng_wifi_scan_frequencies(req, SHENG_WIFI_SCAN_ONE_CHANNELS + 12, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, mhz) == 0);
     CHECK(sheng_wifi_scan_frequencies(NULL, sizeof req, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, mhz) == 0);
-    uint32_t many[SHENG_WIFI_SCAN_FREQUENCIES + 1][2];
-    for (unsigned i = 0; i < SHENG_WIFI_SCAN_FREQUENCIES + 1; ++i) {many[i][0] = 36 + 4 * i; many[i][1] = 0x10;}
-    put_channels(req, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, (const uint32_t (*)[2])many, SHENG_WIFI_SCAN_FREQUENCIES + 1);
-    CHECK(sheng_wifi_scan_frequencies(req, sizeof req, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, mhz) == 0);
+    uint32_t many64[SHENG_WIFI_SCAN_FREQUENCIES][2];
+    for (unsigned i = 0; i < SHENG_WIFI_SCAN_FREQUENCIES; ++i) {
+        many64[i][0] = i < 13 ? (1 + i) : (1 + 4 * (i - 13));
+        many64[i][1] = i < 13 ? 0x8 : 0x2000;
+    }
+    put_channels(req, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, (const uint32_t (*)[2])many64, SHENG_WIFI_SCAN_FREQUENCIES);
+    CHECK(sheng_wifi_scan_frequencies(req, sizeof req, SHENG_WIFI_SCAN_ONE_CHANNEL_COUNT, SHENG_WIFI_SCAN_ONE_CHANNELS, mhz) == SHENG_WIFI_SCAN_FREQUENCIES);
 }
 
 int main(void)

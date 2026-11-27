@@ -19,7 +19,7 @@
 
 #define SHENG_WIFI_HELD_MS 60000u
 #define SHENG_WIFI_LINK_SETTLE_MS 15000u
-#define SHENG_WIFI_RESCAN_MS 20000u
+#define SHENG_WIFI_RESCAN_MS 60000u
 #define SHENG_WIFI_AIR_CHANNELS 64u
 
 // When each channel was last scanned on the air, in ms of a clock that starts above 0; 0: not yet. Zero-initialised.

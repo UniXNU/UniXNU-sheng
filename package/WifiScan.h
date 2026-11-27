@@ -86,15 +86,17 @@ static inline void sheng_wifi_scan_multiple_target(const struct sheng_wifi_scan_
 #define SHENG_WIFI_SCAN_MULTIPLE_CHANNELS 0x214u
 #define SHENG_WIFI_SCAN_CHANNEL_ENTRY 12u
 #define SHENG_WIFI_SCAN_CHANNELS_READ 64u   // entries read; a longer list is every band anyway
-#define SHENG_WIFI_SCAN_FREQUENCIES 32u     // Ath12kWifi NW_WIFI_SCAN_FREQUENCIES_MAX
+#define SHENG_WIFI_SCAN_FREQUENCIES 64u     // Ath12kWifi NW_WIFI_SCAN_FREQUENCIES_MAX
 #define SHENG_WIFI_CHANNEL_2GHZ 0x8u
 #define SHENG_WIFI_CHANNEL_5GHZ 0x10u
+#define SHENG_WIFI_CHANNEL_6GHZ 0x2000u
 
-// MHz of a channel this driver reports (2.4 and 5 GHz), 0 for another band.
+// MHz of a channel this driver reports (2.4, 5, and 6 GHz), 0 for another band.
 static inline uint32_t sheng_wifi_channel_mhz(uint32_t channel, uint32_t flags)
 {
     if (flags & SHENG_WIFI_CHANNEL_2GHZ) return channel == 14 ? 2484 : channel >= 1 && channel <= 13 ? 2407 + 5 * channel : 0;
     if (flags & SHENG_WIFI_CHANNEL_5GHZ) return channel >= 1 && channel <= 196 ? 5000 + 5 * channel : 0;
+    if (flags & SHENG_WIFI_CHANNEL_6GHZ) return channel == 2 ? 5935 : channel >= 1 && channel <= 233 ? 5950 + 5 * channel : 0;
     return 0;
 }
 
