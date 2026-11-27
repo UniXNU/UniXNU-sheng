@@ -21,8 +21,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--reuse-policies', action='store_true', help='use the selected profile\'s signed root headers and public key')
     args = parser.parse_args()
-    subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] /
-                                      'scripts/extract-files.py')], check=True)
+    subprocess.run([sys.executable, str(DEVICE / 'scripts/extract-files.py'),
+                    '--device', str(DEVICE)], check=True)
     subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] /
                                       'drivers/Ath12kWifi/tools/fetch-sources.py')], check=True)
     ctx = Context(cli_parser().parse_args(['build', 'kernel', '-D', str(Path(__file__).resolve().parents[1]),
