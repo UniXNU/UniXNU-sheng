@@ -45,7 +45,7 @@ namespace {
     0x09, 0x31, 0x26, 0xef, 0x07, 0x46, 0x2b, 0x02, 0x81, 0x02, \
     0x65, 0x00, 0x55, 0x00, 0x45, 0x00, \
     0xc0,
-#if NATIVE_COVER_POINTER
+#if NATIVE_COVER_POINTER && defined(__APPLE__)
 #define COVER_CONST __attribute__((section("__DATA_CONST,__const")))
 #else
 #define COVER_CONST
@@ -172,7 +172,14 @@ public:
     }
     void setEnabled(bool on) {
         enabled = on ? 1 : 0;
-#if !NATIVE_COVER_POINTER
+#if NATIVE_COVER_POINTER
+        if (!on) {
+            pointer.fingers = 0;
+            pointer.buttons = 0;
+            pointer.click = 0;
+            pointer.move_x = pointer.move_y = pointer.scroll_x = pointer.scroll_y = 0;
+        }
+#else
         const uint8_t report[2] = {kPowerId, enabled};
         submit(report, sizeof report);
 #endif
@@ -226,8 +233,9 @@ public:
         gateAdded = true;
         inputReport = IOBufferMemoryDescriptor::withCapacity(kLongestReport, kIODirectionNone);
         if (!inputReport) return false;
-        // The generic HID event personality, as for any keyboard; not built in.
+        // Mark Built-In so AppleUserHIDEventDriver sets HIDRMDeviceState=Allowed without 90s systemsettingsagent CPU churn.
         if (!setProperty("HIDDefaultBehavior", true)) return false;
+        if (!setProperty("Built-In", true)) return false;
         if (!IOHIDDevice::start(provider)) return false;
         native_keyboard_hid_stats[0] = native_keyboard_hid_stats[0] + 1;
 #if NATIVE_COVER_POINTER
