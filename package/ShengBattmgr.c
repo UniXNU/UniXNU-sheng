@@ -267,7 +267,8 @@ void sheng_battmgr_snapshot(const ShengBattmgr *b, ShengBatterySnapshot *s)
     /* -40 to 90 C; the firmware answers a fixed out-of-range value when it has no reading */
     s->temperature_valid = HAS(BmTemperature) && V(BmTemperature) >= -4000 && V(BmTemperature) <= 9000;
     s->temperature = s->temperature_valid ? V(BmTemperature) : 0;
-    s->raw_mah = HAS(BmCharge) ? V(BmCharge) / 1000 : 0;
+    s->raw_mah = gauges && remaining > 0 ? (int)(remaining > 100000 ? remaining / 1000 : remaining)
+                                         : HAS(BmCharge) ? V(BmCharge) / 1000 : 0;
     s->full_mah = HAS(BmFull) ? V(BmFull) / 1000 : 0;
     s->design_mah = HAS(BmDesign) ? V(BmDesign) / 1000 : 0;
     s->cycles = HAS(BmCycles) ? V(BmCycles) : 0;
@@ -275,14 +276,17 @@ void sheng_battmgr_snapshot(const ShengBattmgr *b, ShengBatterySnapshot *s)
     s->time_to_empty_min = HAS(BmTimeToEmpty) && V(BmTimeToEmpty) > 0 && V(BmTimeToEmpty) < 100 * 3600 ? V(BmTimeToEmpty) / 60 : -1;
     s->time_to_full_min = HAS(BmTimeToFull) && V(BmTimeToFull) > 0 && V(BmTimeToFull) < 100 * 3600 ? V(BmTimeToFull) / 60 : -1;
     if (s->external) {
-        const int adapter = HAS(BmUsbAdapter) && V(BmUsbAdapter) > 0 ? V(BmUsbAdapter) : HAS(BmUsbType) ? V(BmUsbType) : 0;
+        int adapter = HAS(BmUsbAdapter) && V(BmUsbAdapter) > 0 ? V(BmUsbAdapter) : HAS(BmUsbType) ? V(BmUsbType) : 0;
+        if (adapter < 6 && HAS(BmRealType) && V(BmRealType) >= 6 && V(BmRealType) <= 8) adapter = V(BmRealType);
         s->adapter_family = family(adapter);
         s->adapter_mv = HAS(BmUsbVoltage) ? V(BmUsbVoltage) / 1000 : 0;
         s->adapter_ma = HAS(BmUsbMax) && V(BmUsbMax) > 0 ? V(BmUsbMax) / 1000 : HAS(BmUsbCurrent) ? V(BmUsbCurrent) / 1000 : 0;
         if (s->adapter_mv < 0) s->adapter_mv = 0;
         if (s->adapter_ma < 0) s->adapter_ma = -s->adapter_ma;
-        s->adapter_watts = HAS(BmPowerMax) && V(BmPowerMax) > 0 ? V(BmPowerMax) :
-            (int)(((int64_t)s->adapter_mv * s->adapter_ma + 500000) / 1000000);
+        const int measured_watts = (int)(((int64_t)s->adapter_mv * s->adapter_ma + 500000) / 1000000);
+        const int verified_pd = adapter >= 6 && adapter <= 8 && HAS(BmPdVerified) && V(BmPdVerified) != 0;
+        s->adapter_watts = HAS(BmPowerMax) && V(BmPowerMax) > 0 && (verified_pd || measured_watts <= 0)
+            ? V(BmPowerMax) : measured_watts;
     } else {
         s->adapter_family = 0;
         s->adapter_mv = s->adapter_ma = s->adapter_watts = 0;
