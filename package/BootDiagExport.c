@@ -36,6 +36,33 @@ static int unixnu_prev_log SYSCTL_HANDLER_ARGS {
 SYSCTL_PROC(_kern, OID_AUTO, unixnu_prev_log, CTLTYPE_OPAQUE | CTLFLAG_RD | CTLFLAG_LOCKED, NULL, 0, unixnu_prev_log, "S",
             "The previous run's UFS log, copied before this run's log writer started");
 
+// Read-only telemetry for SoftwareAES hardware-key selectors and per-process hv_vmm_present filtering.
+// Read with `sysctl -n kern.unixnu_fairplay_diag`.
+#include "FairPlayDiagExport.h"
+extern volatile uint32_t native_aes_registered __attribute__((weak_import));
+extern volatile uint32_t native_aes_fairplay_key_uses __attribute__((weak_import));
+extern volatile uint32_t native_aes_nonce_key_uses __attribute__((weak_import));
+extern volatile uint32_t native_aes_unsupported_key __attribute__((weak_import));
+extern volatile uint32_t native_aes_last_unsupported_selector __attribute__((weak_import));
+extern volatile uint32_t native_vmm_hide_hits __attribute__((weak_import));
+static int unixnu_fairplay_diag SYSCTL_HANDLER_ARGS {
+#pragma unused(oidp, arg1, arg2)
+  char hide[256];
+  char text[SHENG_FAIRPLAY_DIAG_TEXT];
+  if (!PE_parse_boot_argn("vmm-hide", hide, sizeof hide)) hide[0] = 0;
+  hide[sizeof hide - 1] = 0;
+  const uint32_t reg = &native_aes_registered ? __atomic_load_n(&native_aes_registered, __ATOMIC_RELAXED) : 0;
+  const uint32_t hits = &native_vmm_hide_hits ? __atomic_load_n(&native_vmm_hide_hits, __ATOMIC_RELAXED) : 0;
+  const uint32_t fp = &native_aes_fairplay_key_uses ? __atomic_load_n(&native_aes_fairplay_key_uses, __ATOMIC_RELAXED) : 0;
+  const uint32_t nonce = &native_aes_nonce_key_uses ? __atomic_load_n(&native_aes_nonce_key_uses, __ATOMIC_RELAXED) : 0;
+  const uint32_t unsup = &native_aes_unsupported_key ? __atomic_load_n(&native_aes_unsupported_key, __ATOMIC_RELAXED) : 0;
+  const uint32_t last_sel = &native_aes_last_unsupported_selector ? __atomic_load_n(&native_aes_last_unsupported_selector, __ATOMIC_RELAXED) : 0;
+  const size_t length = sheng_fairplay_diag_text(reg, hits, fp, nonce, unsup, last_sel, hide, text, sizeof text);
+  return SYSCTL_OUT(req, text, length);
+}
+SYSCTL_PROC(_kern, OID_AUTO, unixnu_fairplay_diag, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED, NULL, 0, unixnu_fairplay_diag, "A",
+            "SoftwareAES selector counters and vmm-hide telemetry");
+
 extern void native_wifi_logf(int, const char *, ...) __attribute__((weak_import));
 /* Opt-in capture of the cache loader's own error log. Runs on the log writer,
  * reads one fixed file and stops after two minutes; ordinary boots do no I/O. */
