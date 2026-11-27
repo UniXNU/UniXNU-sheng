@@ -424,10 +424,20 @@ class ShengBacklight : public IOService {
         // backlight-control=0 leaves both out.
         uint32_t control = 1;
         PE_parse_boot_argn("backlight-control", &control, sizeof control);
-        // backboardd's sandbox profile refuses FadePeriod on this service (int-276), and CoreBrightness sends it with every brightness:
-        // the grant (patches/xnu/zzwb-native-sandbox-grant-set-properties.patch) lets backboardd alone set its properties, which
-        // setProperties checks itself.
-        if (control == 1 && impersonate()) {setProperty("NativeSandboxGrantProcess", "backboardd"); setProperty("backlight-control", true);}
+        // backboardd's sandbox profile refuses FadePeriod on this service (int-276), and CoreBrightness sends it with every brightness;
+        // on macOS WindowServer/corebrightnessd drive AppleARMBacklight instead of backboardd. The grant
+        // (patches/xnu/zzwb-native-sandbox-grant-set-properties.patch) lets these processes set its properties, which setProperties checks itself.
+        if (control == 1 && impersonate()) {
+            setProperty("NativeSandboxGrantProcess", "backboardd,WindowServer,corebrightnessd");
+            setProperty("backlight-control", true);
+            // macOS BrightnessControl (BCAppleBacklightBrtControl setNits:error:) refuses direct AppleARMBacklight
+            // writes unless dfr-brightness-control or force-brightness-control is present as a 1-byte non-zero OSData.
+            const uint8_t force = 1;
+            if (OSData *data = OSData::withBytes(&force, sizeof force)) {
+                setProperty("force-brightness-control", data);
+                data->release();
+            }
+        }
         const bool impersonated = control == 1 && gAppleClass;
         publishCalibration();
         publish(level);
