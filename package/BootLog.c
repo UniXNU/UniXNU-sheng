@@ -2944,13 +2944,14 @@ static void writer(void *arg, wait_result_t result) {
   // diag=1 turns every diagnostic on: the kernel's rings and samplers (started from boot_diag_shot_tick), the scene screenshots and
   // the export of the diagnostic files, once, 25 s before autoreset (diag-export=<seconds of log time> moves it). Without it
   // this writer keeps the log rows only.
-  uint32_t diag = 0, diag_at = 0, gpu_trace = 0;
+  uint32_t diag = 0, diag_at = 0, gpu_trace = 0, gpu_ns = 0;
   PE_parse_boot_argn("gpu-trace", &gpu_trace, sizeof gpu_trace);
   PE_parse_boot_argn("diag", &diag, sizeof diag);
+  PE_parse_boot_argn("gpu-ns", &gpu_ns, sizeof gpu_ns);
   if (gpu_trace == 1) diag = 1;
-  if (diag == 1 && &boot_diag_scan && &boot_diag_stream && !PE_parse_boot_argn("diag-export", &diag_at, sizeof diag_at))
+  if ((diag == 1 || gpu_ns == 1) && &boot_diag_scan && &boot_diag_stream && !PE_parse_boot_argn("diag-export", &diag_at, sizeof diag_at))
     diag_at = autoreset > 25 ? autoreset - 25 : gpu_trace == 1 ? 180 : 0;
-  if (diag != 1) diag_at = 0;
+  if (diag != 1 && gpu_ns != 1) diag_at = 0;
   log_diag_on = diag == 1; log_diag_export_at = diag_at;
   uint32_t errors = 0;
   // Round times for the [log round] row: the last round's, the longest so far with its slowest step, and the rounds over 4 s.
