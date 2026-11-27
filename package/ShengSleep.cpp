@@ -54,7 +54,9 @@ extern "C" {volatile int32_t sheng_sleep_stats[8];}
 
 namespace {
 constexpr uint32_t kIo = 0x4, kIntrCfg = 0x8, kIntrStatus = 0xc;
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
 constexpr IOOptionBits kWakeEventSource = 0x1;   // kIOPMWakeEventSource (IOPMPrivate.h)
+#endif
 
 IOMemoryMap *gTlmmMap;
 uintptr_t gTlmm;
@@ -116,6 +118,7 @@ const armcpu_sleep_board gBoard = {prepare, shouldWake, restore, kWakeSpis, size
 
 // The wake sources a sleep can count on: the keyboard probe past its interrupt step (stage 5 and on) holds the TLMM summary, the
 // buttons armed (stage 3) hold the SPMI line.
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
 bool lidArmed() {return &native_keyboard_stats && native_keyboard_stats[0] >= 5;}
 bool powerArmed() {return &native_buttons_stats && native_buttons_stats[0] == 3 && sheng_buttons_sleep_check;}
 uint64_t counterMs(uint64_t ticks) {
@@ -123,6 +126,7 @@ uint64_t counterMs(uint64_t ticks) {
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(hz));
     return hz ? ticks / (hz / 1000) : 0;
 }
+#endif
 
 #if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
 IOReturn sleepWake(void *, void *, natural_t message, IOService *, void *, vm_size_t) {

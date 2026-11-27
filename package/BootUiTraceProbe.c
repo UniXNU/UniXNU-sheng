@@ -45,7 +45,7 @@
 extern void proc_name(int pid, char *buf, int size);   // bsd/sys/proc.h; the header itself clashes with the Mach types used here
 extern int proc_selfpid(void);
 #include "BootUiTraceDetails.h"
-static struct bt_entry samples[BT_MAX_THREADS];
+void *IOMallocAligned(vm_size_t,vm_offset_t);
 // Hot threads: the context-switch rate of each sampled thread between two snapshots, so a thread that is woken hundreds of times a second
 // shows even though every single stack sample finds it idle in mach_msg.
 // CPU rows: each thread's run time (user and system, xnu's recount) between two snapshots, so the threads that actually burn a frame's time
@@ -59,7 +59,7 @@ struct bt_prev {uint64_t tid,at,cpu;uint32_t cs;};
 #define BT_KFRAMES 12
 #define BT_CPU 4
 struct bt_hotrow {unsigned rate,cpu;char role;int peer;uint64_t tid,pc,lr,frames[BT_HOT_FRAMES],kernel[BT_KFRAMES];unsigned state,hint;int pri;uint64_t event,trap,args[3];};
-static uint64_t sample_k[BT_MAX_THREADS][BT_KFRAMES],sample_event[BT_MAX_THREADS];
+static uint64_t sample_event[BT_MAX_THREADS];
 static unsigned sample_state[BT_MAX_THREADS],sample_hint[BT_MAX_THREADS];static int sample_pri[BT_MAX_THREADS];
 // All callers hold sched_lock. Switch-out can detach the stack before it takes
 // that lock and clears TH_RUN, even after the thread has set TH_WAIT.
@@ -79,14 +79,20 @@ static void bt_kernel_stack_n(thread_t thread,uint64_t *out,unsigned count) {
 static void bt_kernel_stack(thread_t thread,uint64_t *out) {bt_kernel_stack_n(thread,out,BT_KFRAMES);}
 #define BT_ROLES 4
 static struct bt_main draft_main[BT_ROLES],published_main[BT_ROLES];
-static struct bt_prev hot_prev[BT_ROLES][BT_MAX_THREADS];
-static struct bt_hotrow hot_draft[BT_ROLES][BT_HOT],hot_published[BT_ROLES][BT_HOT];
+static struct bt_hotrow hot_published[BT_ROLES][BT_HOT];
 // Threads inside a Mach trap other than mach_msg (vm_deallocate, semaphore_wait): kept apart from the hot ones so a busy role cannot crowd
 // them out (int-235: four work-queue threads took every hot slot of backboardd while its render thread sat in vm_deallocate).
 #define BT_TRAPPED 3
-static struct bt_hotrow trap_draft[BT_ROLES][BT_TRAPPED],trap_published[BT_ROLES][BT_TRAPPED];
-static struct bt_hotrow cpu_draft[BT_ROLES][BT_CPU],cpu_published[BT_ROLES][BT_CPU];
-static struct bt_groups draft,published;
+static struct bt_hotrow trap_published[BT_ROLES][BT_TRAPPED],cpu_published[BT_ROLES][BT_CPU];
+static struct bt_groups published;
+// Private to the single capture worker. Readers use only the published snapshot under trace_lock.
+static struct bt_workspace {
+ struct bt_groups draft;
+ struct bt_entry samples[BT_MAX_THREADS];
+ struct bt_prev hot_prev[BT_ROLES][BT_MAX_THREADS];
+ uint64_t sample_k[BT_MAX_THREADS][BT_KFRAMES];
+ struct bt_hotrow hot_draft[BT_ROLES][BT_HOT],trap_draft[BT_ROLES][BT_TRAPPED],cpu_draft[BT_ROLES][BT_CPU];
+} *capture_ws;
 static unsigned trace_lock;
 static char draft_names[BT_ROLES][32],published_names[BT_ROLES][32];
 static unsigned draft_pid[BT_ROLES],published_pid[BT_ROLES],draft_slide[BT_ROLES],published_slide[BT_ROLES];
@@ -96,8 +102,13 @@ unsigned boot_ui_trace_ready,boot_ui_trace_groups,boot_ui_trace_threads,boot_ui_
 volatile unsigned boot_ui_trace_phase,boot_ui_trace_index;
 
 void boot_ui_trace_begin(void) {
- memset(draft_main,0,sizeof(draft_main));memset(hot_draft,0,sizeof(hot_draft));memset(trap_draft,0,sizeof(trap_draft));memset(cpu_draft,0,sizeof(cpu_draft));
- memset(&draft,0,sizeof(draft));memset(draft_pid,0,sizeof(draft_pid));
+ if(!capture_ws) {
+  capture_ws=IOMallocAligned(sizeof(*capture_ws),4096);
+  if(!capture_ws)return;
+  memset(capture_ws,0,sizeof(*capture_ws));
+ }
+ memset(draft_main,0,sizeof(draft_main));memset(capture_ws->hot_draft,0,sizeof(capture_ws->hot_draft));memset(capture_ws->trap_draft,0,sizeof(capture_ws->trap_draft));memset(capture_ws->cpu_draft,0,sizeof(capture_ws->cpu_draft));
+ memset(&capture_ws->draft,0,sizeof(capture_ws->draft));memset(draft_pid,0,sizeof(draft_pid));
  memset(draft_slide,0,sizeof(draft_slide));memset(draft_names,0,sizeof(draft_names));
  draft_busy=0;draft_omitted=0;boot_ui_trace_phase=1;
 }
@@ -114,6 +125,7 @@ static void lookup_peer(struct bt_entry *e,ipc_space_t space) {
  e->peer=ipc_port_get_receiver_task_locked(port,NULL);e->peer_code=(e->regs[1]&1)?0:5;ip_mq_unlock(port);
 }
 void boot_ui_trace_task(task_t task,unsigned index,int pid,const char *name,unsigned slide) {
+ if(!capture_ws)return;
  if(!ml_get_interrupts_enabled()){++draft_busy;return;}
  if(index<1 || index>BT_ROLES)return;
  unsigned role=index-1;
@@ -132,7 +144,7 @@ void boot_ui_trace_task(task_t task,unsigned index,int pid,const char *name,unsi
   if(!simple_lock_try(&thread->sched_lock,&thread_lck_grp)){++draft_busy;ml_set_interrupts_enabled(irq);continue;}
   arm_saved_state_t *state=thread->machine.upcb;
   if(state && is_saved_state64(state)) {
-   struct bt_entry *e=&samples[count];memset(e,0,sizeof(*e));sample_tid[count]=thread->thread_id;sample_cs[count]=thread->c_switch;sample_cpu[count]=recount_thread_time_mach(thread);bt_kernel_stack(thread,sample_k[count]);sample_event[count]=(uint64_t)thread->wait_event;sample_state[count]=(unsigned)thread->state;sample_hint[count]=(unsigned)thread->block_hint;sample_pri[count]=thread->sched_pri;++count;
+   struct bt_entry *e=&capture_ws->samples[count];memset(e,0,sizeof(*e));sample_tid[count]=thread->thread_id;sample_cs[count]=thread->c_switch;sample_cpu[count]=recount_thread_time_mach(thread);bt_kernel_stack(thread,capture_ws->sample_k[count]);sample_event[count]=(uint64_t)thread->wait_event;sample_state[count]=(unsigned)thread->state;sample_hint[count]=(unsigned)thread->block_hint;sample_pri[count]=thread->sched_pri;++count;
    e->index=visited;e->role=role?"BSTU"[role&3]:(!strcmp(name,"chronod")?'C':(!strcmp(name,"liveactivitiesd")?'L':'B'));
    e->pc=BT_STRIP_USER_PC((uint64_t)get_saved_state_pc(state));e->lr=BT_STRIP_USER_PC((uint64_t)get_saved_state_lr(state));
    e->fp=(uint64_t)get_saved_state_fp(state);
@@ -146,12 +158,12 @@ void boot_ui_trace_task(task_t task,unsigned index,int pid,const char *name,unsi
  // No thread pointers or suspended threads survive collection. The copied FP
  // can race with a running task, so malformed/changed chains are reported.
  for(unsigned i=0;i<count;++i) {
-  boot_ui_trace_phase=role?5:4;boot_ui_trace_index=samples[i].index;
-  lookup_peer(&samples[i],space);
+  boot_ui_trace_phase=role?5:4;boot_ui_trace_index=capture_ws->samples[i].index;
+  lookup_peer(&capture_ws->samples[i],space);
   boot_ui_trace_phase=role?3:2;
-  if(samples[i].index==1) {
-   struct bt_main *main=&draft_main[role];main->entry=samples[i];main->pid=pid;main->slide=slide;
-   memcpy(main->kernel,sample_k[i],sizeof(main->kernel));main->kevent=sample_event[i];main->kstate=sample_state[i];main->khint=sample_hint[i];
+  if(capture_ws->samples[i].index==1) {
+   struct bt_main *main=&draft_main[role];main->entry=capture_ws->samples[i];main->pid=pid;main->slide=slide;
+   memcpy(main->kernel,capture_ws->sample_k[i],sizeof(main->kernel));main->kevent=sample_event[i];main->kstate=sample_state[i];main->khint=sample_hint[i];
    if(!main->entry.error)bt_walk_n(&main->entry,read_user,map,main->frames,32);
    main->error=main->entry.error;
    uint64_t info[2]={0},image[3]={0};main->image_error=1;
@@ -161,8 +173,8 @@ void boot_ui_trace_task(task_t task,unsigned index,int pid,const char *name,unsi
     main->image=image[0];main->image_error=0;
    }
   }
-  if(!samples[i].error)bt_walk(&samples[i],read_user,map);
-  bt_add(&draft,&samples[i]);
+  if(!capture_ws->samples[i].error)bt_walk(&capture_ws->samples[i],read_user,map);
+  bt_add(&capture_ws->draft,&capture_ws->samples[i]);
  }
  {
   // Rates against the previous snapshot of the same thread; the four hottest of the role are kept with their stacks.
@@ -170,8 +182,8 @@ void boot_ui_trace_task(task_t task,unsigned index,int pid,const char *name,unsi
   for(unsigned i=0;i<count;++i) {
    struct bt_prev *slot=NULL,*free_slot=NULL;
    for(unsigned k=0;k<BT_MAX_THREADS;++k) {
-    if(hot_prev[role][k].tid==sample_tid[i]){slot=&hot_prev[role][k];break;}
-    if(!free_slot && !hot_prev[role][k].tid)free_slot=&hot_prev[role][k];
+    if(capture_ws->hot_prev[role][k].tid==sample_tid[i]){slot=&capture_ws->hot_prev[role][k];break;}
+    if(!free_slot && !capture_ws->hot_prev[role][k].tid)free_slot=&capture_ws->hot_prev[role][k];
    }
    unsigned rate=0,cpu=0;
    if(slot && now>slot->at) {
@@ -183,43 +195,43 @@ void boot_ui_trace_task(task_t task,unsigned index,int pid,const char *name,unsi
    }
    if(cpu>=10) {
     unsigned at=BT_CPU;
-    for(unsigned h=0;h<BT_CPU;++h)if(cpu>cpu_draft[role][h].cpu){at=h;break;}
+    for(unsigned h=0;h<BT_CPU;++h)if(cpu>capture_ws->cpu_draft[role][h].cpu){at=h;break;}
     if(at<BT_CPU) {
-     for(unsigned h=BT_CPU-1;h>at;--h)cpu_draft[role][h]=cpu_draft[role][h-1];
-     struct bt_hotrow *row=&cpu_draft[role][at];memset(row,0,sizeof(*row));
-     row->rate=rate;row->cpu=cpu;row->role=samples[i].role;row->peer=samples[i].peer;row->tid=sample_tid[i];
-     row->pc=samples[i].pc;row->lr=samples[i].lr;
-     memcpy(row->kernel,sample_k[i],sizeof(row->kernel));row->event=sample_event[i];row->state=sample_state[i];row->hint=sample_hint[i];row->pri=sample_pri[i];
-     {struct bt_entry deep=samples[i];deep.error=0;bt_walk_n(&deep,read_user,map,row->frames,BT_HOT_FRAMES);}
+     for(unsigned h=BT_CPU-1;h>at;--h)capture_ws->cpu_draft[role][h]=capture_ws->cpu_draft[role][h-1];
+     struct bt_hotrow *row=&capture_ws->cpu_draft[role][at];memset(row,0,sizeof(*row));
+     row->rate=rate;row->cpu=cpu;row->role=capture_ws->samples[i].role;row->peer=capture_ws->samples[i].peer;row->tid=sample_tid[i];
+     row->pc=capture_ws->samples[i].pc;row->lr=capture_ws->samples[i].lr;
+     memcpy(row->kernel,capture_ws->sample_k[i],sizeof(row->kernel));row->event=sample_event[i];row->state=sample_state[i];row->hint=sample_hint[i];row->pri=sample_pri[i];
+     {struct bt_entry deep=capture_ws->samples[i];deep.error=0;bt_walk_n(&deep,read_user,map,row->frames,BT_HOT_FRAMES);}
     }
    }
-   const int64_t trap=(int64_t)samples[i].trap;
+   const int64_t trap=(int64_t)capture_ws->samples[i].trap;
    if(trap<0 && trap!=-31 && trap!=-47) {
     for(unsigned t=0;t<BT_TRAPPED;++t) {
-     struct bt_hotrow *row=&trap_draft[role][t];if(row->tid)continue;
-     row->rate=rate?rate:1;row->role=samples[i].role;row->peer=samples[i].peer;row->tid=sample_tid[i];
-     row->pc=samples[i].pc;row->lr=samples[i].lr;
-     memcpy(row->kernel,sample_k[i],sizeof(row->kernel));row->event=sample_event[i];row->state=sample_state[i];row->hint=sample_hint[i];row->pri=sample_pri[i];
-     row->trap=samples[i].trap;for(unsigned a=0;a<3;++a)row->args[a]=samples[i].regs[a];
-     {struct bt_entry deep=samples[i];deep.error=0;bt_walk_n(&deep,read_user,map,row->frames,BT_HOT_FRAMES);}
+     struct bt_hotrow *row=&capture_ws->trap_draft[role][t];if(row->tid)continue;
+     row->rate=rate?rate:1;row->role=capture_ws->samples[i].role;row->peer=capture_ws->samples[i].peer;row->tid=sample_tid[i];
+     row->pc=capture_ws->samples[i].pc;row->lr=capture_ws->samples[i].lr;
+     memcpy(row->kernel,capture_ws->sample_k[i],sizeof(row->kernel));row->event=sample_event[i];row->state=sample_state[i];row->hint=sample_hint[i];row->pri=sample_pri[i];
+     row->trap=capture_ws->samples[i].trap;for(unsigned a=0;a<3;++a)row->args[a]=capture_ws->samples[i].regs[a];
+     {struct bt_entry deep=capture_ws->samples[i];deep.error=0;bt_walk_n(&deep,read_user,map,row->frames,BT_HOT_FRAMES);}
      break;
     }
    }
    {
     if(rate>=BT_HOT_MIN_RATE) {
      unsigned at=BT_HOT;
-     for(unsigned h=0;h<BT_HOT;++h)if(rate>hot_draft[role][h].rate){at=h;break;}
+     for(unsigned h=0;h<BT_HOT;++h)if(rate>capture_ws->hot_draft[role][h].rate){at=h;break;}
      if(at<BT_HOT) {
-      for(unsigned h=BT_HOT-1;h>at;--h)hot_draft[role][h]=hot_draft[role][h-1];
-      struct bt_hotrow *row=&hot_draft[role][at];memset(row,0,sizeof(*row));
-      row->rate=rate;row->role=samples[i].role;row->peer=samples[i].peer;row->tid=sample_tid[i];
-      row->pc=samples[i].pc;row->lr=samples[i].lr;
-      memcpy(row->kernel,sample_k[i],sizeof(row->kernel));row->event=sample_event[i];row->state=sample_state[i];row->hint=sample_hint[i];row->pri=sample_pri[i];
-      {struct bt_entry deep=samples[i];deep.error=0;bt_walk_n(&deep,read_user,map,row->frames,BT_HOT_FRAMES);}   /* deeper than the grouped 8 frames: names the thread */
+      for(unsigned h=BT_HOT-1;h>at;--h)capture_ws->hot_draft[role][h]=capture_ws->hot_draft[role][h-1];
+      struct bt_hotrow *row=&capture_ws->hot_draft[role][at];memset(row,0,sizeof(*row));
+      row->rate=rate;row->role=capture_ws->samples[i].role;row->peer=capture_ws->samples[i].peer;row->tid=sample_tid[i];
+      row->pc=capture_ws->samples[i].pc;row->lr=capture_ws->samples[i].lr;
+      memcpy(row->kernel,capture_ws->sample_k[i],sizeof(row->kernel));row->event=sample_event[i];row->state=sample_state[i];row->hint=sample_hint[i];row->pri=sample_pri[i];
+      {struct bt_entry deep=capture_ws->samples[i];deep.error=0;bt_walk_n(&deep,read_user,map,row->frames,BT_HOT_FRAMES);}   /* deeper than the grouped 8 frames: names the thread */
      }
     }
    }
-   if(!slot)slot=free_slot?free_slot:&hot_prev[role][i%BT_MAX_THREADS];
+   if(!slot)slot=free_slot?free_slot:&capture_ws->hot_prev[role][i%BT_MAX_THREADS];
    slot->tid=sample_tid[i];slot->cs=sample_cs[i];slot->cpu=sample_cpu[i];slot->at=now;
   }
  }
@@ -227,8 +239,9 @@ void boot_ui_trace_task(task_t task,unsigned index,int pid,const char *name,unsi
  vm_map_deallocate(map);boot_ui_trace_phase=1;
 }
 void boot_ui_trace_publish(void) {
+ if(!capture_ws)return;
  if(!__atomic_exchange_n(&trace_lock,1,__ATOMIC_ACQUIRE)) {
-  published=draft;memcpy(published_main,draft_main,sizeof(draft_main));memcpy(hot_published,hot_draft,sizeof(hot_draft));memcpy(trap_published,trap_draft,sizeof(trap_draft));memcpy(cpu_published,cpu_draft,sizeof(cpu_draft));memcpy(published_pid,draft_pid,sizeof(draft_pid));
+  published=capture_ws->draft;memcpy(published_main,draft_main,sizeof(draft_main));memcpy(hot_published,capture_ws->hot_draft,sizeof(capture_ws->hot_draft));memcpy(trap_published,capture_ws->trap_draft,sizeof(capture_ws->trap_draft));memcpy(cpu_published,capture_ws->cpu_draft,sizeof(capture_ws->cpu_draft));memcpy(published_pid,draft_pid,sizeof(draft_pid));
   memcpy(published_slide,draft_slide,sizeof(draft_slide));memcpy(published_names,draft_names,sizeof(draft_names));
   published_busy=draft_busy;published_omitted=draft_omitted;
   __atomic_store_n(&trace_lock,0,__ATOMIC_RELEASE);
@@ -437,7 +450,6 @@ proc_t proc_find(int);
 int proc_rele(proc_t);
 task_t proc_task(proc_t);
 void proc_iterate(unsigned,int (*)(proc_t,void *),void *,int (*)(proc_t,void *),void *);
-void *IOMallocAligned(vm_size_t,vm_offset_t);
 #define CS_TARGETS 2
 #define CS_RING 262144   // BootDiagExport.c ClientRing
 struct cs_rec {uint64_t abs;int32_t pid;uint16_t state;int16_t pri;uint32_t cs;int32_t peer;uint64_t cpu,wait,frames[11];};
@@ -737,10 +749,16 @@ static unsigned kcpu_published_count,kcpu_interval,kcpu_total_ms;
 // The time each thread had at the last scan, hashed by thread id with linear probing. An entry no scan has refreshed since the one
 // before the current is free again (its thread ended), so two live threads with the same hash each keep a slot.
 #define BT_KCPU_PROBE 16
-static struct {uint64_t tid,time;uint32_t scan;} kcpu_seen[BT_KCPU_SEEN];
+static struct {uint64_t tid,time;uint32_t scan;} *kcpu_seen;
 void boot_kcpu_scan(unsigned seconds) {
  static unsigned last;
  if(seconds<last+10)return;
+ // Only the scan worker touches this history; never allocate under the task lock.
+ if(!kcpu_seen) {
+  kcpu_seen=IOMallocAligned(BT_KCPU_SEEN*sizeof(*kcpu_seen),4096);
+  if(!kcpu_seen)return;
+  memset(kcpu_seen,0,BT_KCPU_SEEN*sizeof(*kcpu_seen));
+ }
  const unsigned interval=seconds-last;
  if(!task_lock_try(kernel_task))return;
  static uint32_t scan;

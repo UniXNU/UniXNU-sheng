@@ -1,10 +1,8 @@
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -10118,6 +10118,8 @@
- #else
+@@ -10119,4 +10119,6 @@
  	int data_error = native_owner_data_prepare(p, (user_addr_t)scratch_addr);
- #endif
 +	extern void boot_log_startup_result(const char *, int) __attribute__((weak_import));
 +	if (&boot_log_startup_result) boot_log_startup_result("Data mount returned", data_error);
  	boot_progress_stage("Data mount returned");
