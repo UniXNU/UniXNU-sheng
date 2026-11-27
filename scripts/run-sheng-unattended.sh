@@ -102,7 +102,7 @@ if os.environ.get('AUTORESET_SECONDS'):
     seconds = int(os.environ['AUTORESET_SECONDS'])
     if seconds < 60 or seconds + 120 > limit:
         sys.exit('AUTORESET_SECONDS must be at least 60 and leave 120 seconds within the host wait')
-    repack += ['--kernel-arg', f'autoreset={seconds}', '--kernel-arg', f'diag-export={seconds - 30}']
+    repack += ['--kernel-arg', f'autoreset={seconds}', '--kernel-arg', 'diag=1', '--kernel-arg', f'diag-export={seconds - 30}']
 if os.environ.get('ADDON'):
     addon = Path(os.environ['ADDON']).resolve()
     with addon.open('rb') as source:
