@@ -61,14 +61,18 @@ static const char lite_jobs[]=
 // macOS 27.3 also takes here the switches only its kernel reads, which do not fit the command line any more: userspace reads the
 // scaled timebase itself, signatures are authenticated per block at first use, the cover touchpad takes a lone contact, the
 // scheduler's two-cluster matrix, the boot payload's memory returned, the thermal probe (sampled every 100 ms) and the level macOS
-// reads from it, and the board clock. The Metal plugin reads its own switches from kern.bootargs, so they stay on the command line.
+// reads from it, the board clock, and AppleCredentialManager's software dispatcher (acm_fastsim=1, no SEP hardware). The Metal plugin reads its own switches from kern.bootargs, so they stay on the command line.
 // gpu-owned-coherent=1 maps the GPU's own buffers on the IO-coherent path once the boot's coherence proof passes (GpuPowerProbe.cpp),
 // and only then does the kernel report NativeAdrenoParamsOwnedCoherent. Turnip offers its cached coherent memory type on that flag
 // alone, and the metal2vulkan runtime refuses a device without a HOST_VISIBLE, HOST_COHERENT and HOST_CACHED type: without the switch
 // the plugin has no device and WindowServer aborts after waiting 30 s for one. gpu-owned-coherent=0 turns it off.
+// vmm-hide names the processes that read kern.hv_vmm_present as 0 (UniXNU's macos-vmm-present-proc-filter patch; AMFI and every
+// other reader still see /defaults/vmm-present): the Apple ID daemons adid, fairplayd, fairplaydeviceidentityd and akd then take the
+// FairPlayIOKit and Anisette paths of a physical Mac. A kernel without the patch ignores it.
 char PE_builtin_boot_args[]="owner-staged-apps=1 owner-dataprotect=1 uefi-watchdog=1 disable-jobs=com.apple.cameracaptured sched_preemption_disable_debug_mode=0 interrupt-masked-debug-mode=0 validation_disables=0x11040"
 #if XNU_TARGET_OS_OSX
-    " timebase-user=1 cs-lazy=1 keyboard-lone=1 armcpu-edge=1 boot-payload-release=1 thermal=1 thermal-ms=100 thermal-level=1 board-clock=7 gpu-pool=0"
+    " timebase-user=1 cs-lazy=1 keyboard-lone=1 armcpu-edge=1 boot-payload-release=1 thermal=1 thermal-ms=100 thermal-level=1 board-clock=7 gpu-pool=0 acm_fastsim=1"
+    " vmm-hide=adid,fairplayd,fairplaydeviceidentityd,akd"
     " gpu-owned-coherent=1"
 #endif
     ;

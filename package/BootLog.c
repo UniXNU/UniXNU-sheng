@@ -164,6 +164,7 @@ extern volatile int32_t native_keyboard_stats[17] __attribute__((weak_import));
 extern volatile int32_t native_keyboard_accel[4] __attribute__((weak_import));
 extern volatile int32_t native_keyboard_hid_stats[6] __attribute__((weak_import));
 extern volatile int32_t native_keyboard_touch_range[4] __attribute__((weak_import));
+extern volatile int32_t native_devauth_stats[16] __attribute__((weak_import));
 #include "Wn8030.h"
 extern struct wn8030_census native_keyboard_census __attribute__((weak_import));
 extern volatile int32_t native_backlight_stats[16] __attribute__((weak_import));
@@ -862,6 +863,15 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     if (n > 0 && (size_t)n < sizeof row && &native_keyboard_touch_range)
       snprintf(row + n, sizeof row - (size_t)n, " tp=x%d-%d,y%d-%d", native_keyboard_touch_range[0], native_keyboard_touch_range[1],
                native_keyboard_touch_range[2], native_keyboard_touch_range[3]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  if (&native_devauth_stats && native_devauth_stats[0]) {
+    char row[180];
+    snprintf(row, sizeof row, "KA st=%d err=%d q=%x ta=%x n=%d/%d cb=%d/%d rpmb=%d/%d/%d/%d ufs=%d/%d shm=%x",
+             native_devauth_stats[0], native_devauth_stats[1], native_devauth_stats[2], native_devauth_stats[3],
+             native_devauth_stats[4], native_devauth_stats[5], native_devauth_stats[6], native_devauth_stats[7],
+             native_devauth_stats[8], native_devauth_stats[9], native_devauth_stats[10], native_devauth_stats[11],
+             native_devauth_stats[12], native_devauth_stats[13], native_devauth_stats[14]);
     at = put(out, at, cap, row, sizeof row);
   }
   // The cover touchpad's reports by what they carried (Wn8030.c native_keyboard_census): all, nothing touching, confident contacts

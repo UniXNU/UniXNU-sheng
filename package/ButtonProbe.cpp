@@ -188,9 +188,15 @@ void buttonsThread(void *, wait_result_t) {
     thread_set_thread_name(current_thread(), "buttons");
     if (!setup()) return;
     uint32_t seen = gEvents, last = 0;
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+    // macOS loginwindow ignores a power button press shorter than its 350 ms debounce; hold a brief tap to 420 ms so a short press sleeps.
+    uint64_t powerHoldUntil = 0, powerHoldDelta = 0;
+    nanoseconds_to_absolutetime(420ull * NSEC_PER_MSEC, &powerHoldDelta);
+#endif
     for (;;) {
         uint32_t mask = pressed();
 #if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+        const bool physicalPower = (mask & kReportPower) != 0;
         if (__atomic_exchange_n(&gWakeUserActive, 0, __ATOMIC_ACQ_REL)) {
             if (IOPMrootDomain *root = IOService::getPMRootDomain()) root->requestUserActive(root, "sheng power key");
         }
@@ -199,14 +205,37 @@ void buttonsThread(void *, wait_result_t) {
         if (swallow) {
             if (!sheng_sleep_swallow(&swallow, (mask & kReportPower) != 0)) mask &= ~kReportPower;
             __atomic_store_n(&gSwallowPower, swallow, __ATOMIC_RELEASE);
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+            powerHoldUntil = 0;
+#endif
         }
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+        const uint64_t nowAbs = mach_absolute_time();
+        if (!swallow) {
+            if ((mask & kReportPower) && !(last & kReportPower)) {
+                powerHoldUntil = nowAbs + powerHoldDelta;
+            } else if (!(mask & kReportPower) && (last & kReportPower) && powerHoldUntil && nowAbs < powerHoldUntil) {
+                mask |= kReportPower;
+            } else if (!(mask & kReportPower) || nowAbs >= powerHoldUntil) {
+                if (!(mask & kReportPower)) powerHoldUntil = 0;
+            }
+        }
+#endif
         if (mask != last) {
             last = mask;
             native_buttons_stats[3] = (int32_t)mask;
             void (*sink)(void *, uint32_t) = __atomic_load_n(&gSink, __ATOMIC_ACQUIRE);
             if (sink) {sink(gSinkContext, mask); native_buttons_stats[2] = native_buttons_stats[2] + 1;}
         }
+#if defined(XNU_TARGET_OS_OSX) && XNU_TARGET_OS_OSX
+        if (powerHoldUntil && (last & kReportPower) && !physicalPower) {
+            assert_wait_deadline((event_t)&gEvents, THREAD_UNINT, powerHoldUntil);
+        } else {
+            assert_wait((event_t)&gEvents, THREAD_UNINT);
+        }
+#else
         assert_wait((event_t)&gEvents, THREAD_UNINT);
+#endif
         if (gEvents != seen) clear_wait(current_thread(), THREAD_AWAKENED);
         else thread_block(THREAD_CONTINUE_NULL);
         seen = gEvents;

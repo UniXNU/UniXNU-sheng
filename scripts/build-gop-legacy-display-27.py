@@ -526,7 +526,7 @@ board_objects = []
 for stem, extra in [('CpuFreqProbe', ()), ('ThermalProbe', ()), ('BoardClock', ()), ('GpuMemoryPool', ()), ('WifiProbe', ('-I', str(WIFI / 'include'))),
                     ('BluetoothProbe', ('-I', str(BLUETOOTH / 'include'), '-I', str(ROOT / 'kits/Sm8550Platform'))),
                     ('AdspProbe', ()), ('AudioProbe', ()),
-                    ('BacklightProbe', ()), ('DisplayTimingProbe', ()), ('BatteryProbe', ()), ('KeyboardProbe', ()), ('ShengSleep', ()),
+                    ('BacklightProbe', ()), ('DisplayTimingProbe', ()), ('BatteryProbe', ()), ('KeyboardProbe', ()), ('QcomDevAuth', ()), ('ShengSleep', ()),
                     # GPU power, GMU and the Metal accelerator publication (gpu-power, gpu-metal), as on iPadOS 17.
                     ('GpuPowerProbe', tuple(x for d in ('drivers/Adreno740', 'kits/ArmSmmu4K', 'kits/AdrenoFirmware', 'kits/AdrenoPM4',
                                                         'kits/Sm8550Platform') for x in ('-I', str(ROOT / d))))]:
@@ -899,7 +899,10 @@ sources += [Path(name) for name in json.loads((IRIS_OUT / 'c/report.json').read_
 for directory in ('include', 'kernel', 'src', 'shim'):
     sources += sorted((IRIS / directory).rglob('*.h')) + sorted((IRIS / directory).glob('*.cpp'))
 sources += [KITS / name for name in ('SmmuBypass.h', 'AppsSmmuLock.h', 'UsbProbe.cpp')]
-sources += [KITS / name for name in ('KeyboardCover.cpp', 'KeyboardProbe.cpp', 'KeyboardService.h', 'KeyboardTrace.h', 'TouchLid.h', 'LidClamshell.h', 'ShengSleep.cpp', 'ShengSleep.h', 'Wn8030.c', 'Wn8030.h', 'GeniI2c.c', 'GeniI2c.h')]
+sources += [KITS / name for name in ('KeyboardCover.cpp', 'KeyboardProbe.cpp', 'KeyboardService.h', 'KeyboardTrace.h', 'QcomDevAuth.cpp', 'QcomTeeWire.h', 'TouchLid.h', 'LidClamshell.h', 'ShengSleep.cpp', 'ShengSleep.h', 'Wn8030.c', 'Wn8030.h', 'GeniI2c.c', 'GeniI2c.h')]
+if MACOS:
+    sources += [ROOT / 'drivers/SoftwareAES/NativeAES.cpp', ROOT / 'drivers/SoftwareAES/OriginalAESABI.h',
+                KITS / 'SoftwareAesProbe.cpp', Path(__file__).resolve().with_name(f'software-aes-{BUILD}.json')]
 sources += [keyboard_firmware]
 sources += [USB / 'QcomDwc3.cpp', USB / 'QcomEusb2Phy.h', USB / 'QcomQmpUsb3.h', USB / 'QcomUcsi.h', ROOT / f'scripts/usb-xdci-{BUILD}.json', ROOT / f'scripts/usb-xhci-{BUILD}.json']
 
