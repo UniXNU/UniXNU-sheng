@@ -13,6 +13,8 @@
 // the area. msg_mode 0 is the linear form (oldest first, msg_bytes long) that the panic flush writes.
 // The header is written last in each round, so a reader never trusts a slot or an export the header does not count yet.
 #include <kern/startup.h>
+#include <kern/host.h>
+#include <mach/host_info.h>
 #include "BootLatencyFiles.h"
 #include "BootTime.h"
 #include <kern/thread.h>
@@ -679,6 +681,10 @@ static const char *log_step_max_where = "";
 #define LOG_AT(step) do {const uint64_t t_ = log_ticks(); \
     if (t_ - log_where_began > log_step_max) {log_step_max = t_ - log_where_began; log_step_max_where = log_where;} \
     log_where = (step); log_where_began = t_;} while (0)
+extern kern_return_t host_statistics64(host_t, host_flavor_t, host_info64_t, mach_msg_type_number_t *);
+extern uint64_t max_mem_actual __attribute__((weak_import));
+extern size_t unixnu_memory_handoff_log(char *, size_t) __attribute__((weak_import));
+
 static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
   size_t at = 0;
   char head[128];
@@ -695,6 +701,26 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
              (unsigned long long)mach_absolute_time(), (unsigned long long)second,
              &ml_timebase_scale_num ? ml_timebase_scale_num : 0, &ml_timebase_scale_den ? ml_timebase_scale_den : 0);
     at = put(out, at, cap, row, sizeof row);
+  }
+  if (log_diag_on) {
+    vm_statistics64_data_t vm = {0};
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    kern_return_t status = host_statistics64(host_self(), HOST_VM_INFO64, (host_info64_t)&vm, &count);
+    char row[320];
+    if (status == KERN_SUCCESS) {
+      snprintf(row, sizeof row,
+               "[vm memory] physical=%llu page=%u wired=%u free=%u speculative=%u external=%u compressed=%u uncompressed=%llu swapins=%llu swapouts=%llu",
+               (unsigned long long)(&max_mem_actual ? max_mem_actual : 0), (unsigned)PAGE_SIZE,
+               vm.wire_count, vm.free_count, vm.speculative_count, vm.external_page_count,
+               vm.compressor_page_count, (unsigned long long)vm.total_uncompressed_pages_in_compressor,
+               (unsigned long long)vm.swapins, (unsigned long long)vm.swapouts);
+    } else {
+      snprintf(row, sizeof row, "[vm memory] host_statistics64 failed=%d", status);
+    }
+    at = put(out, at, cap, row, sizeof row);
+    if (&unixnu_memory_handoff_log && unixnu_memory_handoff_log(row, sizeof row)) {
+      at = put(out, at, cap, row, sizeof row);
+    }
   }
   if (&boot_progress_page_text) {
     at = put(out, at, cap, "[page]", 8);
@@ -2749,7 +2775,8 @@ static size_t log_groups_filter(char *text, size_t length) {
     size_t end = in; while (end < length && text[end] != '\n') ++end;
     const size_t line = end - in + (end < length ? 1 : 0);
     if (text[in] == '[') {
-      keep = !strncmp(text + in, "[panic]", 7) || (log_diag_on && !strncmp(text + in, "[diag]", 6)) ||
+      keep = !strncmp(text + in, "[panic]", 7) || (log_diag_on && (!strncmp(text + in, "[diag]", 6) ||
+              !strncmp(text + in, "[vm memory]", 11) || !strncmp(text + in, "[memory handoff]", 16))) ||
              (log_group_on >> log_tag_group(text + in + 1)) & 1;
     } else if (text[in] == '#') keep = 1;
     if (keep) {if (out != in) memmove(text + out, text + in, line); out += line;}
